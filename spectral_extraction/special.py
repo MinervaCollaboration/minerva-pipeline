@@ -26,12 +26,15 @@ import scipy.optimize as opt
 #import scipy.signal as sig
 #import scipy.linalg as linalg
 
-def gaussian(axis, sigma, center=0, height=1,bg_mean=0,bg_slope=0):
+def gaussian(axis, sigma, center=0, height=1,bg_mean=0,bg_slope=0,power=2):
     """Returns gaussian output values for a given input array, sigma, center,
-       and height.  Center defaults to zero and height to 1."""
+       and height.  Center defaults to zero and height to 1.  Can also
+       tweak the exponent parameter if desired."""
     #Height scale factor*(1/(sqrt(2*pi*sigma**2)))
-    gaussian = height*exp(-(axis-center)**2/(
-               2*sigma**2))+bg_mean+bg_slope*(axis-center)
+    gaussian = height*exp(-abs(axis-center)**power/(
+               abs(np.sqrt(2*abs(sigma)))**power))+bg_mean+bg_slope*(axis-center)
+#    print sigma, center, height, bg_mean,bg_slope,power
+#    print gaussian
     return gaussian
     
 def cladding(axis,width,center=0,height=1):
@@ -280,72 +283,100 @@ def plt_deltas(xarr,yarr,color='b',linewidth=1):
     plt.plot(xplt,yplt,color,linewidth=linewidth)
     return
     
-def gauss_fit(xarr,yarr,fit_background='y'):
+def gauss_fit(xarr,yarr,invr=1,pguess=0,fit_background='y',fit_exp='n',verbose='n'):
     """3 parameter gaussian fit of the data and 2 parameter background fit
        returns 5 parameter array:
            [sigma, center, height, background mean, background slope]
        or 3 parameter array (if no background fit):
            [sigma, center, height]
+       or 6 parameter array if also fitting exponential power:
+           [sigma, center, height, background mean, background slope, power]
+       in all cases, returns the covariance matrix of parameter estimates
     """
+    plen = 3+2*(fit_background=='y')+1*(fit_exp=='y')
     if len(xarr)!=len(yarr):
-         print('x and y dimensions don\'t agree!')      
-         print('returning zeros parameter array')
-         if fit_background=='y':
-             return np.zeros((5))
-         else:
-             return np.zeros((3))
+        if verbose=='y':
+            print('x and y dimensions don\'t agree!')      
+            print('returning zeros parameter array')
+        return np.zeros((plen)), np.zeros((plen,plen))
 #        raise ValueError('x and y dimensions don\'t agree!')
 #        exit(0)
     elif len(xarr)<10:
-        print('array is too short for a good fit')
-        print('returning zeros parameter array')
-        if fit_background=='y':
-            return np.zeros((5))
-        else:
-            return np.zeros((3))
+        if verbose=='y':
+            print('array is too short for a good fit')
+            print('returning zeros parameter array')
+        return np.zeros((plen)), np.zeros((plen,plen))
 #        raise ValueError('array is too short for a good fit')
 #        exit(0)
-    elif fit_background=='y':
-        #background mean initial guess: average of first two and last two points
-        bg_m0 = np.mean([yarr[0:2],yarr[-3:-1]])
-        #background slope initial guess: slope between avg of first two and last two
-        bg_s0 = (np.mean(yarr[0:2])-np.mean(yarr[-3:-1]))/(np.mean(xarr[0:2])-np.mean(xarr[-3:-1]))
-        #height guess - highest point
-        h0 = np.max(yarr)-bg_m0
-        #center guess - x value at index of highest point
-        c0 = xarr[np.argmax(yarr)]
-        #sigma guess - difference between first point and last point below 1/2 max
-        idx1 = 0
-        idx2 = 1
-        for i in range(len(xarr)-1):
-            if yarr[i+1]>(h0/2+bg_m0) and yarr[i+1]>yarr[i]:
-                idx1 = i
-                break
-        for i in range(idx1,len(xarr)-1):
-            if yarr[i+1]<(h0/2+bg_m0) and yarr[i+1]<yarr[i]:
-                idx2 = i
-                break
-        sig0 = (xarr[idx2]-xarr[idx1])/2.355
-        p0 = np.array(([sig0,c0,h0,bg_m0,bg_s0]))
-        params, errarr = opt.curve_fit(gaussian,xarr,yarr,p0=p0)
-        return params
     else:
-        #height guess - highest point
-        h0 = np.max(yarr)
-        #center guess - x value at index of highest point
-        c0 = xarr[np.argmax(yarr)]
-        #sigma guess - difference between first point and last point below 1/2 max
-        idx1 = 0
-        idx2 = 1
-        for i in range(len(xarr)-1):
-            if yarr[i+1]>h0/2 and yarr[i+1]>yarr[i]:
-                idx1 = i
-                break
-        for i in range(idx1,len(xarr)-1):
-            if yarr[i+1]<h0/2 and yarr[i+1]<yarr[i]:
-                idx2 = i
-                break
-        sig0 = (xarr[idx2]-xarr[idx1])/2.355
-        p0 = np.array(([sig0,c0,h0]))
-        params, errarr = opt.curve_fit(gaussian,xarr,yarr,p0=p0)
-        return params
+        ### Set sigma weighting
+        if type(invr) == int:
+            sigma = np.sqrt(abs(yarr))
+        else:
+            sigma = np.sqrt(1/abs(invr.astype(float)))
+        ### Set initial guess values
+        if type(pguess) == int:
+            #background mean initial guess: average of first two and last two points
+            bg_m0 = np.mean([yarr[0:2],yarr[-3:-1]])
+            #background slope initial guess: slope between avg of first two and last two
+            bg_s0 = (np.mean(yarr[0:2])-np.mean(yarr[-3:-1]))/(np.mean(xarr[0:2])-np.mean(xarr[-3:-1]))
+            #height guess - highest point
+            h0 = np.max(yarr)-bg_m0*(fit_background=='y')
+            #center guess - x value at index of highest point
+            c0 = xarr[np.argmax(yarr)]
+            #sigma guess - difference between first point and last point below 1/2 max
+            idx1 = 0
+            idx2 = 1
+            for i in range(len(xarr)-1):
+                if yarr[i+1]>(h0/2+bg_m0) and yarr[i+1]>yarr[i]:
+                    idx1 = i
+                    break
+            for i in range(idx1,len(xarr)-1):
+                if yarr[i+1]<(h0/2+bg_m0) and yarr[i+1]<yarr[i]:
+                    idx2 = i
+                    break
+            sig0 = (xarr[idx2]-xarr[idx1])/2.355
+            power0 = 2
+            if fit_background == 'y' and fit_exp == 'y':
+                p0 = np.array(([sig0,c0,h0,bg_m0,bg_s0,power0]))
+            elif fit_background == 'y' and fit_exp == 'n':
+                p0 = np.array(([sig0,c0,h0,bg_m0,bg_s0]))
+            elif fit_background == 'n' and fit_exp == 'n':
+                p0 = np.array(([sig0,c0,h0]))
+            else:
+                raise ValueError('Invalid fit_background and/or fit_exp:')
+                print("Acceptable values are 'y' or 'n'.")
+                print("Also, cannot fit power without also fitting background")
+                exit(0)
+        else:
+            if fit_background == 'y' and fit_exp == 'y':
+                rightlen = len(pguess)==6
+            elif fit_background == 'y' and fit_exp == 'n':
+                rightlen = len(pguess)==5
+            elif fit_background == 'n' and fit_exp == 'n':
+                rightlen = len(pguess)==3
+            else:
+                raise ValueError('Invalid fit_background and/or fit_exp:')
+                print("Acceptable values are 'y' or 'n'.")
+                exit(0)
+            if rightlen:
+                p0 = pguess
+            else:
+                raise ValueError("Guess array is wrong length.")
+                print("For given choices, guess must be length {}.".format(plen))
+                exit(0)
+#        if len(p0)==6:
+#            print gaussian (xarr,p0[0],p0[1],p0[2],p0[3],p0[4],p0[5])
+        params, errarr = opt.curve_fit(gaussian,xarr,yarr,p0=p0,sigma=sigma)
+        return params, errarr
+        
+def fit_height(xvals,zvals,invvals,sig,xc,bgm=0,bgs=0,power=2):
+    """ Function to fit only the height for gaussian function
+        Right now this is used only in Minerva's "simple_opt_ext"
+        Output - best fit height
+    """
+    profile = gaussian(xvals,sig,xc,bgm,bgs,power).T
+    profile = np.resize(profile,(len(profile),1))
+    noise = np.diag(invvals)
+    height, chi = chi_fit(zvals,profile,noise)
+    return height

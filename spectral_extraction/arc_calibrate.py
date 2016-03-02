@@ -94,7 +94,7 @@ def fit_trace(x,y,ccd,form='gaussian'):
         xinds = x+xvals
         xvals = xvals[(xinds>=0)*(xinds<np.shape(ccd)[0])]
         zvals = ccd[x+xvals,y]
-        params = sf.gauss_fit(xvals,zvals)
+        params, errarr = sf.gauss_fit(xvals,zvals)
         xc = x+params[1] #offset plus center
         zc = params[2] #height (intensity)
 #        pxn = np.linspace(xvals[0],xvals[-1],1000)
@@ -339,7 +339,7 @@ for ts in telescopes:
                 xsub = xsub[(xsub>=0)*(xsub<xpix)]
                 zvals = arc[xsub,k]
                 try:
-                    params = sf.gauss_fit(xsub,zvals)
+                    params, errarr = sf.gauss_fit(xsub,zvals)
                 except RuntimeError:
                     print("No fit for fiber {fib} at pixel {px}".format(fib=j,px=k))
                     line_gauss[j,k] = 0
@@ -510,7 +510,7 @@ for ts in telescopes:
             xarr = xarr[(xarr>0)*(xarr<2048)]
             yarr = line_gauss[i,:][xarr]
             try:
-                params = sf.gauss_fit(xarr,yarr)
+                params, errarr = sf.gauss_fit(xarr,yarr)
             except RuntimeError:
                 params = np.zeros(5)
             mx_it[j] = params[2] #height
@@ -768,7 +768,7 @@ for ts in telescopes:
     
     #px = np.arange(1965,1980)
     #val = ccd[:,1000][px]
-    #params = sf.gauss_fit(px,val,fit_background='n')
+    #params, errarr = sf.gauss_fit(px,val,fit_background='n')
     #pxn = np.linspace(px[0],px[-1],1000)
     #fit = sf.gaussian(pxn,abs(params[0]),params[1],params[2],params[3],params[4])
     #plt.plot(px,val,pxn,fit)
