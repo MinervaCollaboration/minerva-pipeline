@@ -7,7 +7,7 @@ from __future__ import division
 import pyfits
 import os
 #import math
-#import time
+import time
 import numpy as np
 #from numpy import *
 import matplotlib.pyplot as plt
@@ -23,6 +23,9 @@ import matplotlib.pyplot as plt
 #import solar
 import special as sf
 import argparse
+
+
+t0 = time.time()
 
 ######## Import environmental variables #################
 data_dir = os.environ['MINERVA_DATA_DIR']
@@ -143,6 +146,7 @@ def fit_trace(x,y,ccd,form='gaussian'):
 
 #hardcode in n20160115 directory
 filename = args.filename#os.path.join(data_dir,'n20160115',args.filename)
+software_vers = 'v0.1' #Later grab this from somewhere else
 
 gain = 1.3
 readnoise = 3.63
@@ -366,6 +370,7 @@ zspec = np.zeros((num_fibers,actypix)) #relative intensity at each point
 zspec2 = np.zeros((num_fibers,actypix))
 zspecbox = np.zeros((num_fibers,actypix))
 zspecbox2 = np.zeros((num_fibers,actypix))
+zmask = np.ones((num_fibers,actypix),dtype=bool)
 
 #plt.plot(ccd[:,0])
 #plt.show()
@@ -551,7 +556,9 @@ for i in range(num_fibers):
 #        sigj = np.poly1d(sigsmooth[i])(yj)
 #        powj = np.poly1d(powsmooth[i])(yj)
         if np.isnan(xc):
-            zspec[i,j] = np.nan
+            zspec[i,j] = 0
+            zspec2[i,j] = 0
+            zmask[i,j] = False
         else:
             try:
                 xpad = 5
@@ -629,16 +636,18 @@ for i in range(num_fibers):
 #                        plt.close()
                     #Restrict fitting off-trace
                     if abs(params[1]-xc+xj+1)>1:
-                        zspec[i,j] = np.nan
+                        zspec[i,j] = 0
                     if abs(paramsorig[1]-xc+xj+1)>1:
-                        zspec2[i,j] = np.nan
-                        model_ccd[xj+xvals,j] = np.nan
+                        zspec2[i,j] = 0
+                        zmask[i,j] = False
+                        model_ccd[xj+xvals,j] = 0
                     #Block anything that has a large spread in errors, compared to max
                     if np.max(abs(differ))/np.max(zvals) > 0.1:
-                        zspec[i,j] = np.nan
+                        zspec[i,j] = 0
                     if np.max(abs(difforig))/np.max(zorig) > 0.1:
-                        zspec2[i,j] = np.nan
-                        model_ccd[xj+xvals,j] = np.nan
+                        zspec2[i,j] = 0
+                        zmask[i,j] = False
+                        model_ccd[xj+xvals,j] = 0
 #                    if refit:
 #                        params, errarr = sf.gauss_fit(xvals,zvals,invr=invvals,fit_exp='y')
 #                        params, errarr = sf.gauss_fit(xvals,zvals,invr=invvals,pguess=pguess,fit_exp='y')
@@ -692,12 +701,17 @@ for i in range(num_fibers):
 #                        plt.show()
 #                        plt.close()
             except RuntimeError:
-                zspec[i,j] = np.nan
+                zspec[i,j] = 0
+                zspec2[i,j] = 0
+                zmask[i,j] = False
+        if np.isnan(zspec2[i,j]):
+            zspec2[i,j] = 0
+            zmask[i,j] = False
 
 ### Check quality of model
 #model_ccd += bias
 res = ccd-model_ccd
-ressc = res/(np.sqrt(ccd))
+ressc = res/(np.sqrt(ccd)+readnoise)
 pltarray = np.hstack((ccd,model_ccd,ressc))
 plt.ion()
 plt.imshow(pltarray)
@@ -710,7 +724,8 @@ i2coeffs = [3.48097e-4,2.11689] #shift in pixels due to iodine cell
 i2shift = np.poly1d(i2coeffs)(np.arange(actypix))
 #print i2shift
 
-wl_hdu1 = pyfits.open(os.path.join(redux_dir,'n20160216','wavelength_soln_T1.fits'))
+arc_date = 'n20160130'
+wl_hdu1 = pyfits.open(os.path.join(redux_dir,arc_date,'wavelength_soln_T1.fits'))
 wl_coeffs1 =  wl_hdu1[0].data
 #wl_coeffs = wl_coeffs[::-1,:] #Re-order, need to be sure this is consistent
 wl_polyord1 = wl_hdu1[0].header['POLYORD']
@@ -722,7 +737,7 @@ for i in range(args.num_fibers):
 #    wl_fib = np.floor((i)/3)
     wavelength_soln_T1[i] = np.poly1d(wl_coeffs1[i])(ypx_mod)
     
-wl_hdu2 = pyfits.open(os.path.join(redux_dir,'n20160216','wavelength_soln_T2.fits'))
+wl_hdu2 = pyfits.open(os.path.join(redux_dir,arc_date,'wavelength_soln_T2.fits'))
 wl_coeffs2 =  wl_hdu2[0].data
 #wl_coeffs = wl_coeffs[::-1,:] #Re-order, need to be sure this is consistent
 wl_polyord2 = wl_hdu2[0].header['POLYORD']
@@ -734,7 +749,7 @@ for i in range(args.num_fibers):
 #    wl_fib = np.floor((i)/3)
     wavelength_soln_T2[i] = np.poly1d(wl_coeffs2[i])(ypx_mod)
     
-wl_hdu3 = pyfits.open(os.path.join(redux_dir,'n20160216','wavelength_soln_T3.fits'))
+wl_hdu3 = pyfits.open(os.path.join(redux_dir,arc_date,'wavelength_soln_T3.fits'))
 wl_coeffs3 =  wl_hdu3[0].data
 #wl_coeffs = wl_coeffs[::-1,:] #Re-order, need to be sure this is consistent
 wl_polyord3 = wl_hdu3[0].header['POLYORD']
@@ -746,7 +761,7 @@ for i in range(args.num_fibers):
 #    wl_fib = np.floor((i)/3)
     wavelength_soln_T3[i] = np.poly1d(wl_coeffs3[i])(ypx_mod)
     
-wl_hdu4 = pyfits.open(os.path.join(redux_dir,'n20160216','wavelength_soln_T4.fits'))
+wl_hdu4 = pyfits.open(os.path.join(redux_dir,arc_date,'wavelength_soln_T4.fits'))
 wl_coeffs4 =  wl_hdu4[0].data
 #wl_coeffs = wl_coeffs[::-1,:] #Re-order, need to be sure this is consistent
 wl_polyord4 = wl_hdu4[0].header['POLYORD']
@@ -802,6 +817,11 @@ wavelength_soln[3,:,:] = wavelength_soln_T4
 ### right now I don't have wavelength soln for order 2, so I just eliminate
 ### that fiber and keep moving forward (fiber "0" isn't used)
 
+zmask_fin = np.zeros((args.telescopes,args.num_fibers,actypix))
+zmask_fin[0,:,:] = zmask[np.arange(1,num_fibers,4),:]
+zmask_fin[1,:,:] = zmask[np.arange(2,num_fibers,4),:]
+zmask_fin[2,:,:] = zmask[np.arange(3,num_fibers,4),:]
+zmask_fin[3,:,:] = np.vstack((zmask[np.arange(4,num_fibers,4),:],np.zeros(actypix)))
 
 zspec_fin2 = np.zeros((args.telescopes,args.num_fibers,actypix))
 zspec_fin2[0,:,:] = zspec2[np.arange(1,num_fibers,4),:]
@@ -883,6 +903,7 @@ if not args.nosave:
     hdu1 = pyfits.PrimaryHDU(zspec_fin2)
     hdu2 = pyfits.PrimaryHDU(invvar_fin2)
     hdu3 = pyfits.PrimaryHDU(wavelength_soln)
+    hdu4 = pyfits.PrimaryHDU(zmask_fin)
     hdu1.header.comments['NAXIS1'] = 'Pixel axis'
     hdu1.header.comments['NAXIS2'] = 'Fiber axis (blue to red)'
     hdu1.header.comments['NAXIS3'] = 'Telescope axis (T1, T2, T3, T4)'
@@ -892,11 +913,15 @@ if not args.nosave:
     hdu3.header.comments['NAXIS1'] = 'Pixel axis'
     hdu3.header.comments['NAXIS2'] = 'Fiber axis (blue to red)'
     hdu3.header.comments['NAXIS3'] = 'Telescope axis (T1, T2, T3, T4)'
+    hdu4.header.comments['NAXIS1'] = 'Pixel axis'
+    hdu4.header.comments['NAXIS2'] = 'Fiber axis (blue to red)'
+    hdu4.header.comments['NAXIS3'] = 'Telescope axis (T1, T2, T3, T4)'
     ### Additional new header values
-    hdu1.header.append(('DATA','Flux','Relative counts (no flat fielding)'))
-    hdu2.header.append(('DATA','Inv. Var','Inverse variance'))
-    hdu3.header.append(('DATA','Wavelength','Wavelength solution lambda vs px'))
-    hdu1.header.append(('VERSION','v0.1','Reduction software version'))
+    hdu1.header.append(('UNITS','Flux','Relative photon counts (no flat fielding)'))
+    hdu2.header.append(('UNITS','Inv. Var','Inverse variance'))
+    hdu3.header.append(('UNITS','Wavelength','Wavelength solution lambda (Angstroms) vs px'))
+    hdu4.header.append(('UNITS','Mask','True (1) or False (0) good data point'))
+    hdu1.header.append(('VERSION',software_vers,'Reduction software version'))
     #### Include all old header values in new header for hdu1
     ### As usual, probably a better way, but I think this will work
     for key in hdr.keys():
@@ -906,6 +931,7 @@ if not args.nosave:
     hdulist = pyfits.HDUList([hdu1])
     hdulist.append(hdu2)
     hdulist.append(hdu3)
+    hdulist.append(hdu4)
     hdulist.writeto(os.path.join(redux_dir,savedate,savefile+'.proc.fits'),clobber=True)
         
 #    ### Save file for boxcar extraction with flat fielding ########
@@ -961,4 +987,6 @@ if not args.nosave:
 #    hdulist.append(hdu2)
 #    hdulist.append(hdu3)
 #    hdulist.writeto(os.path.join(redux_dir,savedate,savefile+'.proc.box.noflat.fits'),clobber=True)
-#    
+
+tf = time.time()
+print("Total extraction time = {}s".format(tf-t0))

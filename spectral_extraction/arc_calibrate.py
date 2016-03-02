@@ -104,21 +104,20 @@ def fit_trace(x,y,ccd,form='gaussian'):
 
 
 #set paths
-pathd = os.environ['MINERVA_DATA_DIR']
-paths = os.environ['MINERVA_SIM_DIR']
+data_dir = os.environ['MINERVA_DATA_DIR']
 date = 'n20160130'
 
 telescopes = ['T1','T2','T3','T4']
 for ts in telescopes:
 #    #Import tungsten fiberflat
-#    fileflat = os.path.join(pathd,'initial_spectro_runs','test4.FIT')
+#    fileflat = os.path.join(data_dir,'initial_spectro_runs','test4.FIT')
 #    #fileflat = os.path.join(paths,'minerva_flat.fits')
 #    ff = pyfits.open(fileflat,ignore_missing_end=True,uint=True)
 #    hdr = ff[0].header
 #    ccd = ff[0].data
 #    
 #    #Import thorium argon arc
-#    filearc = os.path.join(pathd,'initial_spectro_runs','test11.FIT')
+#    filearc = os.path.join(data_dir,'initial_spectro_runs','test11.FIT')
 #    #filearc = os.path.join(paths,'minerva_arc.fits')
 #    af = pyfits.open(filearc,ignore_missing_end=True,uint=True)
 #    hdr_a = af[0].header
@@ -144,14 +143,14 @@ for ts in telescopes:
         continue
 
     #Import tungsten fiberflat
-    fileflat = os.path.join(pathd,date,flnmflat)
+    fileflat = os.path.join(data_dir,date,flnmflat)
     #fileflat = os.path.join(paths,'minerva_flat.fits')
     ff = pyfits.open(fileflat,ignore_missing_end=True,uint=True)
     hdr = ff[0].header
     ccd = ff[0].data
     
     #Import thorium argon arc
-    filearc = os.path.join(pathd,date,flnmarc)
+    filearc = os.path.join(data_dir,date,flnmarc)
     #filearc = os.path.join(paths,'minerva_arc.fits')
     af = pyfits.open(filearc,ignore_missing_end=True,uint=True)
     hdr_a = af[0].header
@@ -422,12 +421,12 @@ for ts in telescopes:
     
     wl_min = 4874
     wl_max = 6466
-    pathm = os.environ['MINERVA_SIM_DIR']
+    sim_dir = os.environ['MINERVA_SIM_DIR']
     rows = 8452
     cols = 2
     lamp_lines = np.zeros((rows,cols))
     line_names = np.chararray((rows,1),itemsize=6)
-    with open(pathm+'table1.dat','r') as ll:
+    with open(os.path.join(sim_dir,'table1.dat'),'r') as ll:
         ln = ll.readlines()
         for i in range(rows):
             lamp_lines[i,0] = ln[i][0:11]
@@ -598,7 +597,7 @@ for ts in telescopes:
     skipsets = 2 #skip the first two sets of 5 - these don't show on CCD
     ### Import estimates from file
     ### TODO should think of an easier format for simple imports
-    with open(pathm + 'arc_order_estimates.csv') as arccsv:
+    with open(os.path.join(sim_dir,'arc_order_estimates.csv')) as arccsv:
         orders = csv.reader(arccsv,delimiter=',')
         ct = 0
         fib = 0
@@ -692,14 +691,15 @@ for ts in telescopes:
         
     ###################### Save values to file ####################################
     redux_dir = os.environ['MINERVA_REDUX_DIR']    
-    savedate = 'n20160216'
+    if not os.path.isdir(os.path.join(redux_dir,date)):
+        os.makedirs(os.path.join(redux_dir,date))
     hdu = pyfits.PrimaryHDU(lam_vs_px_final)
     hdu.header.append(('POLYORD',fin_poly_order,'Polynomial order used for fitting'))
     hdulist = pyfits.HDUList([hdu])
-    hdulist.writeto(os.path.join(redux_dir,savedate,'wavelength_soln_'+ts+'.fits'),clobber=True)
+    hdulist.writeto(os.path.join(redux_dir,date,'wavelength_soln_'+ts+'.fits'),clobber=True)
             
-    #lambda_0 = np.loadtxt(os.path.join(pathm,'lambda0est.txt')) + 4 #4 is estimated RV shift for solar spectrum
-    #lambda_diff = np.loadtxt(os.path.join(pathm,'lambda_diff_est.txt'))
+    #lambda_0 = np.loadtxt(os.path.join(sim_dir,'lambda0est.txt')) + 4 #4 is estimated RV shift for solar spectrum
+    #lambda_diff = np.loadtxt(os.path.join(sim_dir,'lambda_diff_est.txt'))
     #dispersion_est = lambda_diff/ypix
     #lambda_f = lambda_0+lambda_diff
     #px_0 = np.ones((num_fibers))
