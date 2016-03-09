@@ -710,11 +710,11 @@ for i in range(num_fibers):
 
 ### Check quality of model
 #model_ccd += bias
-res = ccd-model_ccd
-ressc = res/(np.sqrt(ccd)+readnoise)
-pltarray = np.hstack((ccd,model_ccd,ressc))
-plt.ion()
-plt.imshow(pltarray)
+#res = ccd-model_ccd
+#ressc = res/(np.sqrt(ccd)+readnoise)
+#pltarray = np.hstack((ccd,model_ccd,ressc))
+#plt.ion()
+#plt.imshow(pltarray)
 
 ############################################################
 ######### Import wavelength calibration ####################        
