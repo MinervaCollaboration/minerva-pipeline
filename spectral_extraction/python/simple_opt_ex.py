@@ -130,14 +130,15 @@ def fit_trace(x,y,ccd,form='gaussian'):
         xwindow = x+xvals
         xvals = xvals[(xwindow>=0)*(xwindow<maxx)]
         zvals = ccd[x+xvals,y]
-        params, errarr = sf.gauss_fit(xvals,zvals)
+        params, errarr = sf.gauss_fit(xvals,zvals,fit_exp='y')
         xc = x+params[1] #offset plus center
         zc = params[2] #height (intensity)
         sig = params[0] #standard deviation
+        power = params[5]
 #        pxn = np.linspace(xvals[0],xvals[-1],1000)
-        fit = sf.gaussian(xvals,abs(params[0]),params[1],params[2],params[3],params[4])
+        fit = sf.gaussian(xvals,abs(params[0]),params[1],params[2],params[3],params[4],params[5])
         chi = sum((fit-zvals)**2/zvals)
-        return xc, zc, abs(sig), chi
+        return xc, zc, abs(sig), power, chi
 
 
 #########################################################
@@ -152,15 +153,15 @@ gain = 1.3
 readnoise = 3.63
 
 spectrum = pyfits.open(filename,uint=True)
-hdr = spectrum[0].header
+spec_hdr = spectrum[0].header
 ccd = spectrum[0].data
 
 #####CONVERT NASTY FORMAT TO ONE THAT ACTUALLY WORKS#####
 #Dimensions
-ypix = hdr['NAXIS1']
-xpix = hdr['NAXIS2']
+ypix = spec_hdr['NAXIS1']
+xpix = spec_hdr['NAXIS2']
 ### Next part checks if iodine cell is in, assumes keyword I2POSAS exists
-if hdr['I2POSAS']=='in':
+if spec_hdr['I2POSAS']=='in':
     i2 = True
 else:
     i2 = False
@@ -222,7 +223,6 @@ for ts in ['T1','T2','T3','T4']:
     #fileflat = os.path.join(paths,'minerva_flat.fits')
     ff = pyfits.open(fileflat,ignore_missing_end=True,uint=True)
     fa = pyfits.open(filearc,ignore_missing_end=True,uint=True)
-    hdr = ff[0].header
     ccd_tmp = ff[0].data
     arc_tmp = fa[0].data
     trace_ccd += ccd_tmp[::-1,0:actypix]
@@ -243,6 +243,7 @@ yvals = yspace*(1+np.arange(num_points))
 xtrace = np.zeros((num_fibers,num_points)) #xpositions of traces
 ytrace = np.zeros((num_fibers,num_points)) #ypositions of traces
 sigtrace = np.zeros((num_fibers,num_points)) #standard deviation along trace
+powtrace = np.zeros((num_fibers,num_points)) #pseudo-gaussian power along trace
 Itrace = np.zeros((num_fibers,num_points)) #relative intensity of flat at trace
 chi_vals = np.zeros((num_fibers,num_points)) #returned from fit_trace
 bg_cutoff = 1.05*np.median(trace_ccd) #won't fit values below this intensity
@@ -269,9 +270,9 @@ if trct<num_fibers:
 for i in range(num_fibers):
     y = yvals[0]
     if not np.isnan(xtrace[i,0]):
-        xtrace[i,0], Itrace[i,0], sigtrace[i,0], chi_vals[i,0] = fit_trace(xtrace[i,0],y,trace_ccd)
+        xtrace[i,0], Itrace[i,0], sigtrace[i,0], powtrace[i,0], chi_vals[i,0] = fit_trace(xtrace[i,0],y,trace_ccd)
     else:
-        Itrace[i,0], sigtrace[i,0], chi_vals[i,0] = np.nan, np.nan, np.nan  
+        Itrace[i,0], sigtrace[i,0], powtrace[i,0], chi_vals[i,0] = np.nan, np.nan, np.nan, np.nan
 
 
 for i in range(1,len(yvals)):
@@ -295,11 +296,11 @@ for i in range(1,len(yvals)):
                 #estimate of trace position based on tallest peak
                 xtrace[j,i] = np.argmax(xregion)+lb
                 #quadratic fit for sub-pixel precision
-                xtrace[j,i], Itrace[j,i], sigtrace[j,i], chi_vals[j,i] = fit_trace(xtrace[j,i],y,trace_ccd)
+                xtrace[j,i], Itrace[j,i], sigtrace[j,i], powtrace[j,i], chi_vals[j,i] = fit_trace(xtrace[j,i],y,trace_ccd)
             else:
-                xtrace[j,i], Itrace[j,i], sigtrace[j,i], chi_vals[j,i] = np.nan, np.nan, np.nan, np.nan
+                xtrace[j,i], Itrace[j,i], sigtrace[j,i], sigtrace[j,i], chi_vals[j,i] = np.nan, np.nan, np.nan, np.nan, np.nan
         else:
-            xtrace[j,i], Itrace[j,i], sigtrace[j,i], chi_vals[j,i] = np.nan, np.nan, np.nan, np.nan
+            xtrace[j,i], Itrace[j,i], sigtrace[j,i], sigtrace[j,i], chi_vals[j,i] = np.nan, np.nan, np.nan, np.nan, np.nan
             
 Itrace /= np.median(Itrace) #Rescale intensities
 
@@ -307,6 +308,7 @@ Itrace /= np.median(Itrace) #Rescale intensities
 trace_coeffs = np.zeros((3,num_fibers))
 trace_intense_coeffs = np.zeros((3,num_fibers))
 trace_sig_coeffs = np.zeros((3,num_fibers))
+trace_pow_coeffs = np.zeros((3,num_fibers))
 for i in range(num_fibers):
     #Given orientation makes more sense to swap x/y
     mask = ~np.isnan(xtrace[i,:])
@@ -318,10 +320,12 @@ for i in range(num_fibers):
         tmp_coeffs, junk = sf.chi_fit(xtrace[i,:][mask],profile,noise)
         tmp_coeffs2, junk = sf.chi_fit(Itrace[i,:][mask],profile,noise)
         tmp_coeffs3, junk = sf.chi_fit(sigtrace[i,:][mask],profile,noise)
+        tmp_coeffs4, junk = sf.chi_fit(powtrace[i,:][mask],profile,noise)
     else:
         tmp_coeffs = np.nan*np.ones((3))
         tmp_coeffs2 = np.nan*np.ones((3))
-        tmp_coeffs2 = np.nan*np.ones((3))
+        tmp_coeffs3 = np.nan*np.ones((3))
+        tmp_coeffs4 = np.nan*np.ones((3))
     trace_coeffs[0,i] = tmp_coeffs[0]
     trace_coeffs[1,i] = tmp_coeffs[1]
     trace_coeffs[2,i] = tmp_coeffs[2]
@@ -331,6 +335,10 @@ for i in range(num_fibers):
     trace_sig_coeffs[0,i] = tmp_coeffs3[0]
     trace_sig_coeffs[1,i] = tmp_coeffs3[1]
     trace_sig_coeffs[2,i] = tmp_coeffs3[2]      
+    trace_pow_coeffs[0,i] = tmp_coeffs4[0]
+    trace_pow_coeffs[1,i] = tmp_coeffs4[1]
+    trace_pow_coeffs[2,i] = tmp_coeffs4[2]      
+
 
 ###Plot to visualize traces      
 #fig,ax = plt.subplots()
@@ -371,6 +379,7 @@ zspec2 = np.zeros((num_fibers,actypix))
 zspecbox = np.zeros((num_fibers,actypix))
 zspecbox2 = np.zeros((num_fibers,actypix))
 zmask = np.ones((num_fibers,actypix),dtype=bool)
+zinvar = np.zeros((num_fibers,actypix))
 
 #plt.plot(ccd[:,0])
 #plt.show()
@@ -538,21 +547,87 @@ zmask = np.ones((num_fibers,actypix),dtype=bool)
 ##### Now a second fit using smoothed values from first fit
 ##### Here we only allow height to vary
 
+def cosmic_ray_reject(D,f,P,iV,S=0,threshhold=25,verbose=False):
+    """ Procedure to reject cosmic rays in optimal extraction.
+        This assumes your inputs are all at a given wavelength
+        Inputs (based on nomenclature in Horne, 1986):
+            D - image data (array)
+            f - estimated flux/scale factor (scalar)
+            P - model profile (array)
+            S - sky profile (array)
+            iV - inverse variance (array), slight departure from Horne
+        Output:
+            pixel_reject - mask array of pixel to reject (1 = keep, 0 = reject)
+    """
+    pixel_reject = np.ones(len(D))
+    if len(D)!=len(P) and len(D)!=len(iV):
+        if verbose:
+            print("Array lengths must all be equal")
+        exit(0)
+    else:
+        pixel_residuals = (D-f*P-S)**2*iV
+        #Include the sign so that only positive residuals are eliminated
+        pixel_residuals*=np.sign(D-f*P-S)
+#        if verbose:
+##            print np.max(pixel_residuals)
+#            print threshhold
+#            time.sleep(0.5)
+#            print pixel_residuals
+    #        print iV
+    #        print (D-f*P)
+    #        print (D-f*P)**2
+    #        print sum(abs(pixel_residuals))/len(D)
+    #        print np.max(pixel_residuals)
+    #        plt.plot(D)
+    #        plt.plot(f*P)
+    #        plt.show()
+    #        plt.close()
+        if np.max(pixel_residuals)>threshhold:
+            pixel_reject[np.argmax(pixel_residuals)]=0
+    #        elif sum(abs(pixel_residuals))/len(D) >chi_sq_lim:
+    #            pixel_reject[np.argmax(pixel_residuals)]=0
+    return pixel_reject
+    
+def fit_mn_hght_bg(xvals,zorig,invorig,sigj,mn_new,powj=2):
+#    mn_new = xc-xj
+    mn_old = -100
+    lp_ct = 0
+    while abs(mn_new-mn_old)>0.001:
+        mn_old = np.copy(mn_new)
+        hght, bg = sf.best_linear_gauss(xvals,sigj,mn_old,zorig,invorig,power=powj)
+        mn_new, mn_new_std = sf.best_mean(xvals,sigj,mn_old,hght,bg,zorig,invorig,power=powj)
+        lp_ct+=1
+        if lp_ct>1e3: break
+    return mn_new, hght,bg
+       
+
 model_ccd = np.zeros((np.shape(ccd))) #build model as we go to compare to data
 
+mn_tr = 0
+mn_fit = 0
+mn_diff = 0
+mn_cnt = 0
 for i in range(num_fibers):
-#    if i > 3:
+#    if i != 2:
+#        continue
 #        plt.plot(zspec2[i-1,:])
 #        plt.show()
 #        plt.close()
 #    slit_num = np.floor((i)/args.telescopes)
     print("extracting trace {}".format(i+1))
     for j in range(actypix):
-#        if j != 1000:
+#            print powj, sigj
+#            plt.plot(xvals,zorig,np.linspace(xvals[0],xvals[-1],100),fitprecise)
+#            plt.show()
+#            plt.close()
+#        if j != 1576:
 #            continue
         yj = (yspec[j]-actypix/2)/actypix
-        xc = trace_coeffs[2,i]*yj**2+trace_coeffs[1,i]*yj+trace_coeffs[0,i]#np.poly1d(meansmooth[i])(yj)
+        xcshift = -0.08*(1+np.mod(i-1,4))
+        xc = trace_coeffs[2,i]*yj**2+trace_coeffs[1,i]*yj+trace_coeffs[0,i]+xcshift#np.poly1d(meansmooth[i])(yj)
         Ij = trace_intense_coeffs[2,i]*yj**2+trace_intense_coeffs[1,i]*yj+trace_intense_coeffs[0,i]
+        sigj = trace_sig_coeffs[2,i]*yj**2+trace_sig_coeffs[1,i]*yj+trace_sig_coeffs[0,i]
+        powj = trace_pow_coeffs[2,i]*yj**2+trace_pow_coeffs[1,i]*yj+trace_pow_coeffs[0,i]
 #        sigj = np.poly1d(sigsmooth[i])(yj)
 #        powj = np.poly1d(powsmooth[i])(yj)
         if np.isnan(xc):
@@ -570,35 +645,127 @@ for i in range(num_fibers):
                 zvals = ccd[xj+xvals,yspec[j]]/Ij
                 invvals = 1/(abs(zvals)+readnoise)
                 zorig = ccd[xj+xvals,yspec[j]]
+                if len(zorig)<1:
+                    zspec[i,j] = 0#gain*sum(zvals)
+                    zspec2[i,j] = 0#gain*sum(zorig)
+                    zmask[i,j] = False
+                    continue
 #                plt.figure()
 #                plt.plot(xj+xvals,zorig,xj+xvals,zvals)
 #                plt.show()
 #                plt.close()
 #                time.sleep(0.5)
-                invorig = 1/(abs(zorig)+readnoise)
+                invorig = 1/(abs(zorig)+readnoise**2)
+#                zinvar = 1/(abs(zorig)+readnoise)
                 zspecbox[i,j] = gain*sum(zvals)
                 zspecbox2[i,j] = gain*sum(zorig)
-                if np.max(zorig)<30:
+                if np.max(zorig)<20:
 #                    print("zorig max less than 10 for pixel {}".format(j))
-                    zspec[i,j] = gain*sum(zvals)
-                    zspec2[i,j] = gain*sum(zorig)
+                    zspec[i,j] = 0#gain*sum(zvals)
+                    zspec2[i,j] = 0#gain*sum(zorig)
                 else:
 #                    print "Actually doing fitting!"
 #                    pguess = [sigj,xc-xj-1,np.max(orig),0,0] #std, mean, height, bgmean, bgslope, power
-                    params, errarr = sf.gauss_fit(xvals,zvals,invr=invvals,fit_exp='y')#,pguess=pguess)
-                    paramsorig, errorig = sf.gauss_fit(xvals,zorig,invr=invorig,fit_exp='y')
+                    mn_new, hght, bg = fit_mn_hght_bg(xvals,zorig,invorig,sigj,xc-xj-1,powj=powj)
+#                    params, errarr = sf.gauss_fit(xvals,zvals,invr=invvals,xcguess=xc-xj,fit_exp='y')#,pguess=pguess)
+#                    paramsorig, errorig = sf.gauss_fit(xvals,zorig,invr=invorig,xcguess=xc-xj,fit_exp='y',verbose='y')
 #                    height1 = params[2]
 #                    height2 = paramsorig[2]
 #                    height1 = sf.fit_height(xvals,zvals,invvals,sigj,xc-xj-1,bgmrough[i,j]/Ij,bgsrough[i,j]/Ij,powj)[0]
 #                    height2 = sf.fit_height(xvals,zorig,invorig,sigj,xc-xj-1,bgmrough[i,j],bgsrough[i,j],powj)[0]
                     ### Now add first primitive cosmic ray masking
                     ### Make this recursive!
-                    fit = sf.gaussian(xvals,params[0],params[1],params[2],params[3],params[4],params[5])
-                    fitorig = sf.gaussian(xvals,paramsorig[0],paramsorig[1],paramsorig[2],paramsorig[3],paramsorig[4],paramsorig[5])
+#                    fit = sf.gaussian(xvals,params[0],params[1],params[2],params[3],params[4],params[5])
+#                    fitorig = sf.gaussian(xvals,paramsorig[0],paramsorig[1],paramsorig[2],power=paramsorig[5])#,paramsorig[3],paramsorig[4])
+#                    fitprecise = sf.gaussian(np.linspace(xvals[0],xvals[-1],100),abs(paramsorig[0]),paramsorig[1],paramsorig[2],power=paramsorig[5])
+                    fitorig = sf.gaussian(xvals,sigj,mn_new,hght,power=powj)#,paramsorig[3],paramsorig[4])
+                    fitprecise = sf.gaussian(np.linspace(xvals[0],xvals[-1],100),sigj,mn_new,hght,power=powj)
+#                    if j==1576:
+#                        print np.linspace(xvals[0],xvals[-1],100)
+#                        print paramsorig
+#                        print fitorig
+#                        print invorig
+                    fstd = sum(fitprecise)
+                    #Add following if/else to handle failure to fit
+                    if fstd==0:
+                        fitnorm = np.zeros(len(zorig))
+                    else:
+                        fitnorm = fitorig/fstd
+                    invorig = 1/(readnoise**2 + abs(fstd*fitnorm)*gain)
 #                    fit = sf.gaussian(xvals,sigj,xc-xj-1,height1,bgmrough[i,j]/Ij,bgsrough[i,j]/Ij,powj)
 #                    fitorig = sf.gaussian(xvals,sigj,xc-xj-1,height2,bgmrough[i,j],bgsrough[i,j],powj)
-                    differ = fit-zvals
-                    difforig = fitorig-zorig
+                    rej_min = 0
+                    loop_count=0
+#                    print i, j
+                    while rej_min==0:
+#                        print "starting loop"
+                        pixel_reject = cosmic_ray_reject(zorig,fstd,fitnorm,invorig,S=bg,threshhold=0.3*np.mean(zorig),verbose=True)
+#                        print "still in loop"
+                        rej_min = np.min(pixel_reject)
+#                        print rej_min
+                        mn_tr+=xc-xj-1
+                        mn_fit+=mn_new
+                        mn_diff+=(mn_new-(xc-xj-1))
+                        mn_cnt+=1
+#                        if i==2 and j==1921:
+#                            print("Mean diff = {}".format(mn_diff/mn_cnt))
+#                            print fstd
+#                            plt.plot(xvals,zorig,np.linspace(xvals[0],xvals[-1],100),fitprecise)
+#                            plt.show()
+#                            print "This point exists!"
+#                        if i==0 and j==1576:#abs(1577-j)<3:
+#                            print("Mean diff = {}".format(mn_diff/mn_cnt))
+#                            print sigj/3
+#                            plt.plot(xvals,zorig,np.linspace(xvals[0],xvals[-1],100),fitprecise)
+#                            plt.show()
+#                            plt.close()
+#                            print len(zorig)
+#                            print rej_min
+#                            print pixel_reject
+#                            print xvals
+#                            print fitprecise
+#                            print zorig
+#                        print rej_min
+                        if rej_min==0:
+#                            print zorig
+#                            print pixel_reject
+#                            plt.plot(xvals,zorig)
+                            zorig = zorig[pixel_reject==1]
+#                            print zorig
+                            invorig = invorig[pixel_reject==1]
+                            xvals = xvals[pixel_reject==1]
+#                            print "mark 1"
+                            mn_new, hght, bg = fit_mn_hght_bg(xvals,zorig,invorig,sigj,xc-xj-1)
+                            fitorig = sf.gaussian(xvals,sigj,mn_new,hght,power=powj)#,paramsorig[3],paramsorig[4])
+                            fitprecise = sf.gaussian(np.linspace(xvals[0],xvals[-1],100),sigj,mn_new,hght,power=powj)
+#                            plt.plot(xvals,zorig,np.linspace(xvals[0],xvals[-1],100),fitprecise)
+#                            plt.show()
+#                            plt.close()
+#                            paramsorig, errorig = sf.gauss_fit(xvals,zorig,invr=invorig,xcguess=xc-xj,fit_exp='y',verbose='y')
+##                            print "mark 2"
+#                            fitorig = sf.gaussian(xvals,paramsorig[0],paramsorig[1],paramsorig[2],power=paramsorig[5])#,paramsorig[3],paramsorig[4])
+#                            fitprecise = sf.gaussian(np.linspace(xvals[0],xvals[-1],100),paramsorig[0],paramsorig[1],paramsorig[2],power=paramsorig[5])
+                            ftmp = sum(fitprecise)
+                            fitnorm = fitorig/ftmp
+                            fstd = sum(fitnorm*zorig*invorig)/sum(fitnorm**2*invorig)
+                            invorig = 1/(readnoise**2 + abs(fstd*fitnorm)*gain)
+#                            print("Cosmic ray rejected on trace {} at pixel {}".format(i,j))
+#                            print rej_min==0
+                        if loop_count>3:
+                            break
+                        loop_count+=1
+#                    print "Out of loop"
+#                    print i, j
+#                    plt.plot(xvals,zorig)
+#                    plt.show()
+#                    plt.close()
+#                    if i == 0 and j == 1576:
+#                        print "in this other loop"
+#                        plt.plot(xvals,zorig,np.linspace(xvals[0],xvals[-1],100),fitprecise)
+#                        plt.show()
+                    zspec2[i,j] = fstd
+#                    differ = fit-zvals
+#                    difforig = fitorig-zorig
 #                    refit = False
 #                    refitorig = False
 #                    for k in range(len(differ)):
@@ -634,20 +801,20 @@ for i in range(num_fibers):
 #                        plt.plot(xj+xvals,zorig,xj+xvals,fitorig)
 #                        plt.show()
 #                        plt.close()
-                    #Restrict fitting off-trace
-                    if abs(params[1]-xc+xj+1)>1:
-                        zspec[i,j] = 0
-                    if abs(paramsorig[1]-xc+xj+1)>1:
-                        zspec2[i,j] = 0
-                        zmask[i,j] = False
-                        model_ccd[xj+xvals,j] = 0
-                    #Block anything that has a large spread in errors, compared to max
-                    if np.max(abs(differ))/np.max(zvals) > 0.1:
-                        zspec[i,j] = 0
-                    if np.max(abs(difforig))/np.max(zorig) > 0.1:
-                        zspec2[i,j] = 0
-                        zmask[i,j] = False
-                        model_ccd[xj+xvals,j] = 0
+#                    #Restrict fitting off-trace
+#                    if abs(params[1]-xc+xj+1)>1:
+#                        zspec[i,j] = 0
+#                    if abs(paramsorig[1]-xc+xj+1)>1:
+#                        zspec2[i,j] = 0
+#                        zmask[i,j] = False
+#                        model_ccd[xj+xvals,j] = 0
+#                    #Block anything that has a large spread in errors, compared to max
+#                    if np.max(abs(differ))/np.max(zvals) > 0.1:
+#                        zspec[i,j] = 0
+#                    if np.max(abs(difforig))/np.max(zorig) > 0.1:
+#                        zspec2[i,j] = 0
+#                        zmask[i,j] = False
+#                        model_ccd[xj+xvals,j] = 0
 #                    if refit:
 #                        params, errarr = sf.gauss_fit(xvals,zvals,invr=invvals,fit_exp='y')
 #                        params, errarr = sf.gauss_fit(xvals,zvals,invr=invvals,pguess=pguess,fit_exp='y')
@@ -658,11 +825,14 @@ for i in range(num_fibers):
 #                        paramsorig, errorig = sf.gauss_fit(xvals,zorig,invr=invorig,pguess=pguess,fit_exp='y')
 #                        height2 = paramsorig[2]
 #                        height2 = sf.fit_height(xvals,zorig,invorig,sigj,xc-xj-1,bgmrough[i,j],bgsrough[i,j],powj)[0]
-                    gauss_model = sf.gaussian(xvals,params[0],params[1],params[2],params[3],params[4],params[5])
-                    gauss_model2 = sf.gaussian(xvals,paramsorig[0],paramsorig[1],paramsorig[2],paramsorig[3],paramsorig[4],paramsorig[5])
-                    zspec[i,j] = gain*sum(gauss_model)#height1*sigj*np.sqrt(2*np.pi)
-                    zspec2[i,j] = gain*sum(gauss_model2)#height2*sigj*np.sqrt(2*np.pi)
-                    model_ccd[xj+xvals,j] += gauss_model2
+#                    gauss_model = sf.gaussian(xvals,params[0],params[1],params[2],power=params[5])#,params[3])#,params[4],params[5])
+#                    gauss_model2 = sf.gaussian(xvals,paramsorig[0],paramsorig[1],paramsorig[2],power=paramsorig[5])#,paramsorig[3])#,paramsorig[4],paramsorig[5])
+#                    gauss_modelp = sf.gaussian(np.linspace(xvals[0],xvals[-1],100),paramsorig[0],paramsorig[1],paramsorig[2],power=paramsorig[5])#,paramsorig[3])#,paramsorig[4],paramsorig[5])
+##                    zspec[i,j] = gain*sum(gauss_model)#height1*sigj*np.sqrt(2*np.pi)
+#                    gm_norm = gauss_model2/sum(gauss_modelp)
+#                    zspec2[i,j] = gain*sum(gm_norm*zorig*invorig)/(sum(gm_norm**2*invorig))
+#                    zspec2[i,j] = gain*sum(gauss_model2)#height2*sigj*np.sqrt(2*np.pi)
+#                    model_ccd[xj+xvals,j] += gauss_model2
 #                    if i == 6 and j <= 1950   and j >= 1944:
 ##                        print abs(paramsorig[1]-xc+xj+1)
 #                        print np.std(difforig)/np.max(zorig)
@@ -849,10 +1019,10 @@ zspec_finbox2[3,:,:] = np.vstack((zspecbox2[np.arange(4,num_fibers,4),:],np.ones
 
 ### Actual inverse variances need to be calculated later, but
 ### these should be close to the true values
-invvar_fin = 1/(abs(zspec_fin)+readnoise)
-invvar_fin2 = 1/(abs(zspec_fin2)+readnoise)
-invvar_finbox = 1/(abs(zspec_finbox)+readnoise)
-invvar_finbox2 = 1/(abs(zspec_finbox2)+readnoise)
+invvar_fin = 1/(abs(zspec_fin)+readnoise**2)
+invvar_fin2 = 1/(abs(zspec_fin2)+readnoise**2)
+invvar_finbox = 1/(abs(zspec_finbox)+readnoise**2)
+invvar_finbox2 = 1/(abs(zspec_finbox2)+readnoise**2)
 
 ###Plot orders for visualization
 #for i in range(num_fibers):
@@ -924,9 +1094,9 @@ if not args.nosave:
     hdu1.header.append(('VERSION',software_vers,'Reduction software version'))
     #### Include all old header values in new header for hdu1
     ### As usual, probably a better way, but I think this will work
-    for key in hdr.keys():
+    for key in spec_hdr.keys():
         if key not in hdu1.header and key != 'BSCALE' and key != 'BZERO':
-            hdu1.header.append((key,hdr[key],hdr.comments[key]))
+            hdu1.header.append((key,spec_hdr[key],spec_hdr.comments[key]))
                 
     hdulist = pyfits.HDUList([hdu1])
     hdulist.append(hdu2)
