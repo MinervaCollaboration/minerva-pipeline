@@ -88,7 +88,7 @@ def best_linear_gauss(axis,sig,mn,data,invar,power=2):
     coeffs, chi = chi_fit(data, profile, noise)
     return coeffs[0][0], coeffs[1][0]
 
-def best_mean(axis,sig,mn,hght,bg,data,invar,power=2):
+def best_mean(axis,sig,mn,hght,bg,data,invar,spread,power=2):
     """ Finds the mean that minimizes squared sum of weighted residuals
         for a given sigma and height (guassian profile)
         Uses a grid-search, then fits around minimum chi^2 regionS
@@ -121,7 +121,7 @@ def best_mean(axis,sig,mn,hght,bg,data,invar,power=2):
     ###Coarse find
     ###Tradeoff with coarse sig - too small and initial guess is critical,
     ### too big and more susceptible to comsic ray influence
-    best_mn, best_mn_std = mn_find(axis,mn,sig/2)
+    best_mn, best_mn_std = mn_find(axis,mn,spread)
     ###Fine find
     best_mn, best_mn_std = mn_find(axis,best_mn,best_mn_std)
     ###Finer find

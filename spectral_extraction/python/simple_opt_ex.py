@@ -147,7 +147,7 @@ def fit_trace(x,y,ccd,form='gaussian'):
 
 #hardcode in n20160115 directory
 filename = args.filename#os.path.join(data_dir,'n20160115',args.filename)
-software_vers = 'v0.1' #Later grab this from somewhere else
+software_vers = 'v0.2' #Later grab this from somewhere else
 
 gain = 1.3
 readnoise = 3.63
@@ -339,7 +339,6 @@ for i in range(num_fibers):
     trace_pow_coeffs[1,i] = tmp_coeffs4[1]
     trace_pow_coeffs[2,i] = tmp_coeffs4[2]      
 
-
 ###Plot to visualize traces      
 #fig,ax = plt.subplots()
 #ax.pcolorfast(trace_ccd)
@@ -388,165 +387,7 @@ zinvar = np.zeros((num_fibers,actypix))
 ############# Try iterative fitting, enforcing smoothness ###############
 #########################################################################
 
-### First fit, find sigma, xc parameters for traces
-### Adapt to use sig, xc from fiberflats as first guesses
-### quantities to smooth (potentially everything except height/intensity)
-#fact = 20 #do 1/fact of the available points
-#rough_pts = int(np.ceil(actypix/fact))
-#sigrough = np.zeros((num_fibers,rough_pts)) #std
-#meanrough = np.zeros((num_fibers,rough_pts)) #mean
-#bgmrough = np.zeros((num_fibers,rough_pts)) #background mean
-#bgsrough = np.zeros((num_fibers,rough_pts)) #background slope
-#powrough = np.zeros((num_fibers,rough_pts)) #exponential power
-#for i in range(num_fibers):
-##    if i > 3:
-##        plt.plot(zspec2[i-1,:])
-##        plt.show()
-##        plt.close()
-##    slit_num = np.floor((i)/args.telescopes)
-#    print("estimating parameters on trace {}".format(i+1))
-#    for j in range(0,actypix,fact):
-##        if j != 1000:
-##            continue
-#        jadj = int(np.floor(j/fact))
-#        yj = (yspec[j]-actypix/2)/actypix
-#        xc = trace_coeffs[2,i]*yj**2+trace_coeffs[1,i]*yj+trace_coeffs[0,i]
-#        Ij = trace_intense_coeffs[2,i]*yj**2+trace_intense_coeffs[1,i]*yj+trace_intense_coeffs[0,i]
-#        sigj = trace_sig_coeffs[2,i]*yj**2+trace_sig_coeffs[1,i]*yj+trace_sig_coeffs[0,i]
-#        if np.isnan(xc):
-#            sigrough[i,jadj] = np.nan
-#            meanrough[i,jadj] = np.nan
-#            bgmrough[i,jadj] = np.nan
-#            bgsrough[i,jadj] = np.nan
-#            powrough[i,jadj] = np.nan
-#        else:
-#            try:
-#                xpad = 7
-#                xvals = np.arange(-xpad,xpad+1)
-#                xj = int(xc)
-#                xwindow = xj+xvals
-#                xvals = xvals[(xwindow>=0)*(xwindow<xpix)]
-##                slitvals = np.poly1d(slit_coeffs[slit_num,j])(xj+xvals)
-##                zvals = ccd[xj+xvals,yspec[j]]/Ij
-##                invvals = 1/(abs(zvals)+readnoise)
-#                zorig = ccd[xj+xvals,yspec[j]]
-##                plt.figure()
-##                plt.plot(xj+xvals,zorig,xj+xvals,zvals)
-##                plt.show()
-##                plt.close()
-##                time.sleep(0.5)
-#                invorig = 1/(abs(zorig)+readnoise)
-##                zspecbox[i,j] = gain*sum(zvals)
-##                zspecbox2[i,j] = gain*sum(zorig)
-#                if np.max(zorig)<readnoise:
-#                    continue
-##                    print("zorig max less than 10 for pixel {}".format(j))
-##                    zspec[i,j] = gain*sum(zvals)
-##                    zspec2[i,j] = gain*sum(zorig)
-#                else:
-##                    print "Actually doing fitting!"
-#                    pguess = [sigj,xc-xj-1,np.max(zorig),0,0,2] #std, mean, height, bgmean, bgslope, power
-##                    params, errarr = sf.gauss_fit(xvals,zvals,invr=invvals,pguess=pguess,fit_exp='y')
-#                    paramsorig, errorig = sf.gauss_fit(xvals,zorig,invr=invorig,pguess=pguess,fit_exp='y')
-##                    height1 = params[2]
-#                    height2 = paramsorig[2]
-##                    height1 = sf.fit_height(xvals,zvals,invvals,sigj,xc-xj-1)[0]
-##                    height2 = sf.fit_height(xvals,zorig,invorig,sigj,xc-xj-1)[0]
-#                    ### Now add first primitive cosmic ray masking
-#                    ### Make this recursive!
-##                    fit = sf.gaussian(xvals,sigj,xc-xj-1,height1,params[3],params[4],params[5])
-#                    fitorig = sf.gaussian(xvals,sigj,xc-xj-1,height2,paramsorig[3],paramsorig[4],paramsorig[5])
-##                    differ = fit-zvals
-#                    difforig = fitorig-zorig
-##                    refit = False
-#                    refitorig = False
-#                    for k in range(len(difforig)):
-##                        if differ[k] > 3*np.std(differ): #primitive sigma clipping
-##                            refit = True
-##                            invvals[k] = 0.00000001
-#                        if difforig[k] > 3*np.std(difforig): #primitive sigma clipping
-#                            refitorig = True
-#                            invorig[k] = 0.00000001
-##                    if refit:
-##                        params, errarr = sf.gauss_fit(xvals,zvals,invr=invvals,pguess=pguess,fit_exp='y')
-##                        height1 = params[2]
-##                        height1 = sf.fit_height(xvals,zvals,invvals,sigj,xc-xj-1)[0]
-#                    if refitorig:
-#                        paramsorig, errorig = sf.gauss_fit(xvals,zorig,invr=invorig,pguess=pguess,fit_exp='y')
-#                        height2 = paramsorig[2]
-##                        height2 = sf.fit_height(xvals,zorig,invorig,sigj,xc-xj-1)[0]
-#                    sigrough[i,jadj] = paramsorig[0]
-#                    meanrough[i,jadj] = paramsorig[1]+xj
-#                    bgmrough[i,jadj] = paramsorig[3]
-#                    bgsrough[i,jadj] = paramsorig[4]
-#                    powrough[i,jadj] = paramsorig[5]
-##                    if refit:
-###                        print refit,i,j, invvals, height1
-##                        fit = sf.gaussian(xvals,sigj,xc-xj-1,height1,0,0)
-##                        fitorig = sf.gaussian(xvals,sigj,xc-xj-1,height2,0,0)
-##                    print refit,height1,refitorig,height2
-##                    if refitorig:
-##                        print invorig
-##                        print difforig
-##                    plt.figure()
-##                    plt.plot(xj+xvals,zvals,xj+xvals,fit)
-##                    plt.figure()
-##                    plt.plot(xj+xvals,zorig,xj+xvals,fitorig)
-##                    plt.show()
-##                    plt.close()
-##                    params, errarr = sf.gauss_fit(xvals,zvals,invvals)
-##                    paramsorig, errorig = sf.gauss_fit(xvals,zorig,invorig)
-##                    zspec[i,j] = gain*params[2]*1.24*np.sqrt(2*np.pi)
-##                    zspec2[i,j] = gain*paramsorig[2]*1.24*np.sqrt(2*np.pi)
-##                    fit = sf.gaussian(xvals,abs(params[0]),params[1],params[2],params[3],params[4],params[5])
-##                    if i>1:
-###                        print xc, sigj, Ij, yj
-##                        fitorig = sf.gaussian(xvals,abs(paramsorig[0]),paramsorig[1],paramsorig[2],paramsorig[3],paramsorig[4],paramsorig[5])
-##                        print paramsorig
-##                        plt.plot(xj+xvals,zorig,xj+xvals,fitorig)
-##                        plt.show()
-#            except RuntimeError:
-#                sigrough[i,jadj] = np.nan
-#                meanrough[i,jadj] = np.nan
-#                bgmrough[i,jadj] = np.nan
-#                bgsrough[i,jadj] = np.nan
-#                powrough[i,jadj] = np.nan     
-#
-#
-#polysmooth = 2 #order of smoothing polynomial
-#### for now, don't enforce background smoothness
-#sigsmooth = np.zeros((num_fibers,polysmooth+1))
-#meansmooth = np.zeros((num_fibers,polysmooth+1))
-#powsmooth = np.zeros((num_fibers,polysmooth+1))
-#sigspec = (np.arange(0,actypix,fact)-actypix/2)/actypix
-#meanspec = (np.arange(0,actypix,fact)-actypix/2)/actypix
-#powspec = (np.arange(0,actypix,fact)-actypix/2)/actypix
-#for k in range(num_fibers):
-#    sigmsk = (~np.isnan(sigrough[k]))*(sigrough[k]<3)*(sigrough[k]>0.5)
-#    meanmsk = ~np.isnan(meanrough[k])
-#    powmsk = (~np.isnan(powrough[k]))*(powrough[k]<3)*(powrough[k]>1.5)
-#    if len(sigmsk==0)>=(len(sigrough[k])+polysmooth):
-#        continue
-#    sigsmooth[k] = np.polyfit(sigspec[sigmsk],sigrough[k][sigmsk],polysmooth)
-#    meansmooth[k] = np.polyfit(meanspec[meanmsk],meanrough[k][meanmsk],polysmooth)
-#    powsmooth[k] = np.polyfit(powspec[powmsk],powrough[k][powmsk],polysmooth)
-#    if 1<k<6:
-#        plt.figure('Sigmas')
-#        plt.plot(sigspec,np.poly1d(sigsmooth[k])(sigspec))
-#        plt.plot(sigspec[sigmsk],sigrough[k][sigmsk],'k+')
-#        plt.figure('Means')
-#        plt.plot(meanspec,np.poly1d(meansmooth[k])(meanspec))
-#        plt.plot(meanspec[meanmsk],meanrough[k][meanmsk],'k+')
-#        plt.figure('Powers')
-#        plt.plot(powspec,np.poly1d(powsmooth[k])(powspec))
-#        plt.plot(powspec[powmsk],powrough[k][powmsk],'k+')
-#        plt.show()
-#        plt.close()
-
-
-##### Now a second fit using smoothed values from first fit
-##### Here we only allow height to vary
-
+###special functions to use during extraction
 def cosmic_ray_reject(D,f,P,iV,S=0,threshhold=25,verbose=False):
     """ Procedure to reject cosmic rays in optimal extraction.
         This assumes your inputs are all at a given wavelength
@@ -588,18 +429,128 @@ def cosmic_ray_reject(D,f,P,iV,S=0,threshhold=25,verbose=False):
     #            pixel_reject[np.argmax(pixel_residuals)]=0
     return pixel_reject
     
-def fit_mn_hght_bg(xvals,zorig,invorig,sigj,mn_new,powj=2):
+def fit_mn_hght_bg(xvals,zorig,invorig,sigj,mn_new,spread,powj=2):
 #    mn_new = xc-xj
     mn_old = -100
     lp_ct = 0
     while abs(mn_new-mn_old)>0.001:
         mn_old = np.copy(mn_new)
         hght, bg = sf.best_linear_gauss(xvals,sigj,mn_old,zorig,invorig,power=powj)
-        mn_new, mn_new_std = sf.best_mean(xvals,sigj,mn_old,hght,bg,zorig,invorig,power=powj)
+        mn_new, mn_new_std = sf.best_mean(xvals,sigj,mn_old,hght,bg,zorig,invorig,spread,power=powj)
         lp_ct+=1
         if lp_ct>1e3: break
     return mn_new, hght,bg
        
+
+### First fit xc parameters for traces
+fact = 20 #do 1/fact of the available points
+rough_pts = int(np.ceil(actypix/fact))
+xc_ccd = np.zeros((num_fibers,rough_pts))
+yc_ccd = np.zeros((num_fibers,rough_pts))
+inv_chi = np.zeros((num_fibers,rough_pts))
+#sigrough = np.zeros((num_fibers,rough_pts)) #std
+#meanrough = np.zeros((num_fibers,rough_pts)) #mean
+#bgmrough = np.zeros((num_fibers,rough_pts)) #background mean
+#bgsrough = np.zeros((num_fibers,rough_pts)) #background slope
+#powrough = np.zeros((num_fibers,rough_pts)) #exponential power
+print("Refining trace centers")
+for i in range(num_fibers):
+#    if i > 3:
+#        plt.plot(zspec2[i-1,:])
+#        plt.show()
+#        plt.close()
+#    slit_num = np.floor((i)/args.telescopes)
+#    print("Refining trace number {}".format(i+1))
+    for j in range(0,actypix,fact):
+#        if j != 1000:
+#            continue
+        jadj = int(np.floor(j/fact))
+        yj = (yspec[j]-actypix/2)/actypix
+        yc_ccd[i,jadj] = yspec[j]
+        xc = trace_coeffs[2,i]*yj**2+trace_coeffs[1,i]*yj+trace_coeffs[0,i]
+        Ij = trace_intense_coeffs[2,i]*yj**2+trace_intense_coeffs[1,i]*yj+trace_intense_coeffs[0,i]
+        sigj = trace_sig_coeffs[2,i]*yj**2+trace_sig_coeffs[1,i]*yj+trace_sig_coeffs[0,i]
+        powj = trace_pow_coeffs[2,i]*yj**2+trace_pow_coeffs[1,i]*yj+trace_pow_coeffs[0,i]
+        if np.isnan(xc):
+            xc_ccd[i,jadj] = np.nan
+            inv_chi[i,jadj] = 0
+#            sigrough[i,jadj] = np.nan
+#            meanrough[i,jadj] = np.nan
+#            bgmrough[i,jadj] = np.nan
+#            bgsrough[i,jadj] = np.nan
+#            powrough[i,jadj] = np.nan
+        else:
+            xpad = 7
+            xvals = np.arange(-xpad,xpad+1)
+            xj = int(xc)
+            xwindow = xj+xvals
+            xvals = xvals[(xwindow>=0)*(xwindow<xpix)]
+            zorig = gain*ccd[xj+xvals,yspec[j]]
+            if len(zorig)<1:
+                xc_ccd[i,jadj] = np.nan
+                inv_chi[i,jadj] = 0
+                continue
+#                plt.figure()
+#                plt.plot(xj+xvals,zorig,xj+xvals,zvals)
+#                plt.show()
+#                plt.close()
+#                time.sleep(0.5)
+            invorig = 1/(abs(zorig)+readnoise**2)
+            if np.max(zorig)<20:
+                xc_ccd[i,jadj] = np.nan
+                inv_chi[i,jadj] = 0
+            else:
+                mn_new, hght, bg = fit_mn_hght_bg(xvals,zorig,invorig,sigj,xc-xj-1,sigj,powj=powj)
+                fitorig = sf.gaussian(xvals,sigj,mn_new,hght,power=powj)
+                fitorig2 = sf.gaussian(xvals,sigj,xc-xj-1,hght,power=powj)
+#                if i==0 and j == 740:
+##                    print j
+#                    plt.figure("First fit attempt")
+#                    print "Mn_new:", mn_new+xj+1
+#                    plt.plot(xvals,zorig,xvals,fitorig)#2,xvals,fitorig)
+#                    plt.show()
+#                    plt.close()
+                inv_chi[i,jadj] = 1/sum((zorig-fitorig)**2*invorig)
+                xc_ccd[i,jadj] = mn_new+xj+1
+                
+
+tmp_poly_ord = 6
+trace_coeffs_ccd = np.zeros((tmp_poly_ord+1,num_fibers))
+for i in range(num_fibers):
+    #Given orientation makes more sense to swap x/y
+    mask = ~np.isnan(xc_ccd[i,:])
+    profile = np.ones((len(yc_ccd[i,:][mask]),tmp_poly_ord+1)) #Quadratic fit
+    for order in range(tmp_poly_ord):
+#    profile[:,1] = (yc_ccd[i,:][mask]-ypix/2)/ypix #scale data to get better fit
+        profile[:,order+1] = ((yc_ccd[i,:][mask]-actypix/2)/actypix)**(order+1)
+    noise = np.diag(inv_chi[i,:][mask])
+    if len(xc_ccd[i,:][mask])>3:
+        tmp_coeffs, junk = sf.chi_fit(xc_ccd[i,:][mask],profile,noise)
+        yvals = (yc_ccd[i,:][mask]-actypix/2)/actypix
+        fit = np.poly1d(tmp_coeffs[::-1,0])(yvals)
+        fit_old = np.poly1d(trace_coeffs[::-1,i])(yvals)
+        tmp_coeffs = tmp_coeffs[:,0]
+#        plt.plot(yvals,xc_ccd[i,:][mask]-fit,yvals,xc_ccd[i,:][mask]-fit_old)
+#        plt.show()
+#        plt.close()
+    else:
+        tmp_coeffs = np.nan*np.ones((tmp_poly_ord+1))
+    trace_coeffs_ccd[:,i] = tmp_coeffs
+#    trace_coeffs_ccd[0,i] = tmp_coeffs[0]
+#    trace_coeffs_ccd[1,i] = tmp_coeffs[1]
+#    trace_coeffs_ccd[2,i] = tmp_coeffs[2]
+
+###Plot to visualize
+#for i in range(num_fibers):
+#    ys = (np.arange(ypix)-ypix/2)/ypix
+#    xs = trace_coeffs_ccd[2,i]*ys**2+trace_coeffs_ccd[1,i]*ys+trace_coeffs_ccd[0,i]
+#    yp = np.arange(ypix)
+#    plt.plot(yp,xs)
+#plt.show()
+#plt.close()
+
+##### Now a second fit using smoothed values from first fit
+##### Here we only allow height to vary
 
 model_ccd = np.zeros((np.shape(ccd))) #build model as we go to compare to data
 
@@ -623,8 +574,10 @@ for i in range(num_fibers):
 #        if j != 1576:
 #            continue
         yj = (yspec[j]-actypix/2)/actypix
-        xcshift = -0.08*(1+np.mod(i-1,4))
-        xc = trace_coeffs[2,i]*yj**2+trace_coeffs[1,i]*yj+trace_coeffs[0,i]+xcshift#np.poly1d(meansmooth[i])(yj)
+#        xcshift = -0.08*(1+np.mod(i-1,4))
+        xc = np.poly1d(trace_coeffs_ccd[::-1,i])(yj)#-0.5 #1/2px shift?
+#        xc = trace_coeffs_ccd[2,i]*yj**2+trace_coeffs_ccd[1,i]*yj+trace_coeffs_ccd[0,i]
+        xc2 = trace_coeffs[2,i]*yj**2+trace_coeffs[1,i]*yj+trace_coeffs[0,i]
         Ij = trace_intense_coeffs[2,i]*yj**2+trace_intense_coeffs[1,i]*yj+trace_intense_coeffs[0,i]
         sigj = trace_sig_coeffs[2,i]*yj**2+trace_sig_coeffs[1,i]*yj+trace_sig_coeffs[0,i]
         powj = trace_pow_coeffs[2,i]*yj**2+trace_pow_coeffs[1,i]*yj+trace_pow_coeffs[0,i]
@@ -635,78 +588,85 @@ for i in range(num_fibers):
             zspec2[i,j] = 0
             zmask[i,j] = False
         else:
-            try:
-                xpad = 5
-                xvals = np.arange(-xpad,xpad+1)
-                xj = int(xc)
-                xwindow = xj+xvals
-                xvals = xvals[(xwindow>=0)*(xwindow<xpix)]
+#            try:
+            xpad = 5
+            xvals = np.arange(-xpad,xpad+1)
+            xj = int(xc)
+            xwindow = xj+xvals
+            xvals = xvals[(xwindow>=0)*(xwindow<xpix)]
 #                slitvals = np.poly1d(slit_coeffs[slit_num,j])(xj+xvals)
-                zvals = ccd[xj+xvals,yspec[j]]/Ij
-                invvals = 1/(abs(zvals)+readnoise)
-                zorig = ccd[xj+xvals,yspec[j]]
-                if len(zorig)<1:
-                    zspec[i,j] = 0#gain*sum(zvals)
-                    zspec2[i,j] = 0#gain*sum(zorig)
-                    zmask[i,j] = False
-                    continue
+            zvals = gain*ccd[xj+xvals,yspec[j]]/Ij
+            invvals = 1/(abs(zvals)+readnoise)
+            zorig = gain*ccd[xj+xvals,yspec[j]]
+            fitorig = sf.gaussian(xvals,sigj,xc-xj-1,hght,power=powj)
+            fitorig2 = sf.gaussian(xvals,sigj,xc2-xj-1,hght,power=powj)
+#            if i==0 and j==740:
+#                plt.plot(xvals,fitorig)#,xvals+errrr,fitorig)
+#                plt.show()
+            if len(zorig)<1:
+                zspec[i,j] = 0#gain*sum(zvals)
+                zspec2[i,j] = 0#gain*sum(zorig)
+                zmask[i,j] = False
+                continue
 #                plt.figure()
 #                plt.plot(xj+xvals,zorig,xj+xvals,zvals)
 #                plt.show()
 #                plt.close()
 #                time.sleep(0.5)
-                invorig = 1/(abs(zorig)+readnoise**2)
+            invorig = 1/(abs(zorig)+readnoise**2)
 #                zinvar = 1/(abs(zorig)+readnoise)
-                zspecbox[i,j] = gain*sum(zvals)
-                zspecbox2[i,j] = gain*sum(zorig)
-                if np.max(zorig)<20:
+            zspecbox[i,j] = sum(zvals)
+            zspecbox2[i,j] = sum(zorig)
+            if np.max(zorig)<20:
 #                    print("zorig max less than 10 for pixel {}".format(j))
-                    zspec[i,j] = 0#gain*sum(zvals)
-                    zspec2[i,j] = 0#gain*sum(zorig)
-                else:
+                zspec[i,j] = 0#sum(zvals)
+                zspec2[i,j] = 0#sum(zorig)
+            else:
 #                    print "Actually doing fitting!"
 #                    pguess = [sigj,xc-xj-1,np.max(orig),0,0] #std, mean, height, bgmean, bgslope, power
-                    mn_new, hght, bg = fit_mn_hght_bg(xvals,zorig,invorig,sigj,xc-xj-1,powj=powj)
+                mn_new, hght, bg = fit_mn_hght_bg(xvals,zorig,invorig,sigj,xc-xj-1,sigj/8,powj=powj)
 #                    params, errarr = sf.gauss_fit(xvals,zvals,invr=invvals,xcguess=xc-xj,fit_exp='y')#,pguess=pguess)
 #                    paramsorig, errorig = sf.gauss_fit(xvals,zorig,invr=invorig,xcguess=xc-xj,fit_exp='y',verbose='y')
 #                    height1 = params[2]
 #                    height2 = paramsorig[2]
 #                    height1 = sf.fit_height(xvals,zvals,invvals,sigj,xc-xj-1,bgmrough[i,j]/Ij,bgsrough[i,j]/Ij,powj)[0]
 #                    height2 = sf.fit_height(xvals,zorig,invorig,sigj,xc-xj-1,bgmrough[i,j],bgsrough[i,j],powj)[0]
-                    ### Now add first primitive cosmic ray masking
-                    ### Make this recursive!
+                ### Now add first primitive cosmic ray masking
+                ### Make this recursive!
 #                    fit = sf.gaussian(xvals,params[0],params[1],params[2],params[3],params[4],params[5])
 #                    fitorig = sf.gaussian(xvals,paramsorig[0],paramsorig[1],paramsorig[2],power=paramsorig[5])#,paramsorig[3],paramsorig[4])
 #                    fitprecise = sf.gaussian(np.linspace(xvals[0],xvals[-1],100),abs(paramsorig[0]),paramsorig[1],paramsorig[2],power=paramsorig[5])
-                    fitorig = sf.gaussian(xvals,sigj,mn_new,hght,power=powj)#,paramsorig[3],paramsorig[4])
-                    fitprecise = sf.gaussian(np.linspace(xvals[0],xvals[-1],100),sigj,mn_new,hght,power=powj)
+                fitorig = sf.gaussian(xvals,sigj,mn_new,hght,power=powj)#,paramsorig[3],paramsorig[4])
+                xprecise = np.linspace(xvals[0],xvals[-1],100)
+                fitprecise = sf.gaussian(xprecise,sigj,mn_new,hght,power=powj)
 #                    if j==1576:
 #                        print np.linspace(xvals[0],xvals[-1],100)
 #                        print paramsorig
 #                        print fitorig
 #                        print invorig
-                    fstd = sum(fitprecise)
-                    #Add following if/else to handle failure to fit
-                    if fstd==0:
-                        fitnorm = np.zeros(len(zorig))
-                    else:
-                        fitnorm = fitorig/fstd
-                    invorig = 1/(readnoise**2 + abs(fstd*fitnorm)*gain)
+                ftmp = sum(fitprecise)*np.mean(np.ediff1d(xprecise))
+                #Add following if/else to handle failure to fit
+                if ftmp==0:
+                    fitnorm = np.zeros(len(zorig))
+                else:
+                    fitnorm = fitorig/ftmp
+                fstd = sum(fitnorm*zorig*invorig)/sum(fitnorm**2*invorig)
+                invorig = 1/(readnoise**2 + abs(fstd*fitnorm))
 #                    fit = sf.gaussian(xvals,sigj,xc-xj-1,height1,bgmrough[i,j]/Ij,bgsrough[i,j]/Ij,powj)
 #                    fitorig = sf.gaussian(xvals,sigj,xc-xj-1,height2,bgmrough[i,j],bgsrough[i,j],powj)
-                    rej_min = 0
-                    loop_count=0
+                rej_min = 0
+                loop_count=0
 #                    print i, j
-                    while rej_min==0:
+                while rej_min==0:
 #                        print "starting loop"
-                        pixel_reject = cosmic_ray_reject(zorig,fstd,fitnorm,invorig,S=bg,threshhold=0.3*np.mean(zorig),verbose=True)
+                    pixel_reject = cosmic_ray_reject(zorig,fstd,fitnorm,invorig,S=bg,threshhold=0.3*np.mean(zorig),verbose=True)
 #                        print "still in loop"
-                        rej_min = np.min(pixel_reject)
+                    rej_min = np.min(pixel_reject)
 #                        print rej_min
-                        mn_tr+=xc-xj-1
-                        mn_fit+=mn_new
-                        mn_diff+=(mn_new-(xc-xj-1))
-                        mn_cnt+=1
+#                        mn_tr+=xc-xj-1
+#                        mn_fit+=mn_new
+#                        mn_diff+=(mn_new-(xc-xj-1))
+#                        mn_cnt+=1
 #                        if i==2 and j==1921:
 #                            print("Mean diff = {}".format(mn_diff/mn_cnt))
 #                            print fstd
@@ -726,18 +686,19 @@ for i in range(num_fibers):
 #                            print fitprecise
 #                            print zorig
 #                        print rej_min
-                        if rej_min==0:
+                    if rej_min==0:
 #                            print zorig
 #                            print pixel_reject
 #                            plt.plot(xvals,zorig)
-                            zorig = zorig[pixel_reject==1]
+                        zorig = zorig[pixel_reject==1]
 #                            print zorig
-                            invorig = invorig[pixel_reject==1]
-                            xvals = xvals[pixel_reject==1]
+                        invorig = invorig[pixel_reject==1]
+                        xvals = xvals[pixel_reject==1]
 #                            print "mark 1"
-                            mn_new, hght, bg = fit_mn_hght_bg(xvals,zorig,invorig,sigj,xc-xj-1)
-                            fitorig = sf.gaussian(xvals,sigj,mn_new,hght,power=powj)#,paramsorig[3],paramsorig[4])
-                            fitprecise = sf.gaussian(np.linspace(xvals[0],xvals[-1],100),sigj,mn_new,hght,power=powj)
+                        mn_new, hght, bg = fit_mn_hght_bg(xvals,zorig,invorig,sigj,xc-xj-1,sigj/8,powj=powj)
+                        fitorig = sf.gaussian(xvals,sigj,mn_new,hght,power=powj)#,paramsorig[3],paramsorig[4])
+                        xprecise = np.linspace(xvals[0],xvals[-1],100)
+                        fitprecise = sf.gaussian(xprecise,sigj,mn_new,hght,power=powj)
 #                            plt.plot(xvals,zorig,np.linspace(xvals[0],xvals[-1],100),fitprecise)
 #                            plt.show()
 #                            plt.close()
@@ -745,15 +706,16 @@ for i in range(num_fibers):
 ##                            print "mark 2"
 #                            fitorig = sf.gaussian(xvals,paramsorig[0],paramsorig[1],paramsorig[2],power=paramsorig[5])#,paramsorig[3],paramsorig[4])
 #                            fitprecise = sf.gaussian(np.linspace(xvals[0],xvals[-1],100),paramsorig[0],paramsorig[1],paramsorig[2],power=paramsorig[5])
-                            ftmp = sum(fitprecise)
-                            fitnorm = fitorig/ftmp
-                            fstd = sum(fitnorm*zorig*invorig)/sum(fitnorm**2*invorig)
-                            invorig = 1/(readnoise**2 + abs(fstd*fitnorm)*gain)
+                        ftmp = sum(fitprecise)*np.mean(np.ediff1d(xprecise))
+                        fitnorm = fitorig/ftmp
+                        fstd = sum(fitnorm*zorig*invorig)/sum(fitnorm**2*invorig)
+                        invorig = 1/(readnoise**2 + abs(fstd*fitnorm))
 #                            print("Cosmic ray rejected on trace {} at pixel {}".format(i,j))
 #                            print rej_min==0
-                        if loop_count>3:
-                            break
-                        loop_count+=1
+                    if loop_count>3:
+                        zmask[i,j] = False
+                        break
+                    loop_count+=1
 #                    print "Out of loop"
 #                    print i, j
 #                    plt.plot(xvals,zorig)
@@ -763,7 +725,12 @@ for i in range(num_fibers):
 #                        print "in this other loop"
 #                        plt.plot(xvals,zorig,np.linspace(xvals[0],xvals[-1],100),fitprecise)
 #                        plt.show()
-                    zspec2[i,j] = fstd
+#                    if i==0 and j==2015:
+#                        plt.plot(xvals,fitnorm*fstd)
+#                        plt.show()
+#                        plt.close()
+                zspec2[i,j] = fstd
+                zinvar[i,j] = sum(fitnorm**2*invorig)
 #                    differ = fit-zvals
 #                    difforig = fitorig-zorig
 #                    refit = False
@@ -870,10 +837,10 @@ for i in range(num_fibers):
 #                        plt.plot(xj+xvals,zorig,xj+xvals,fitorig)
 #                        plt.show()
 #                        plt.close()
-            except RuntimeError:
-                zspec[i,j] = 0
-                zspec2[i,j] = 0
-                zmask[i,j] = False
+#            except RuntimeError:
+#                zspec[i,j] = 0
+#                zspec2[i,j] = 0
+#                zmask[i,j] = False
         if np.isnan(zspec2[i,j]):
             zspec2[i,j] = 0
             zmask[i,j] = False
@@ -999,6 +966,12 @@ zspec_fin2[1,:,:] = zspec2[np.arange(2,num_fibers,4),:]
 zspec_fin2[2,:,:] = zspec2[np.arange(3,num_fibers,4),:]
 zspec_fin2[3,:,:] = np.vstack((zspec2[np.arange(4,num_fibers,4),:],np.ones(actypix)))
 
+invvar_fin2 = np.zeros((args.telescopes,args.num_fibers,actypix))
+invvar_fin2[0,:,:] = zinvar[np.arange(1,num_fibers,4),:]
+invvar_fin2[1,:,:] = zinvar[np.arange(2,num_fibers,4),:]
+invvar_fin2[2,:,:] = zinvar[np.arange(3,num_fibers,4),:]
+invvar_fin2[3,:,:] = np.vstack((zinvar[np.arange(4,num_fibers,4),:],np.zeros(actypix)))
+
 zspec_fin = np.zeros((args.telescopes,args.num_fibers,actypix))
 zspec_fin[0,:,:] = zspec[np.arange(1,num_fibers,4),:]
 zspec_fin[1,:,:] = zspec[np.arange(2,num_fibers,4),:]
@@ -1019,10 +992,10 @@ zspec_finbox2[3,:,:] = np.vstack((zspecbox2[np.arange(4,num_fibers,4),:],np.ones
 
 ### Actual inverse variances need to be calculated later, but
 ### these should be close to the true values
-invvar_fin = 1/(abs(zspec_fin)+readnoise**2)
-invvar_fin2 = 1/(abs(zspec_fin2)+readnoise**2)
-invvar_finbox = 1/(abs(zspec_finbox)+readnoise**2)
-invvar_finbox2 = 1/(abs(zspec_finbox2)+readnoise**2)
+#invvar_fin = 1/(abs(zspec_fin)+readnoise**2)
+#invvar_fin2 = 1/(abs(zspec_fin2)+readnoise**2)
+#invvar_finbox = 1/(abs(zspec_finbox)+readnoise**2)
+#invvar_finbox2 = 1/(abs(zspec_finbox2)+readnoise**2)
 
 ###Plot orders for visualization
 #for i in range(num_fibers):
@@ -1033,6 +1006,15 @@ invvar_finbox2 = 1/(abs(zspec_finbox2)+readnoise**2)
 #        plt.plot(zspec2[ir,:])#wavelength_soln[ir,:],zspec2[ir,:])
 #        plt.show()
 #        plt.close()
+
+#jj = pyfits.open('jjtest.fits')
+#jj1 = jj[0].data
+#jjm = jj[3].data
+#plt.ion()
+#for k in range(4):
+#    plt.figure("{}".format(k+1))
+#    plt.plot(jj1[k,0,:])
+#    plt.plot(zspec_fin2[k,0,:])
 
 ### Split everything up for saving to the right name
 root, savefile = os.path.split(filename)

@@ -472,7 +472,7 @@ for ts in telescopes:
     sampling_est = 3 #Whole number estimate of sampling
     #use dictionaries since number of peaks per fiber varies
     mx_it_d = dict() #max intensities of each peak
-    fwhm_d = dict() #FWHM of each peak
+    stddev_d = dict() #FWHM of each peak
     pos_d = dict() #position of each peak
     slp_d = dict() #background slope around each peak
     for i in range(num_fibers):
@@ -500,7 +500,7 @@ for ts in telescopes:
         #variable length arrays to dump into dictionary
         num_pks = len(pos_est)
         mx_it = zeros((num_pks))
-        fwhm = zeros((num_pks))
+        stddev = zeros((num_pks))
         pos = zeros((num_pks))
         slp = zeros((num_pks))
         #Now fit gaussian with background to each (can improve function later)
@@ -509,31 +509,36 @@ for ts in telescopes:
             xarr = xarr[(xarr>0)*(xarr<2048)]
             yarr = line_gauss[i,:][xarr]
             try:
-                params, errarr = sf.gauss_fit(xarr,yarr)
+                params, errarr = sf.gauss_fit(xarr,yarr,invr = 1/(abs(yarr)+10))
             except RuntimeError:
                 params = np.zeros(5)
             mx_it[j] = params[2] #height
-            fwhm[j] = params[0]*2*sqrt(2*log(2)) #converted from std dev
+            stddev[j] = params[0]#*2*sqrt(2*log(2)) #converted from std dev
             pos[j] = params[1] #center
             slp[j] = params[4] #bg_slope
         mx_it_d[i] = mx_it[np.nonzero(pos)[0]] #Remove zero value points
-        fwhm_d[i] = fwhm[np.nonzero(pos)[0]]
+        stddev_d[i] = stddev[np.nonzero(pos)[0]]
         pos_d[i] = pos[np.nonzero(pos)[0]] 
         slp_d[i] = slp[np.nonzero(pos)[0]]
             
-      
+#    co = 30
+#    for t in range(num_fibers):
+#        msk = (mx_it_d>co)*(stddev_d[t]>0)
+#        plt.plot(pos_d[t][msk],stddev_d[t][msk])
+#        plt.show()
+#        plt.close()
     #Find mean and std FWHM and slope
-    fwhm_arr = np.array(())
+    stddev_arr = np.array(())
     slp_arr = np.array(())
     for i in range(num_fibers):
-        fwhms = fwhm_d[i][np.nonzero(fwhm_d[i])[0]]
-        fwhm_arr = np.concatenate((fwhm_arr,fwhms))
+        stddevs = stddev_d[i][np.nonzero(stddev_d[i])[0]]
+        stddev_arr = np.concatenate((stddev_arr,stddevs))
         slps = slp_d[i][np.nonzero(slp_d[i])[0]]
         slp_arr = np.concatenate((slp_arr,slps))
         
     #Can use more advanced statistics if needed
-    fwhm_mean = np.mean(fwhm_arr)
-    fwhm_std = np.std(fwhm_arr)
+    stddev_mean = np.mean(stddev_arr)
+    stddev_std = np.std(stddev_arr)
     slp_mean = np.mean(slp_arr)
     slp_std = np.std(slp_arr)
     #plt.plot(slp_arr,'k.')
@@ -546,7 +551,7 @@ for ts in telescopes:
     #for i in range(num_fibers):
     #    pos = pos_d[i]
     #    if len(pos)>0:
-    ##        fwhm = fwhm_d[i]
+    ##        stddev = stddev_d[i]
     #        mx_it = mx_it_d[i]
     ##        slp = slp_d[i]
     #        msk = np.ones((len(pos)),dtype=np.bool)
@@ -559,7 +564,7 @@ for ts in telescopes:
     ##            msk[close_inds] = np.zeros((len(close_inds)))
     #        for j in range(len(pos)):
     ##            #FWHM cut
-    ###            if fwhm[j]>(fwhm_mean+fwhm_std) or fwhm[j]<(fwhm_mean-fwhm_std):
+    ###            if stddev[j]>(stddev_mean+stddev_std) or stddev[j]<(stddev_mean-stddev_std):
     ###                msk[j] = 0
     #            #Weak lines cut
     #            if mx_it[j] < 0.01*np.max(line_gauss[i,:]):#6*arc_bg:
@@ -754,7 +759,7 @@ for ts in telescopes:
     #    plt.close()
     
     
-    #SR = 3*80e3#fwhm_mean*80e3
+    #SR = 3*80e3#stddev_mean*80e3
     #wsc = 49
     #A = wsc/(np.exp((ypix-1)/SR)-1)
     #ws = 6407+21.49
