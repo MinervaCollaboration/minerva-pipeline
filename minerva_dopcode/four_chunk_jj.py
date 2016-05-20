@@ -14,9 +14,10 @@ from scipy.optimize import curve_fit
 import mpyfit #This requires a special installation
 import emcee
 from timeit import default_timer as timer
-from minerva_dopcode.utils import *
+from utils import *
 from astropy.time import Time
 from glob import glob
+import socket, ipdb, os
 
 class FourChunk(object):
     def __init__(self, obsname, order, lpix, dpix, fixip=False, bstar=False, juststar=False):
@@ -25,14 +26,21 @@ class FourChunk(object):
         everything is performed in the star's reference frame. This will result in a
         variable lpix from obs to obs
         """
+        
         self.c = 2.99792458e8 # speed of light
         self.order = order
         self.pixel = lpix
-        ffile = '/Users/johnjohn/Dropbox/research/dopcode_new/MINERVA_data/'+obsname
+        ffile = obsname
         self.fits = ffile
         h = fits.open(ffile)
         t = Time(h[0].header['DATE-OBS'], format='isot', scale='utc')
         self.jd = t.jd
+        
+        bc = barycorr(self.jd+h[0].header['EXPTIME']/2.0/86400.0,h[0].header['TARGRA1'],h[0].header['TARGDEC1'],
+                      pmra = h[0].header['PMRA1'], pmdec = h[0].header['PMDEC1'],
+                      parallax = h[0].header['PARLAX1'], rv = h[0].header['RV1'])
+        zbc = bc/self.c
+
         rpix = lpix + dpix
         obspec = h[0].data[:, order, lpix:rpix]
         h.close()
@@ -45,17 +53,19 @@ class FourChunk(object):
         pad = 120
         self.xover  = np.arange(-pad,npix+pad,1./self.oversamp)
         
-        wls = np.load('/Users/johnjohn/Dropbox/research/dopcode_new/MC_bstar_wls.air.npy')
+        wls = np.load(getpath() + '/MC_bstar_wls.air.npy')
         w0g = wls[lpix, order] # Guess at wavelength zero point (w0)
         dwg = wls[lpix+1, order] - wls[lpix, order] # Guess at dispersion (dw)
         wmin = w0g - 4 * pad * dwg # Set min and max ranges of iodine template
         wmax = w0g + (npix + 4*pad) * dwg
         self.wiod, self.siod  = get_iodine(wmin, wmax)
         self.iodinterp = interp1d(self.wiod, self.siod) # Set up iodine interpolation function
+
         if not bstar:
             self.wtemp, self.stemp = get_template(wmin, wmax)
             self.tempinterp = interp1d(self.wtemp, self.stemp)
-            zguess = 2.8e-4 # this needs to be generalized to be based on the barycentric RV of the observation
+            # this needs to be generalized to be based on the difference in barycentric corrections for the template and observation
+            zguess = 2.8e-4 
         else:
             zguess = 0
         self.bstar = bstar
@@ -252,14 +262,17 @@ class FourChunk(object):
         self.chi = np.sqrt(redchi) # sqrt(chi^2) =~ number of sigmas 
         wav = np.append(np.append(-1, self.xchunk), 1) * pfit[2] + pfit[1]
         dV = np.median(wav - np.roll(wav,-1))/wav * self.c
-        I = self.tempinterp(wav)
-        dI = I - np.roll(I, -1)
-        dIdV = dI[1:len(wav)-1]/dV[1:len(wav)-1]
-        sigmaV = 1.0 / np.sqrt(np.sum(dIdV**2 / I[1:len(wav)-1]))
-        self.weight = 1.0/sigmaV**2
+        if self.bstar:
+            self.weight = 0.0
+        else:
+            I = self.tempinterp(wav)
+            dI = I - np.roll(I, -1)
+            dIdV = dI[1:len(wav)-1]/dV[1:len(wav)-1]
+            sigmaV = 1.0 / np.sqrt(np.sum(dIdV**2 / I[1:len(wav)-1]))
+            self.weight = 1.0/sigmaV**2
         return model, pfit
 
-def grind(obsname, plot=False, printit=False, bstar=False):
+def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
     print 'Fitting ', obsname
     start = timer()
     order = np.arange(2, 20)
@@ -308,7 +321,7 @@ def grind(obsname, plot=False, printit=False, bstar=False):
     print 'Total time: ', (end-start)/60., 'minutes'
     return chrec
 
-def getparr(charr):
+def getparr(charr, plot=False):
     sh = charr.shape
     nc = sh[0]
     nord = sh[1]
@@ -319,13 +332,15 @@ def getparr(charr):
     for i in range(nc):
         for j in range(nord):
             iparr[:,i,j] = charr[i,j].newip
-            pl.plot(charr[i,j].newip)
+            if plot: pl.plot(charr[i,j].newip)
             pararr[i,j,:] = np.append(charr[i,j].par, charr[i,j].chiarr)
-    pl.show()       
+    if plot: pl.show()       
     return pararr, iparr
 
 def getpararray(obsname):
-    ofile = '/Users/johnjohn/Dropbox/research/dopcode_new/MINERVA_data/'+obsname
+
+    night = obsname.split('.')[0]
+    ofile = getpath(night=night,data=True) + '/' + obsname
     test = np.load(ofile[0])
     sh = test.shape
     parr = np.zeros((len(ofile), sh[0], sh[1], sh[2]))
@@ -333,35 +348,55 @@ def getpararray(obsname):
         p = np.load(ffile)
         parr[i, :, :, :] = p
     return parr
-    
+
+def getpath(night='',data=False):
+    hostname = socket.gethostname()
+    if hostname == 'Main':
+        if data:
+            return '/Data/kiwispec-proc/' + night
+        return '/home/minerva/minerva-pipeline/minerva_dopcode/'
+    elif hostname == 'jjohnson-mac':
+        path = '/Users/johnjohn/Dropbox/research/dopcode_new/'
+        if data: path += '/MINERVA_data/'
+        return path
+    else:
+        print 'hostname ' + hostname + ') not recognized; exiting'
+        sys.exit()
+
 def globgrind(globobs, bstar=False, returnfile=False):
-    exp = '/Users/johnjohn/Dropbox/research/dopcode_new/MINERVA_data/'+globobs
-    files = glob(exp)
-    ofarr = []
-    pre = '/Users/johnjohn/Dropbox/research/dopcode_new/MINERVA_output/'
+    files = glob(globobs)
+    ofarr = [] # object f? array?                                                                                  
+
     for i, ffile in enumerate(files):
         h = fits.open(ffile)
-        if h[0].header['I2POSAS'] == 'in':
-            thing = ffile.split('.')[:-1]        
-            ofile = pre+'.'.join(thing[1:])+'.parr.npy'
-            ofarr.append(ofile)
-            if not returnfile:
-                charr = grind(ffile.split('/')[-1:][0], bstar=bstar)
-                parr, iparr = getparr(charr)
-                np.save(ofile, parr)
-                print ofile, h[0].header['I2POSAS']
+
+        # if the iodine cell is not in, just fit the star without iodine                                           
+        juststar = h[0].header['I2POSAS'] != 'in'
+
+        ofile = os.path.splitext(ffile)[0] + '.parr.npy'
+        ofarr.append(ofile)
+
+        if not returnfile:
+            charr = grind(ffile, bstar=bstar, juststar=juststar)
+            parr, iparr = getparr(charr)
+            np.save(ofile, parr)
+            print ofile, h[0].header['I2POSAS']
     return ofarr
 
-#globobs = 'n20160305.daytimeSky.008*.proc.fits'
-obsname = 'n20160305.daytimeSky.0065.proc.fits'
+globobs = getpath(night='n20160305',data=True) + '/n20160305.daytimeSky.008*.proc.fits'
+obsname = getpath(night='n20160305',data=True) + '/n20160305.daytimeSky.0065.proc.fits'
 chrec = grind(obsname, plot=False, printit=True)
 #parr, iparr = getparr(charr) #This no longer needed with CHREC variable
 
-#ofarr = globgrind(globobs, bstar=True, returnfile=False)
-#parray = getpararray(ofarr)
+ofarr = globgrind(globobs, bstar=True, returnfile=False)
+
+ipdb.set_trace()
+parray = getpararray(ofarr)
 #######################
-"""
-#gfile = '/Users/johnjohn/Dropbox/research/dopcode_new/MINERVA_data/n20160323.HR4828.00*.proc.fits'
+
+ipdb.set_trace()
+
+#gfile = getpath(night='n20160323',data=True) + '/n20160323.HR4828.00*.proc.fits'
 #globobs = 'n20160323.HR4828.00*.proc.fits'
 globobs = 'n20160410.HR5511.00*.proc.fits'
 
@@ -410,12 +445,12 @@ pl.show()
 #pl.show()
 
 
-#ffile = '/Users/johnjohn/Dropbox/research/dopcode_new/MINERVA_data/n20160323.HR4828.0020.proc.fits'
+#ffile = getpath(night='n20160323',data=True) + '/n20160323.HR4828.0020.proc.fits'
 obsname = 'n20160305.daytimeSky.0065.proc.fits' #iodine
-#ffile = '/Users/johnjohn/Dropbox/research/dopcode_new/MINERVA_data/n20160305.daytimeSky.0069.proc.fits'
-wls = np.load('/Users/johnjohn/Dropbox/research/dopcode_new/MC_bstar_wls.air.npy')
+#ffile = getpath(night='n20160305',data=True) + '/n20160305.daytimeSky.0069.proc.fits'
+wls = np.load(getpath() + '/MC_bstar_wls.air.npy')
 
-ffile = '/Users/johnjohn/Dropbox/research/dopcode_new/MINERVA_data/'+obsname
+ffile = getpath(night='n20160305',data=True) + '/'+obsname
 h = fits.open(ffile)
 lpix = 1400
 dpix = 100
@@ -447,4 +482,3 @@ pl.show()
 #print h[0].data[:, 13, 500:600].shape
 #h.close()
 
-"""

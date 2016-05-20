@@ -54,7 +54,7 @@ class FourChunk(object):
         pad = 120
         self.xover  = np.arange(-pad,npix+pad,1./self.oversamp)
         
-        wls = np.load('MC_bstar_wls.air.npy')
+        wls = np.load(self.basedir + 'MC_bstar_wls.air.npy')
         w0g = wls[lpix, order] # Guess at wavelength zero point (w0)
         dwg = wls[lpix+1, order] - wls[lpix, order] # Guess at dispersion (dw)
         wmin = w0g - 4 * pad * dwg # Set min and max ranges of iodine template
