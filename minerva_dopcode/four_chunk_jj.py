@@ -19,6 +19,7 @@ from astropy.time import Time
 from glob import glob
 import socket, ipdb, os
 import csv
+import math
 
 class FourChunk(object):
     def __init__(self, obsname, order, lpix, dpix, fixip=False, bstar=False, juststar=False):
@@ -54,7 +55,7 @@ class FourChunk(object):
         pad = 120
         self.xover  = np.arange(-pad,npix+pad,1./self.oversamp)
         
-        wls = 'templates/MC_bstar_wls.air.npy')
+        wls = np.load('templates/MC_bstar_wls.air.npy')
         w0g = wls[lpix, order] # Guess at wavelength zero point (w0)
         dwg = wls[lpix+1, order] - wls[lpix, order] # Guess at dispersion (dw)
         wmin = w0g - 4 * pad * dwg # Set min and max ranges of iodine template
@@ -64,22 +65,23 @@ class FourChunk(object):
 
         if not bstar:
             # get the barycentric correction of the template from kbcvel.ascii
+            # **this assumes all four telescopes are pointing at the same object!**
+            # **this assumes all stars are designated by their HD names!**
             if 'daytimeSky' in h[0].header['OBJECT1']:
-                # static starting point for solar spectrum template
+                # starting point for solar spectrum template
                 self.wtemp, self.stemp = get_template('templates/nso.sav',wmin, wmax)
                 self.tempinterp = interp1d(self.wtemp, self.stemp)
                 zguess = 2.8e-4
             elif 'HD' in h[0].header['OBJECT1']:
-                ztemp = 0
                 with open('templates/kbcvel.ascii','rb') as fh:
                     fh.seek(1) # skip the header
                     for line in fh:
                         entries = line.split()
-                        if len(entries) >= 5:
+                        if len(entries) >= 6:
                             obstype = entries[5]
                             objname = entries[1]
                             if obstype == 't' and objname == h[0].header['OBJECT1'].split('D')[1]:
-                                ztemp = float(entries[2])/self.c
+                                ztemp = float(entries[2])/self.c # template redshift
                                 templatename = 'templates/dsst' + objname + 'ad_' + entries[0].split('.')[0] + '.dat'
                                 if os.path.exists(templatename): 
                                     self.wtemp, self.stemp = get_template(templatename,wmin, wmax)
@@ -89,8 +91,9 @@ class FourChunk(object):
                     print 'ERROR: no template for ' + obsname
                     return
 
-                # the starting guess for the redshift will be the difference between 
-                # the barycentric correction of the template and the current barycentric correction
+                # the starting guess for the redshift will be the difference 
+                # between the barycentric correction of the observation and 
+                # the template
                 zguess = (1.0+ztemp)/(1.0+zbc) - 1.0
         else:
             zguess = 0
@@ -184,12 +187,14 @@ class FourChunk(object):
                 if self.bstar:
                     tempover = 1.
                 else:
-                    tempover = self.tempinterp((wover + offset[i])*(1-z)) # Doppler-shift stellar spectrum, put onto same oversampled scale as iodine
+                    # Doppler-shift stellar spectrum, put onto same oversampled scale as iodine
+                    tempover = self.tempinterp((wover + offset[i])*(1-z))
                 if self.juststar:
                     iodover = contf * tempover
                 else:
                     iodover = self.iodinterp(wover + offset[i]) * contf * tempover
-                sover = numconv(iodover, ip) #oversampled model spectrum
+                # oversampled model spectrum
+                sover = numconv(iodover, ip) 
                 if i == 0:
                     model = rebin(wover, sover, wobs)
                 else:
@@ -209,11 +214,10 @@ class FourChunk(object):
     def mpfit_model(self, par, fjac=None, x=None, y=None, err=None):
         model = self.model(par).flatten()
         obs = self.obchunk.flatten()
-        #err = np.sqrt(obs)
         err = np.sqrt(obs)
 
         bad = np.where(obs == 0)
-        err[bad] = 9e999
+        err[bad] = float('inf')
 
         return (obs-model)/err
 
@@ -289,7 +293,15 @@ class FourChunk(object):
                 print bad[0][i], 'is bad'
         """
         sigmasq = self.obchunk.flatten() # sigma = sqrt(Ncts), sigma^2 = Ncts
+
+        # mask bad values
+        bad = np.where(sigmasq == 0.0)
+        sigmasq[bad] = float('inf')
+
         chisq = np.sum(self.resid.flatten()**2/sigmasq)
+
+        if math.isnan(chisq): ipdb.set_trace()
+
         redchi = chisq/dof
         self.chisq = chisq
         self.redchi = redchi
@@ -349,14 +361,17 @@ def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
             #charr[j, i] = ch
             if printit:
                 print 'chi^2 = ', ch.chi
+                if math.isnan(ch.chi): ipdb.set_trace()
                 end = timer()
                 print 'Chunk time: ', (end-chstart), 'seconds'
         end = timer()
     print 'Total time: ', (end-start)/60., 'minutes'
     return chrec
 
+'''
 def getparr(charr, plot=False):
     sh = charr.shape
+    if len(sh) < 2: ipdb.set_trace()
     nc = sh[0]
     nord = sh[1]
     npar = len(charr[0,0].par)
@@ -382,6 +397,7 @@ def getpararray(obsname):
         p = np.load(ffile)
         parr[i, :, :, :] = p
     return parr
+'''
 
 def getpath(night=''):
     hostname = socket.gethostname()
@@ -393,39 +409,57 @@ def getpath(night=''):
         print 'hostname ' + hostname + ') not recognized; exiting'
         sys.exit()
 
-def globgrind(globobs, bstar=False, returnfile=False, printit=False,plot=False):
+def globgrind(globobs, bstar=False, returnfile=False, printit=False,plot=False,redo=False):
     files = glob(globobs)
-    ofarr = [] # object f? array?                                                                                  
+    ofarr = [] # object f? array?
 
     for i, ffile in enumerate(files):
         h = fits.open(ffile)
 
-        # if the iodine cell is not in, just fit the star without iodine                                           
+        # if the iodine cell is not in, just fit the star without iodine
         juststar = h[0].header['I2POSAS'] != 'in'
 
-        ofile = os.path.splitext(ffile)[0] + '.parr.npy'
+        ofile = os.path.splitext(ffile)[0] + '.chrec.npy'
         ofarr.append(ofile)
 
         if not returnfile:
-            charr = grind(ffile, bstar=bstar, juststar=juststar, printit=printit, plot=plot)
-            parr, iparr = getparr(charr)
-            np.save(ofile, parr)
-            print ofile, h[0].header['I2POSAS']
+            if redo or not os.path.exists(ofile):
+                chrec = grind(ffile, bstar=bstar, juststar=juststar, printit=printit, plot=plot)
+                np.save(ofile,chrec)
+                print ofile, h[0].header['I2POSAS']
     return ofarr
 
-#globobs = getpath(night='n20160305') + '/n20160305.daytimeSky.008*.proc.fits'
-#ofarr = globgrind(globobs, bstar=False, returnfile=False, printit=True, plot=False)
+def globgrindall():
+    datadirs = glob(getpath() + '*')
+    for datadir in datadirs:
+        ofarr = globgrind(datadir + '/*daytimeSky*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
+        ofarr = globgrind(datadir + '/*HD*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
+        ofarr = globgrind(datadir + '/*HR*.proc.fits', bstar=True, returnfile=False, printit=True, plot=False)
 
-globobs = getpath(night='n20160505') + '/n20160505.HD9407.0029.proc.fits'
-ofarr = globgrind(globobs, bstar=False, returnfile=False, printit=True)
+globgrindall()
 ipdb.set_trace()
 
+'''
+# a quality set of daytime sky spectra
+globobs = getpath(night='n20160305') + '/n20160305.daytimeSky.008*.proc.fits'
+ofarr = globgrind(globobs, bstar=False, returnfile=False, printit=True, plot=True)
+ipdb.set_trace()
+
+# a quality spectrum of HD9407
+globobs = getpath(night='n20160505') + '/n20160505.HD*.proc.fits'
+ofarr = globgrind(globobs, bstar=False, returnfile=False, printit=True, plot=False)
+ipdb.set_trace()
+
+# poor quality spectra (missing telescopes, etc)
 globobs = getpath(night='n20160504') + '/n20160504.HD*.proc.fits'
 ofarr = globgrind(globobs, bstar=False, returnfile=False, printit=True, plot=True)
 ipdb.set_trace()
 
-#globobs = getpath(night='n20160504') + '/n20160504.HR*.proc.fits'
-#ofarr = globgrind(globobs, bstar=True, returnfile=False)
+# mixed quality B star spectra
+globobs = getpath(night='n20160504') + '/n20160504.HR*.proc.fits'
+ofarr = globgrind(globobs, bstar=True, returnfile=False, printit=True, plot=True)
+ipdb.set_trace()
+'''
 
 #obsname = getpath(night='n20160305') + '/n20160305.daytimeSky.0065.proc.fits'
 #chrec = grind(obsname, plot=False, printit=True)
