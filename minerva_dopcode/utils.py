@@ -16,7 +16,6 @@ from scipy.special import erf
 from scipy.optimize import minimize
 import urllib2
 import ipdb
-from bs4 import BeautifulSoup
 import datetime
 
 # query OSU page for barycentric correction
@@ -37,12 +36,10 @@ def barycorr(jdutc,ra,dec,pmra=0.0,pmdec=0.0,parallax=0.0,rv=0.0,zmeas=0.0,
     request = urllib2.Request(url)
     response = urllib2.urlopen(request)
 
-    data = response.read()
-    soup = BeautifulSoup(data,'html.parser')
-    bc = soup.pre.text.split()
+    data = response.read().split()
 
-    if len(bc) == 1: return float(bc[0])
-    return map(float,bc)
+    if len(data) == 1: return float(data[0])
+    return map(float,data)
 
 def xcorl(spec, model, r):
     n = len(model)
@@ -84,17 +81,20 @@ def airtovac(wav):
     fact = 1.0 + 6.4328e-5 + 2.94981e-2/(146.0 - sigma2) +  2.554e-4/(41.0 - sigma2)
     return wav * fact
 
-def get_template(wmin, wmax):
-    #sav = readsav('/Users/johnjohn/Dropbox/research/dopcode_new/dsst185144ad_rj82.dat')
-    #sunall = sav.sdst
-    #wavall = airtovac(sav.sdstwav)
-    sav = readsav('keckhires/files/nso.sav')
-    wavall = sav.w
-    sunall = sav.s
+def get_template(templatename, wmin, wmax):
+    sav = readsav(templatename)
+
+    if 'nso.sav' in templatename:
+        wavall = sav.w
+        templateall = sav.s
+    else: 
+        wavall = sav.sdstwav
+        templateall = sav.sdst
+
     use = np.where((wavall >= wmin) & (wavall <= wmax))
     wav = wavall[use]
-    sun = sunall[use]
-    return wav, sun
+    template = templateall[use]
+    return wav, template
     
 def get_iodine(wmin, wmax):
     sav = np.load('MINERVA_I2_0.1_nm.npy')
