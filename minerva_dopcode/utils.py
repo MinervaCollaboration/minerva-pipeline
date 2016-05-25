@@ -97,7 +97,7 @@ def get_template(templatename, wmin, wmax):
     return wav, template
     
 def get_iodine(wmin, wmax):
-    sav = np.load('MINERVA_I2_0.1_nm.npy')
+    sav = np.load('templates/MINERVA_I2_0.1_nm.npy')
     wav = sav[0,:] * 10 # Convert wavelenghts from nm to Angstroms
     iod = sav[1,:]
     use = np.where((wav >= wmin) & (wav <= wmax))

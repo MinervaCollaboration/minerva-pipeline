@@ -54,7 +54,7 @@ class FourChunk(object):
         pad = 120
         self.xover  = np.arange(-pad,npix+pad,1./self.oversamp)
         
-        wls = np.load(getpath() + '/MC_bstar_wls.air.npy')
+        wls = 'templates/MC_bstar_wls.air.npy')
         w0g = wls[lpix, order] # Guess at wavelength zero point (w0)
         dwg = wls[lpix+1, order] - wls[lpix, order] # Guess at dispersion (dw)
         wmin = w0g - 4 * pad * dwg # Set min and max ranges of iodine template
@@ -71,7 +71,7 @@ class FourChunk(object):
                 zguess = 2.8e-4
             elif 'HD' in h[0].header['OBJECT1']:
                 ztemp = 0
-                with open('kbcvel.ascii','rb') as fh:
+                with open('templates/kbcvel.ascii','rb') as fh:
                     fh.seek(1) # skip the header
                     for line in fh:
                         entries = line.split()
@@ -383,16 +383,12 @@ def getpararray(obsname):
         parr[i, :, :, :] = p
     return parr
 
-def getpath(night='',data=False):
+def getpath(night=''):
     hostname = socket.gethostname()
     if hostname == 'Main':
-        if data:
-            return '/Data/kiwispec-proc/' + night
-        return '/home/minerva/minerva-pipeline/minerva_dopcode/'
+        return '/Data/kiwispec-proc/' + night
     elif hostname == 'jjohnson-mac':
-        path = '/Users/johnjohn/Dropbox/research/dopcode_new/'
-        if data: path += '/MINERVA_data/'
-        return path
+        path = '/Users/johnjohn/Dropbox/research/dopcode_new/MINERVA_data/'
     else:
         print 'hostname ' + hostname + ') not recognized; exiting'
         sys.exit()
@@ -417,21 +413,21 @@ def globgrind(globobs, bstar=False, returnfile=False, printit=False,plot=False):
             print ofile, h[0].header['I2POSAS']
     return ofarr
 
-#globobs = getpath(night='n20160305',data=True) + '/n20160305.daytimeSky.008*.proc.fits'
+#globobs = getpath(night='n20160305') + '/n20160305.daytimeSky.008*.proc.fits'
 #ofarr = globgrind(globobs, bstar=False, returnfile=False, printit=True, plot=False)
 
-globobs = getpath(night='n20160505',data=True) + '/n20160505.HD9407.0029.proc.fits'
+globobs = getpath(night='n20160505') + '/n20160505.HD9407.0029.proc.fits'
 ofarr = globgrind(globobs, bstar=False, returnfile=False, printit=True)
 ipdb.set_trace()
 
-globobs = getpath(night='n20160504',data=True) + '/n20160504.HD*.proc.fits'
+globobs = getpath(night='n20160504') + '/n20160504.HD*.proc.fits'
 ofarr = globgrind(globobs, bstar=False, returnfile=False, printit=True, plot=True)
 ipdb.set_trace()
 
-#globobs = getpath(night='n20160504',data=True) + '/n20160504.HR*.proc.fits'
+#globobs = getpath(night='n20160504') + '/n20160504.HR*.proc.fits'
 #ofarr = globgrind(globobs, bstar=True, returnfile=False)
 
-#obsname = getpath(night='n20160305',data=True) + '/n20160305.daytimeSky.0065.proc.fits'
+#obsname = getpath(night='n20160305') + '/n20160305.daytimeSky.0065.proc.fits'
 #chrec = grind(obsname, plot=False, printit=True)
 #parr, iparr = getparr(charr) #This no longer needed with CHREC variable
 
@@ -444,7 +440,7 @@ parray = getpararray(ofarr)
 
 ipdb.set_trace()
 
-#gfile = getpath(night='n20160323',data=True) + '/n20160323.HR4828.00*.proc.fits'
+#gfile = getpath(night='n20160323') + '/n20160323.HR4828.00*.proc.fits'
 #globobs = 'n20160323.HR4828.00*.proc.fits'
 globobs = 'n20160410.HR5511.00*.proc.fits'
 
@@ -493,12 +489,12 @@ pl.show()
 #pl.show()
 
 
-#ffile = getpath(night='n20160323',data=True) + '/n20160323.HR4828.0020.proc.fits'
+#ffile = getpath(night='n20160323') + '/n20160323.HR4828.0020.proc.fits'
 obsname = 'n20160305.daytimeSky.0065.proc.fits' #iodine
-#ffile = getpath(night='n20160305',data=True) + '/n20160305.daytimeSky.0069.proc.fits'
-wls = np.load(getpath() + '/MC_bstar_wls.air.npy')
+#ffile = getpath(night='n20160305') + '/n20160305.daytimeSky.0069.proc.fits'
+wls = np.load('templates/MC_bstar_wls.air.npy')
 
-ffile = getpath(night='n20160305',data=True) + '/'+obsname
+ffile = getpath(night='n20160305') + '/'+obsname
 h = fits.open(ffile)
 lpix = 1400
 dpix = 100
