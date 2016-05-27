@@ -20,6 +20,7 @@ from glob import glob
 import socket, ipdb, os
 import csv
 import math
+import random
 
 class FourChunk(object):
     def __init__(self, obsname, order, lpix, dpix, fixip=False, bstar=False, juststar=False):
@@ -38,9 +39,19 @@ class FourChunk(object):
         t = Time(h[0].header['DATE-OBS'], format='isot', scale='utc')
         self.jd = t.jd
         
-        bc = barycorr(self.jd+h[0].header['EXPTIME']/2.0/86400.0,h[0].header['TARGRA1'],h[0].header['TARGDEC1'],
-                      pmra = h[0].header['PMRA1'], pmdec = h[0].header['PMDEC1'],
-                      parallax = h[0].header['PARLAX1'], rv = h[0].header['RV1'])
+        midflux = self.jd+h[0].header['EXPTIME']/2.0/86400.0
+        ra = h[0].header['TARGRA1']
+        dec = h[0].header['TARGDEC1']
+        try: pmra = h[0].header['PMRA1']
+        except: pmra = 0.0
+        try: pmdec = h[0].header['PMDEC1']
+        except: pmdec = 0.0
+        try: parallax = h[0].header['PARLAX1']
+        except: parallax = 0.0
+        try: rv = h[0].header['RV1']
+        except: rv = 0.0
+
+        bc = barycorr(midflux, ra, dec, pmra = pmra, pmdec=pmdec, parallax=parallax, rv=rv)
         zbc = bc/self.c
 
         rpix = lpix + dpix
@@ -64,29 +75,42 @@ class FourChunk(object):
         self.iodinterp = interp1d(self.wiod, self.siod) # Set up iodine interpolation function
 
         if not bstar:
-            # get the barycentric correction of the template from kbcvel.ascii
+
             # **this assumes all four telescopes are pointing at the same object!**
-            # **this assumes all stars are designated by their HD names!**
-            if 'daytimeSky' in h[0].header['OBJECT1']:
+            try: objname = h[0].header['OBJECT1']
+            except: 
+                print "Required key OBJECT1 not present in " + obsname
+                return
+
+            if 'HD' in objname and 'A' in objname:
+                objname = objname.split('A')[0]
+
+            templatename = None
+            # get the barycentric correction of the template from kbcvel.ascii
+            if 'daytimeSky' in objname: 
                 # starting point for solar spectrum template
                 self.wtemp, self.stemp = get_template('templates/nso.sav',wmin, wmax)
                 self.tempinterp = interp1d(self.wtemp, self.stemp)
                 zguess = 2.8e-4
-            elif 'HD' in h[0].header['OBJECT1']:
+            elif 'HD' in objname:
                 with open('templates/kbcvel.ascii','rb') as fh:
                     fh.seek(1) # skip the header
                     for line in fh:
                         entries = line.split()
                         if len(entries) >= 6:
                             obstype = entries[5]
-                            objname = entries[1]
-                            if obstype == 't' and objname == h[0].header['OBJECT1'].split('D')[1]:
+                            tempobjname = entries[1]
+                            # **this assumes all stars are designated by their HD names!**
+                            if obstype == 't' and tempobjname == objname.split('D')[1]:
                                 ztemp = float(entries[2])/self.c # template redshift
-                                templatename = 'templates/dsst' + objname + 'ad_' + entries[0].split('.')[0] + '.dat'
+                                templatename = 'templates/dsst' + tempobjname + 'ad_' + entries[0].split('.')[0] + '.dat'
                                 if os.path.exists(templatename): 
                                     self.wtemp, self.stemp = get_template(templatename,wmin, wmax)
                                     self.tempinterp = interp1d(self.wtemp, self.stemp)
                                     break
+                if templatename == None:
+                    print 'ERROR: no template for ' + obsname
+                    return
                 if not os.path.exists(templatename):
                     print 'ERROR: no template for ' + obsname
                     return
@@ -336,7 +360,9 @@ def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
                 print '------'
                 print 'Order:', Ord, 'Pixel:', Pix
             ch = FourChunk(obsname, Ord, Pix, dpix, bstar=bstar)
-            mod, bp = ch.mpfitter() # Full fit
+
+            try: mod, bp = ch.mpfitter() # Full fit
+            except: return # no template for observation
 
             chind = j+i*npix
             chrec[chind].pixel = Pix
@@ -425,19 +451,25 @@ def globgrind(globobs, bstar=False, returnfile=False, printit=False,plot=False,r
         if not returnfile:
             if redo or not os.path.exists(ofile):
                 chrec = grind(ffile, bstar=bstar, juststar=juststar, printit=printit, plot=plot)
-                np.save(ofile,chrec)
-                print ofile, h[0].header['I2POSAS']
+                if chrec != None: 
+                    np.save(ofile,chrec)
+                    print ofile, h[0].header['I2POSAS']
     return ofarr
 
-def globgrindall():
+def globgrindall(shuffle=False):
     datadirs = glob(getpath() + '*')
+    if shuffle: random.shuffle(datadirs)
     for datadir in datadirs:
         ofarr = globgrind(datadir + '/*daytimeSky*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
         ofarr = globgrind(datadir + '/*HD*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
         ofarr = globgrind(datadir + '/*HR*.proc.fits', bstar=True, returnfile=False, printit=True, plot=False)
 
-globgrindall()
+#ofarr = globgrind('/Data/kiwispec-proc/n20160212/n20160212.HD191408A.0017.proc.fits',bstar=False,returnfile=False,printit=True,plot=False)
+
+globgrindall(shuffle=True)
 ipdb.set_trace()
+
+
 
 '''
 # a quality set of daytime sky spectra
