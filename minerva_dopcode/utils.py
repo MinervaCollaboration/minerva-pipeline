@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+#-*- coding: utf-8 -*-
 """
 Created on Wed Mar 23 14:32:46 2016
 
@@ -17,6 +17,95 @@ from scipy.optimize import minimize
 import urllib2
 import ipdb
 import datetime
+import time
+import glob
+from photutils import aperture_photometry, CircularAperture, CircularAnnulus
+import pyfits
+
+def addzb(fitsname):
+    telescopes = ['1','2','3','4']
+    night = (fitsname.split('/'))[3]
+
+    # 2D spectrum
+    h = pyfits.open(fitsname,mode='update')
+    specstart = datetime.datetime.strptime(h[0].header['DATE-OBS'],"%Y-%m-%dT%H:%M:%S.%f")
+    specend = specstart + datetime.timedelta(seconds = h[0].header['EXPTIME'])
+
+    t0 = datetime.datetime(2000,1,1)
+    t0jd = 2451544.5
+
+    aperture_radius = 3.398 # fiber radius in pixels
+    annulus_inner = 2.0*aperture_radius
+    annulus_outer = 3.0*aperture_radius
+
+    for telescope in telescopes:
+        objname = h[0].header['OBJECT' + telescope]
+        faupath = '/Data/t' + telescope + '/' + night + '/' + night + '.T' + telescope + '.FAU.' + objname + '.????.fits'
+        guideimages = glob.glob(faupath)
+        
+        times = []
+        fluxes = np.array([])
+
+        for guideimage in guideimages:
+            fauimage = pyfits.open(guideimage)
+            
+            # midtime of the guide image (UTC)
+            midtime = datetime.datetime.strptime(fauimage[0].header['DATE-OBS'],"%Y-%m-%dT%H:%M:%S") +\
+                datetime.timedelta(seconds=fauimage[0].header['EXPTIME']/2.0)
+            
+            # convert to Julian date
+            midjd = t0jd + (midtime-t0).total_seconds()/86400.0
+
+            # only look at images during the spectrum
+            if midtime < specstart or midtime > specend: next
+
+            # find the fiber position
+            fiber_x = fauimage[0].header['XFIBER' + telescope]
+            fiber_y = fauimage[0].header['YFIBER' + telescope]
+            
+            # do aperture photometry
+            positions = [(fiber_x,fiber_y)]
+            apertures = CircularAperture(positions,r=aperture_radius)
+            annulus_apertures = CircularAnnulus(positions, r_in=annulus_inner, r_out=annulus_outer)
+
+            # calculate the background-subtracted flux at the fiber position
+            rawflux_table = aperture_photometry(fauimage[0].data, apertures)
+            bkgflux_table = aperture_photometry(fauimage[0].data, annulus_apertures)
+            bkg_mean = bkgflux_table['aperture_sum'].sum() / annulus_apertures.area()
+            bkg_sum = bkg_mean * apertures.area()
+            flux = rawflux_table['aperture_sum'].sum() - bkg_sum
+            
+            # append to the time and flux arrays
+            times.append(midjd)
+            fluxes = np.append(fluxes,flux)
+
+        # get the barycentric redshift for each time
+        ra = h[0].header['TARGRA' + telescope]
+        dec = h[0].header['TARGDEC' + telescope]
+        try: pmra = h[0].header['PMRA' + telescope]
+        except: pmra = 0.0
+        try: pmdec = h[0].header['PMDEC' + telescope]
+        except: pmdec = 0.0
+        try: parallax = h[0].header['PARLAX' + telescope]
+        except: parallax = 0.0
+        try: rv = h[0].header['RV' + telescope]
+        except: rv = 0.0
+
+        zb = np.asarray(barycorr(times, ra, dec, pmra=pmra, pmdec=pmdec, parallax=parallax, rv=rv))/2.99792458e8
+
+        # weight the barycentric correction by the flux
+        wzb = np.sum(zb*fluxes)/np.sum(fluxes)
+        
+        # update the header to include aperture photometry and barycentric redshift
+        h[0].header['BARYCOR' + telescope] = (wzb,'Flux weighted barycentric redshift')
+        hdu = pyfits.PrimaryHDU(zip(times,fluxes))
+        hdu.header['TELESCOP'] = ('T' + telescope,'Telescope')
+        h.append(hdu)
+
+    # write updates to the disk
+    h.flush()
+    h.close()
+
 
 # query OSU page for barycentric correction
 def barycorr(jdutc,ra,dec,pmra=0.0,pmdec=0.0,parallax=0.0,rv=0.0,zmeas=0.0,
@@ -34,9 +123,20 @@ def barycorr(jdutc,ra,dec,pmra=0.0,pmdec=0.0,parallax=0.0,rv=0.0,zmeas=0.0,
         "&EPOCH=" + str(epoch) + "&TBASE=" + str(tbase)
 
     request = urllib2.Request(url)
-    response = urllib2.urlopen(request)
+    while True:
+        try: 
+            response = urllib2.urlopen(request)
+            break
+        except: 
+            print "Error contacting the barycorr website"
+            time.sleep(1)
 
     data = response.read().split()
+
+    # there was probably an error with the call
+    if len(data) != len(jds):
+        time.sleep(1)
+        return barycorr(jds,ra,dec,pmra=pmra,pmdec=pmdec,parallax=parallax,rv=rv,zmeas=zmeas,epoch=epoch,tbase=tbase,lon=lon,lat=lat,elevation=elevation)
 
     if len(data) == 1: return float(data[0])
     return map(float,data)
@@ -45,7 +145,7 @@ def xcorl(spec, model, r):
     n = len(model)
     mod = model[r:-r]
     nlag = len(model)
-    lag = np.arange(-n/2., n/2.)
+    lag = np.arange(-n/2.0, n/2.0)
     ccf = correlate(spec-np.mean(spec), mod-np.mean(mod), mode='same')
     maxind = np.argmax(ccf)
     return lag[maxind], ccf
@@ -98,7 +198,7 @@ def get_template(templatename, wmin, wmax):
     
 def get_iodine(wmin, wmax):
     sav = np.load('templates/MINERVA_I2_0.1_nm.npy')
-    wav = sav[0,:] * 10 # Convert wavelenghts from nm to Angstroms
+    wav = sav[0,:] * 10.0 # Convert wavelenghts from nm to Angstroms
     iod = sav[1,:]
     use = np.where((wav >= wmin) & (wav <= wmax))
     w = wav[use]
@@ -132,14 +232,45 @@ def extend(arr, nel, undo=False):
         new = np.append(np.append(np.zeros(nel)+arr[0], new), np.zeros(nel)+arr[-1])
         return new
 
+def infinite_loop():
+    while True:
+        time.sleep(1)
+
+def timeout(func, args=(), kwargs={}, timeout_duration=1, default=None):
+    import signal
+
+    class TimeoutError(Exception):
+        pass
+
+    def handler(signum, frame):
+        raise TimeoutError()
+
+    # set the timeout handler
+    signal.signal(signal.SIGALRM, handler) 
+    signal.alarm(timeout_duration)
+
+    try:
+        result = func(*args, **kwargs)
+    except TimeoutError as exc:
+        result = default
+    finally:
+        signal.alarm(0)
+
+    return result
+
 def numconv(y, kern):
     ynew = y.copy()
     lenex = 10
     ynew = extend(ynew, lenex)
-    new = fftconvolve(ynew, kern, mode='full')
+    
+    kwargs = {'mode':'full'}
+    new = timeout(fftconvolve,(ynew,kern,),kwargs=kwargs,timeout_duration=300)
+#    new = fftconvolve(ynew, kern, mode='full')
+    if new == None: ipdb.set_trace()
+
     new /= kern.sum()
     nel = len(kern)+lenex*2
-    return new[nel/2.:len(new)-nel/2.+1]
+    return new[nel/2.0:len(new)-nel/2.0+1.0]
     
 def rebin(wold, sold, wnew, z=0):
     """ Define the left and right limits of the first Wnew pixel. Keep in mind
@@ -147,7 +278,7 @@ def rebin(wold, sold, wnew, z=0):
     dw_new = wnew[1]-wnew[0]
     w_left = wnew.min() - 0.5 * dw_new
     w_right = w_left + dw_new
-    Nsub = 10. # use 10 sub pixels for the template across new pixel 
+    Nsub = 10.0 # use 10 sub pixels for the template across new pixel 
     """ Create a finely sampled 'sub-grid' across a pixel. We'll later integrate
     the stellar spectrum on this fine grid for each pixel  """
     wfine_sub = np.linspace(w_left, w_right, Nsub, endpoint=False)
@@ -159,7 +290,7 @@ def rebin(wold, sold, wnew, z=0):
     step = np.repeat(np.arange(Npixels), Nsub) * dw_new
     wfine = wsub_tile + step #Finely sampled new wavelength scale
     dsub = wfine[1] - wfine[0]
-    wfine += dsub/2. # Center each subgrid on the pixel
+    wfine += dsub/2.0 # Center each subgrid on the pixel
     ifunction = interp1d(wold*(1+z), sold) #Create spline-interpolation function
     sfine = ifunction(wfine) #Calculate interpolated spectrum 
     sfine_blocks = sfine.reshape([Npixels,Nsub]) #Prepare for integration
@@ -182,14 +313,14 @@ def crclean(spec):
     return newspec
 
 def pdf(x):
-    return 1/np.sqrt(2*np.pi) * np.exp(-x**2/2)
+    return 1.0/np.sqrt(2.0*np.pi) * np.exp(-x**2/2.0)
 
 def cdf(x):
-    return (1 + erf(x/np.sqrt(2))) / 2
+    return (1.0 + erf(x/np.sqrt(2.0))) / 2.0
 
 def skewnorm(x,xo=0,sigma=1,alpha=0):
     t = (x - xo) / sigma
-    return 2 / sigma * pdf(t) * cdf(alpha*t)
+    return 2.0 / sigma * pdf(t) * cdf(alpha*t)
 
 def fo_loglike(p, *args):
     resid = args[0]
@@ -197,9 +328,9 @@ def fo_loglike(p, *args):
     sigma = np.abs(p[0])
     f = np.abs(p[1])
     s = np.abs(p[2])
-    norm = 1./(sigma*np.sqrt(2*np.pi))
+    norm = 1.0/(sigma*np.sqrt(2.0*np.pi))
     part1 = f/s * np.exp(-0.5 * (resid/(s*sigma))**2)
-    part2 = (1-f) * np.exp(-0.5 * (resid/sigma)**2)
+    part2 = (1.0-f) * np.exp(-0.5 * (resid/sigma)**2)
     loglike = np.log(norm * (part1 + part2))
     ll = -np.sum(loglike)
     #print p, ll
@@ -208,14 +339,14 @@ def fo_loglike(p, *args):
 def find_outliers(resid, plot=False):
     x = np.arange(len(resid))
     bnds = ((1e-8, None),
-            (0.,1.),
-            (1., None))
+            (0.0,1.0),
+            (1.0, None))
     sig0 = np.std(medfilt(resid))
     sig0 = np.std(resid)
-    p0 = [sig0/5., 0.1, sig0*100]
+    p0 = [sig0/5.0, 0.1, sig0*100.0]
     result = minimize(fo_loglike, p0, (resid), method='SLSQP', bounds=bnds, options={'maxiter':100})
     bp = result.x
-    bad = np.where(np.abs(resid) > (4.*bp[0]))
+    bad = np.where(np.abs(resid) > (4.0*bp[0]))
     nbad = len(bad[0])
     #print bad
     if plot:
@@ -246,7 +377,7 @@ def robust_mean(d, cut):
         SC = 1.0
     if SC <= 4.5:
         Sigma = Sigma / (-0.15405 + 0.90723*SC - 0.23584*SC**2 + 0.020142*SC**3)
-    Sigma = Sigma / np.sqrt(Ndata - 1)
+    Sigma = Sigma / np.sqrt(Ndata - 1.0)
     return Mean
 
 def robust_sigma(data):
@@ -258,17 +389,17 @@ def robust_sigma(data):
     if mad < eps:
         mad = np.mean(absdev) / 0.8
     if mad < eps:
-        return 0
+        return 0.0
     u = (d-d0)/(6.0 * mad)
     uu = u**2
-    q = np.where(uu <= 1.)
+    q = np.where(uu <= 1.0)
     count = len(q[0])
     if count < 3:
         return -1
-    numerator = np.sum( (d[q] - d0)**2 * (1-uu[q])**4 )
+    numerator = np.sum( (d[q] - d0)**2 * (1.0-uu[q])**4 )
     n = len(d)
-    den1 = np.sum( (1-uu[q]) * (1-5*uu[q]) )
-    sigma = n * numerator / (den1 * (den1 - 1))
+    den1 = np.sum( (1.0-uu[q]) * (1.0-5.0*uu[q]) )
+    sigma = n * numerator / (den1 * (den1 - 1.0))
     if sigma > 0:
         return np.sqrt(sigma)
     else:

@@ -1,0 +1,5 @@
+*chrec.npy - John's version of the code with a common IP, redshift, zeropoint, dispersion, and a fitted tilt of zero points
+*chrec2.npy - each of the traces are fitted independently (separate IP, redshift, zeropoint, dispersion)
+*chrec3.npy - each of the traces are fitted independently (separate IP, redshift, zeropoint, dispersion). IP Skew fixed to zero
+*chrec4.npy - each of the traces are fitted independently (separate IP, redshift, zeropoint, dispersion). IP Skew fixed to zero and sigma fixed for each trace
+*chrec5.npy - each of the traces are fitted independently (separate IP, redshift, zeropoint, dispersion). ftol and xtol decreased from 1e-8 to 1e-12, maxiter increased from 50 to 5000
