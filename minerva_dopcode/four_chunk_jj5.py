@@ -542,8 +542,10 @@ def getpath(night=''):
     elif hostname == 'jjohnson-mac':
         path = '/Users/johnjohn/Dropbox/research/dopcode_new/MINERVA_data/'
     else:
-        print 'hostname ' + hostname + ') not recognized; exiting'
-        sys.exit()
+        path = '/n/home12/jeastman/minerva/data/'
+#
+#        print 'hostname ' + hostname + ') not recognized; exiting'
+#        sys.exit()
 
 def globgrind(globobs, bstar=False, returnfile=False, printit=False,plot=False,redo=False):
     files = glob(globobs)
