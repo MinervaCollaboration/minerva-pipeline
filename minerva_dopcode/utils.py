@@ -22,13 +22,24 @@ import glob
 from photutils import aperture_photometry, CircularAperture, CircularAnnulus
 import pyfits
 
-def addzb(fitsname):
+def addzb(fitsname, redo=False):
     telescopes = ['1','2','3','4']
     night = (fitsname.split('/'))[3]
 
+    print 'beginning ' + fitsname
+
+
     # 2D spectrum
     h = pyfits.open(fitsname,mode='update')
+
+    if 'BARYSRC4' in h[0].header.keys() and not redo:
+        print fitsname + " already done"
+        h.flush()
+        h.close()
+        return
+
     specstart = datetime.datetime.strptime(h[0].header['DATE-OBS'],"%Y-%m-%dT%H:%M:%S.%f")
+    specmid = specstart + datetime.timedelta(seconds = h[0].header['EXPTIME']/2.0)
     specend = specstart + datetime.timedelta(seconds = h[0].header['EXPTIME'])
 
     t0 = datetime.datetime(2000,1,1)
@@ -39,16 +50,36 @@ def addzb(fitsname):
     annulus_outer = 3.0*aperture_radius
 
     for telescope in telescopes:
+        print 'beginning telescope ' + telescope + ' on ' + fitsname
+
+        # get the barycentric redshift for each time
+        ra = h[0].header['TARGRA' + telescope]
+        dec = h[0].header['TARGDEC' + telescope]
+        try: pmra = h[0].header['PMRA' + telescope]
+        except: pmra = 0.0
+        try: pmdec = h[0].header['PMDEC' + telescope]
+        except: pmdec = 0.0
+        try: parallax = h[0].header['PARLAX' + telescope]
+        except: parallax = 0.0
+        try: rv = h[0].header['RV' + telescope]
+        except: rv = 0.0
+
         objname = h[0].header['OBJECT' + telescope]
         faupath = '/Data/t' + telescope + '/' + night + '/' + night + '.T' + telescope + '.FAU.' + objname + '.????.fits'
         guideimages = glob.glob(faupath)
-        
+
+#        if telescope == '2' and "HD62613" in fitsname: ipdb.set_trace()
+
         times = []
         fluxes = np.array([])
 
         for guideimage in guideimages:
-            fauimage = pyfits.open(guideimage)
-            
+            try:
+                fauimage = pyfits.open(guideimage)
+            except:
+                print "corrupt file for " + guideimage
+                continue
+
             # midtime of the guide image (UTC)
             midtime = datetime.datetime.strptime(fauimage[0].header['DATE-OBS'],"%Y-%m-%dT%H:%M:%S") +\
                 datetime.timedelta(seconds=fauimage[0].header['EXPTIME']/2.0)
@@ -57,12 +88,16 @@ def addzb(fitsname):
             midjd = t0jd + (midtime-t0).total_seconds()/86400.0
 
             # only look at images during the spectrum
-            if midtime < specstart or midtime > specend: next
+            if midtime < specstart or midtime > specend: continue
 
             # find the fiber position
-            fiber_x = fauimage[0].header['XFIBER' + telescope]
-            fiber_y = fauimage[0].header['YFIBER' + telescope]
-            
+            try:
+                fiber_x = fauimage[0].header['XFIBER' + telescope]
+                fiber_y = fauimage[0].header['YFIBER' + telescope]
+            except:
+                print "keywords missing for " + guideimage
+                continue
+
             # do aperture photometry
             positions = [(fiber_x,fiber_y)]
             apertures = CircularAperture(positions,r=aperture_radius)
@@ -79,25 +114,34 @@ def addzb(fitsname):
             times.append(midjd)
             fluxes = np.append(fluxes,flux)
 
-        # get the barycentric redshift for each time
-        ra = h[0].header['TARGRA' + telescope]
-        dec = h[0].header['TARGDEC' + telescope]
-        try: pmra = h[0].header['PMRA' + telescope]
-        except: pmra = 0.0
-        try: pmdec = h[0].header['PMDEC' + telescope]
-        except: pmdec = 0.0
-        try: parallax = h[0].header['PARLAX' + telescope]
-        except: parallax = 0.0
-        try: rv = h[0].header['RV' + telescope]
-        except: rv = 0.0
+        if len(times) == 0:
+            print "No guider images for " + fitsname + " on Telescope " + telescope + "; assuming mid time"
+            if 'daytimeSky' in fitsname: 
+                h[0].header['BARYCOR' + telescope] = ('UNKNOWN','Barycentric redshift')
+                h[0].header['BARYSRC' + telescope] = ('UNKNOWN','Source for the barycentric redshift')
+                continue
+            
+            # convert specmid to Julian date
+            midjd = t0jd + (specmid-t0).total_seconds()/86400.0
+
+            print midjd
+            zb = barycorr(midjd, ra, dec, pmra=pmra, pmdec=pmdec, parallax=parallax, rv=rv)/2.99792458e8
+            h[0].header['BARYCOR' + telescope] = (zb,'Barycentric redshift')
+            h[0].header['BARYSRC' + telescope] = ('MIDTIME','Source for the barycentric redshift')
+            continue
+            
 
         zb = np.asarray(barycorr(times, ra, dec, pmra=pmra, pmdec=pmdec, parallax=parallax, rv=rv))/2.99792458e8
 
         # weight the barycentric correction by the flux
+        #*******************!*!*!*!*!*!*
+        #this assumes guider images were taken ~uniformly throughout the spectroscopic exposure!
+        #****************!*!*!*!*!**!*!*!*!**!*!*!*!*
         wzb = np.sum(zb*fluxes)/np.sum(fluxes)
         
         # update the header to include aperture photometry and barycentric redshift
-        h[0].header['BARYCOR' + telescope] = (wzb,'Flux weighted barycentric redshift')
+        h[0].header['BARYCOR' + telescope] = (wzb,'Barycentric redshift')
+        h[0].header['BARYSRC' + telescope] = ('FAU Flux Weighted','Source for the barycentric redshift')
         hdu = pyfits.PrimaryHDU(zip(times,fluxes))
         hdu.header['TELESCOP'] = ('T' + telescope,'Telescope')
         h.append(hdu)
@@ -106,6 +150,11 @@ def addzb(fitsname):
     h.flush()
     h.close()
 
+def addallzb(path='/Data/kiwispec-proc/n*/*.fits'):
+    filenames = glob.glob(path)
+    for filename in filenames:
+        try: addzb(filename)
+        except: print filename + ' failed'
 
 # query OSU page for barycentric correction
 def barycorr(jdutc,ra,dec,pmra=0.0,pmdec=0.0,parallax=0.0,rv=0.0,zmeas=0.0,
@@ -114,6 +163,9 @@ def barycorr(jdutc,ra,dec,pmra=0.0,pmdec=0.0,parallax=0.0,rv=0.0,zmeas=0.0,
 
     if type(jdutc) is list: jds = jdutc
     else: jds = [jdutc]
+
+#    ipdb.set_trace()
+
 
     url="http://astroutils.astronomy.ohio-state.edu/exofast/barycorr.php?" +\
         "JDS=" + ','.join(map(str,jds)) + "&RA=" + str(ra) + "&DEC=" + str(dec) +\
@@ -136,7 +188,11 @@ def barycorr(jdutc,ra,dec,pmra=0.0,pmdec=0.0,parallax=0.0,rv=0.0,zmeas=0.0,
     # there was probably an error with the call
     if len(data) != len(jds):
         time.sleep(1)
-        return barycorr(jds,ra,dec,pmra=pmra,pmdec=pmdec,parallax=parallax,rv=rv,zmeas=zmeas,epoch=epoch,tbase=tbase,lon=lon,lat=lat,elevation=elevation)
+        print data
+        print jds
+        print 'unexpected output -- website down?'
+        ipdb.set_trace()
+        return barycorr(jdutc,ra,dec,pmra=pmra,pmdec=pmdec,parallax=parallax,rv=rv,zmeas=zmeas,epoch=epoch,tbase=tbase,lon=lon,lat=lat,elevation=elevation)
 
     if len(data) == 1: return float(data[0])
     return map(float,data)
@@ -196,8 +252,11 @@ def get_template(templatename, wmin, wmax):
     template = templateall[use]
     return wav, template
     
-def get_iodine(wmin, wmax):
-    sav = np.load('templates/MINERVA_I2_0.1_nm.npy')
+def get_iodine(wmin, wmax, sav=None):
+
+    if sav == None:
+        sav = np.load('templates/MINERVA_I2_0.1_nm.npy')
+
     wav = sav[0,:] * 10.0 # Convert wavelenghts from nm to Angstroms
     iod = sav[1,:]
     use = np.where((wav >= wmin) & (wav <= wmax))

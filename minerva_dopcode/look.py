@@ -16,7 +16,7 @@ for objname in objnames:
     nfiles = len(filenames)
     if nfiles == 0:
         print "No files for " + objname
-        next
+        continue
 
     jdutcs = np.zeros(nfiles)
     rvs = np.zeros(nfiles)

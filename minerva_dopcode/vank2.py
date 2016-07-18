@@ -387,7 +387,7 @@ if __name__ == "__main__":
     objnames = ['HD10700','HD9407','HD62613','HD122064','HD191408A','HD185144','HD217107','daytimeSky']
 
     
-    objnames = ['daytimeSky','HD122064','HD185144']
+    objnames = ['HD122064','HD185144']#['daytimeSky','HD122064','HD185144']
     for objname in objnames:
         vank(objname)
     
