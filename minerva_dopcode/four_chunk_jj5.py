@@ -540,9 +540,9 @@ def getpath(night=''):
     if hostname == 'Main':
         return '/Data/kiwispec-proc/' + night
     elif hostname == 'jjohnson-mac':
-        path = '/Users/johnjohn/Dropbox/research/dopcode_new/MINERVA_data/'
+        return '/Users/johnjohn/Dropbox/research/dopcode_new/MINERVA_data/'
     else:
-        path = '/n/home12/jeastman/minerva/data/'
+        return '/n/home12/jeastman/minerva/data/'
 #
 #        print 'hostname ' + hostname + ') not recognized; exiting'
 #        sys.exit()
@@ -552,16 +552,27 @@ def globgrind(globobs, bstar=False, returnfile=False, printit=False,plot=False,r
     ofarr = [] # object f? array?
 
     for i, ffile in enumerate(files):
+
+        ofile = os.path.splitext(ffile)[0] + '.chrec5.npy'
+
+        firsttime = False
+
+        # make it thread safe
+        if not os.path.exists(ofile):
+            open(ofile, 'a').close()
+            firsttime = True
+
         h = fits.open(ffile)
 
         # if the iodine cell is not in, just fit the star without iodine
         juststar = h[0].header['I2POSAS'] != 'in'
 
-        ofile = os.path.splitext(ffile)[0] + '.chrec5.npy'
         ofarr.append(ofile)
 
         if not returnfile:
-            if redo or not os.path.exists(ofile):
+            # if the user requested to redo it, it's the first time, or there's a stale empty file, run the fit
+            st = os.stat(ofile)
+            if redo or firsttime or ((time.time() - st.st_mtime) > 600 and (st.st_size == 0.0)):
                 chrec = grind(ffile, bstar=bstar, juststar=juststar, printit=printit, plot=plot)
                 if chrec != None: 
                     np.save(ofile,chrec)
