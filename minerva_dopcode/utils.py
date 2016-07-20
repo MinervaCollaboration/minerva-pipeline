@@ -210,11 +210,9 @@ def jjgauss(x, *a):
     """ For free parameters create a Gaussian defined at x """
     return a[0] * np.exp(-0.5*((x - a[1])/a[2])**2) 
 
-def get_ip(wmin, wmax, orderin):
+def get_ip(ipdict, wmin, wmax, orderin):
     """ Search for synthetic IPs in requested wavelength range and specified order"""
-    ipfile = 'synthetic_IPs/ipdict.npy'
     order = orderin+1 #Stuart's relative orders are offset from orders in Matt C.'s reduced spectra
-    ipdict = np.load(ipfile) # Array of dictionaries created in read_synth_IPs.py
     nel = len(ipdict)
     warr = np.zeros(nel)
     oarr = np.zeros(nel)
@@ -237,28 +235,25 @@ def airtovac(wav):
     fact = 1.0 + 6.4328e-5 + 2.94981e-2/(146.0 - sigma2) +  2.554e-4/(41.0 - sigma2)
     return wav * fact
 
-def get_template(templatename, wmin, wmax):
-    sav = readsav(templatename)
+def get_template(template, wmin, wmax):
+#    sav = readsav(templatename)
 
-    if 'nso.sav' in templatename:
-        wavall = sav.w
-        templateall = sav.s
-    else: 
-        wavall = sav.sdstwav
-        templateall = sav.sdst
+    try:
+#    if 'nso.sav' in templatename:
+        wavall = template.w
+        templateall = template.s
+#    else: 
+    except:
+        wavall = template.sdstwav
+        templateall = template.sdst
 
     use = np.where((wavall >= wmin) & (wavall <= wmax))
-    wav = wavall[use]
-    template = templateall[use]
-    return wav, template
+    return wavall[use], templateall[use]
     
-def get_iodine(wmin, wmax, sav=None):
+def get_iodine(iodine, wmin, wmax):
 
-    if sav == None:
-        sav = np.load('templates/MINERVA_I2_0.1_nm.npy')
-
-    wav = sav[0,:] * 10.0 # Convert wavelenghts from nm to Angstroms
-    iod = sav[1,:]
+    wav = iodine[0,:] * 10.0 # Convert wavelenghts from nm to Angstroms
+    iod = iodine[1,:]
     use = np.where((wav >= wmin) & (wav <= wmax))
     w = wav[use]
     s = iod[use]

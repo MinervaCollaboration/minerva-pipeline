@@ -11,6 +11,7 @@ from scipy.interpolate import interp1d
 from astropy.io import fits
 import numpy.random as rand
 from scipy.optimize import curve_fit
+from scipy.io.idl import readsav
 import mpyfit #This requires a special installation
 import emcee
 from timeit import default_timer as timer
@@ -30,7 +31,7 @@ class Spectrum(object):
         self.h = fits.open(ffile)
 
         # is this right?
-        self.ntel = self.h.data.shape[0]
+        self.ntel = self.h[0].data.shape[0]
 
         t = Time(self.h[0].header['DATE-OBS'], format='isot', scale='utc')
         self.jd = t.jd
@@ -38,23 +39,22 @@ class Spectrum(object):
         self.wls = np.load('templates/MC_bstar_wls.air.npy')
         self.iodine = np.load('templates/MINERVA_I2_0.1_nm.npy')
         self.template = []
-        self.ip = np.load('synthetic_IPs/ipdict.npy')
+        self.ipdict = np.load('synthetic_IPs/ipdict.npy')
 
         # don't assume the same object or same redshift for each trace
         self.objname = np.array([])
         self.active = np.array([])
         self.zbc = np.array([])
         self.zguess = np.array([])
-
-        self.tempinterp = []
         self.weight = np.zeros(self.ntel)
+        self.nactive = 0
 
-        for i in range(ntel):
-            self.objname = np.append(self.objname,h[0].header['OBJECT' + str(i+1)])
+        for i in range(self.ntel):
+            self.objname = np.append(self.objname,self.h[0].header['OBJECT' + str(i+1)])
 
             try:
                 # try to get the barycentric redshift
-                zbc = float(self.h[0].header['BARYCOR' + str(i)])
+                self.zbc = np.append(self.zbc,float(self.h[0].header['BARYCOR' + str(i)]))
             except:
                 # if the barycentric redshift not in the headers, calculate it
                 ra = self.h[0].header['TARGRA' + str(i+1)]
@@ -62,7 +62,7 @@ class Spectrum(object):
 
                 # if keyword not populated, bu
                 if self.h[0].header['FLUXMID' + str(i+1)] == 'UNKNOWN':
-                    midflux = self.jd+h[0].header['EXPTIME']/2.0/86400.0
+                    midflux = self.jd + self.h[0].header['EXPTIME']/2.0/86400.0
                 else:
                     midflux = self.h[0].header['FLUXMID' + str(i+1)]
 
@@ -74,8 +74,15 @@ class Spectrum(object):
                 except: parallax = 0.0
                 try: rv = h[0].header['RV' + str(i+1)]
                 except: rv = 0.0
+                self.zbc = np.append(self.zbc,barycorr(midflux, ra, dec, pmra=pmra, pmdec=pmdec, parallax=parallax, rv=rv)/self.c)
+
+            try:
                 self.active = np.append(self.active, self.h[0].header['FAUSTAT' + str(i+1)] == 'GUIDING')
-                self.zbc = np.append(barycorr(midflux[i], ra[i], dec[i], pmra=pmra[i], pmdec=pmdec[i], parallax=parallax[i], rv=rv[i])/self.c)
+            except:
+                print 'FAUSTAT' + str(i+1) + ' keyword not present'
+                self.active = np.append(self.active, "True")
+
+            if self.active[i]: self.nactive += 1
 
             if not bstar:
             
@@ -86,9 +93,9 @@ class Spectrum(object):
                 # get the barycentric correction of the template from kbcvel.ascii
                 if 'daytimeSky' in self.objname[i]: 
                     # starting point for solar spectrum template
-                    self.template = np.append(self.template,np.load('templates/nso.sav'))
+                    self.template = np.append(self.template,readsav('templates/nso.sav'))
                     self.zguess = np.append(self.zguess,2.8e-4)
-                elif 'HD' in objname[i]:
+                elif 'HD' in self.objname[i]:
                     with open('templates/kbcvel.ascii','rb') as fh:
                         fh.seek(1) # skip the header
                         for line in fh:
@@ -97,11 +104,11 @@ class Spectrum(object):
                                 obstype = entries[5]
                                 tempobjname = entries[1]
                                 # **this assumes all stars are designated by their HD names!**
-                                if obstype == 't' and tempobjname == objname[i].split('D')[1]:
+                                if obstype == 't' and tempobjname == self.objname[i].split('D')[1]:
                                     ztemp = float(entries[2])/self.c # template redshift
                                     templatename = 'templates/dsst' + tempobjname + 'ad_' + entries[0].split('.')[0] + '.dat'
                                     if os.path.exists(templatename): 
-                                        self.template = np.append(self.template,np.load(templatename))
+                                        self.template = np.append(self.template,readsav(templatename))
                                         break
                     if templatename == None:
                         print 'ERROR: no template for ' + obsname
@@ -115,13 +122,11 @@ class Spectrum(object):
                     # the starting guess for the redshift will be the difference 
                     # between the barycentric correction of the observation and 
                     # the template
-                    self.zguess = np.append(self.zguess,(1.0+ztemp)/(1.0+zbc) - 1.0)
+                    self.zguess = np.append(self.zguess,(1.0+ztemp)/(1.0+self.zbc[i]) - 1.0)
             else:
                 self.zguess = np.append(self.zguess,0.0)
             self.bstar = bstar
 
-        h.close()
-        
 class FourChunk(object):
     def __init__(self, spectrum, order, lpix, dpix, fixip=False, juststar=False):
         """ NOTE TO SELF: the GRIND code will have to use the BC to make an informed
@@ -134,6 +139,15 @@ class FourChunk(object):
 
         self.order = order
         self.pixel = lpix
+        self.ntel = spectrum.ntel
+        self.bstar = spectrum.bstar
+        self.active = spectrum.active
+        self.juststar = juststar
+        self.c = spectrum.c
+        self.nactive = spectrum.nactive
+
+        if self.nactive == 0: return None
+
 
 #        ffile = obsname
 #        self.fits = ffile
@@ -159,11 +173,11 @@ class FourChunk(object):
         self.wiod, self.siod  = get_iodine(spectrum.iodine, wmin, wmax)
         self.iodinterp = interp1d(self.wiod, self.siod) # Set up iodine interpolation function
 
-
+        self.tempinterp = []
         for i in range(spectrum.ntel):
             if not spectrum.active[i]: continue
-            if not spectrum.bstar:       
-                wtemp, stemp = get_template(spectrum.template,wmin, wmax)
+            if not spectrum.bstar:
+                wtemp, stemp = get_template(spectrum.template[i],wmin, wmax)
                 self.tempinterp.append(interp1d(wtemp, stemp))
                 
         obchunk = np.copy(obspec)
@@ -175,7 +189,7 @@ class FourChunk(object):
         self.origchunk = obspec
         self.obchunk = obchunk # Bookkeeping for what was "cleaned" by crclean
 
-        self.xip, self.ip = get_ip(spectrum.ip,wmin,wmax,order)
+        self.xip, self.ip = get_ip(spectrum.ipdict,wmin,wmax,order)
         """ List of Parameters:
         par[0 + N*parspertrace] = zguess for telescope N
         par[1 + N*parspertrace] = w0 for telescope N
@@ -187,81 +201,94 @@ class FourChunk(object):
         """
         self.parspertrace = 7
 
-        npar = self.parspertrace*self.ntel
+        npar = self.parspertrace*spectrum.ntel
         self.initpar = np.zeros(npar)
 
         # the fibers are tilted, which changes the wavelength offset per telescope
         # this has been previously measured and ~static (unless the fiber assembly is moved)
         coef = np.array([0.00059673, 0.06555841]) # wavelength offset per trace...per order
         dwdtrace = np.polyval(coef, order) # find wavelength offset per trace for this order
-        offset = np.arange(self.ntel)[::-1] * dwdtrace
+        offset = np.arange(spectrum.ntel)[::-1] * dwdtrace
 
         # parameter properties for MPYFIT
         self.parinfo = [{'fixed':False, 'limited':(False,False), 'limits':(None, None), 'relstep':0.} for i in range(npar)]
         
+        tel = 0
         for i in range(spectrum.ntel):
 
+            # don't fit the spectrum if it wasn't active
+            if not spectrum.active[i]: continue
+
             # redshift guess (may tie these together for each trace, if same object)
-            self.initpar[0+i*self.parspertrace] = spectrum.zguess[i]
-            self.parinfo[0+i*self.parspertrace]['relstep'] = 0.01        
-            if spectrum.bstar: self.parinfo[0+i*self.parspertrace]['fixed'] = True
+            self.initpar[0+tel*self.parspertrace] = spectrum.zguess[i]
+            self.parinfo[0+tel*self.parspertrace]['relstep'] = 0.01        
+            if spectrum.bstar: self.parinfo[0+tel*self.parspertrace]['fixed'] = True
 
             # wavelength zeropoint guess
-            self.initpar[1+i*self.parspertrace] = w0g + offset[i]
-            self.parinfo[1+i*self.parspertrace]['relstep'] = 1e-6
-            if juststar: self.parinfo[1+i*self.parspertrace]['fixed'] = True
+            self.initpar[1+tel*self.parspertrace] = w0g + offset[i]
+            self.parinfo[1+tel*self.parspertrace]['relstep'] = 1e-6
+            if juststar: self.parinfo[1+tel*self.parspertrace]['fixed'] = True
 
             # wavelength dispersion guess (may tie these together for each trace)
-            self.initpar[2+i*self.parspertrace] = dwg
-            self.parinfo[2+i*self.parspertrace]['relstep'] = 0.005
-            if juststar: self.parinfo[2+i*self.parspertrace]['fixed'] = True
+            self.initpar[2+tel*self.parspertrace] = dwg
+            self.parinfo[2+tel*self.parspertrace]['relstep'] = 0.005
+            if juststar: self.parinfo[2+tel*self.parspertrace]['fixed'] = True
 
             # continuum offset guess
-            self.initpar[3+i*self.parspertrace] = np.amax(self.obchunk[i,:])
+            self.initpar[3+tel*self.parspertrace] = np.amax(self.obchunk[i,:])
             
             # continuum slope guess
-            self.initpar[4+i*self.parspertrace] = 0.0
+            self.initpar[4+tel*self.parspertrace] = 0.0
 
             # IP broadening guess
-            self.initpar[5+i*self.parspertrace] = 0.2           
-            self.parinfo[5+i*self.parspertrace]['limited'] = (True,True)
-            self.parinfo[5+i*self.parspertrace]['limits'] = (0.1, 4.0)
-            if fixip: self.parinfo[5+i*self.parspertrace]['fixed'] = True
+            self.initpar[5+tel*self.parspertrace] = 0.2           
+            self.parinfo[5+tel*self.parspertrace]['limited'] = (True,True)
+            self.parinfo[5+tel*self.parspertrace]['limits'] = (0.1, 4.0)
+            if fixip: self.parinfo[5+tel*self.parspertrace]['fixed'] = True
 
             # IP skew guess
-            self.initpar[6+i*self.parspertrace] = 0.0
-            self.parinfo[6+i*self.parspertrace]['limited'] = (True,True)
-            self.parinfo[6+i*self.parspertrace]['limits'] = (-1.0, 1.0)
-            if fixip: self.parinfo[6+i*self.parspertrace]['fixed'] = True
-                
+            self.initpar[6+tel*self.parspertrace] = 0.0
+            self.parinfo[6+tel*self.parspertrace]['limited'] = (True,True)
+            self.parinfo[6+tel*self.parspertrace]['limits'] = (-1.0, 1.0)
+            if fixip: self.parinfo[6+tel*self.parspertrace]['fixed'] = True
+               
+            tel += 1
+ 
         xstep = 1/self.oversamp
-        self.dxip = xstep   
+        self.dxip = xstep
         self.initmod = self.model(self.initpar)
        
     def __call__(self, par): # For EMCEE
         model = self.model(par)
-        lnprob = (self.obchunk-model)**2
+        if model == None: return 0.0 # zero likelihood
+        good = np.where(self.active)
+        lnprob = (self.obchunk[good,:][0]-model)**2
         return -lnprob[3:len(lnprob)-1].sum()
     
     def model(self, par): # For other solvers such as MPYFIT
+        
+        model = None
+        tel = 0
 
         for i in range(self.ntel):
 
+            if not self.active[i]: continue
+
             # redshift
-            z = par[0+i*self.parspertrace]
+            z = par[0+tel*self.parspertrace]
 
             # observed wavelength scale
-            wobs = par[1+i*self.parspertrace] + par[2+i*self.parspertrace]*self.xchunk
+            wobs = par[1+tel*self.parspertrace] + par[2+tel*self.parspertrace]*self.xchunk
 
             # oversampled wavelength scale
-            wover = par[1+i*self.parspertrace] + par[2+i*self.parspertrace]*self.xover
+            wover = par[1+tel*self.parspertrace] + par[2+tel*self.parspertrace]*self.xover
 
             # create continuum shape
-            contf = par[3+i*self.parspertrace] + par[4+i*self.parspertrace]*self.xover
+            contf = par[3+tel*self.parspertrace] + par[4+tel*self.parspertrace]*self.xover
 
             # instrumental profile
-            sigma = par[5+i*self.parspertrace]
-            alpha = par[6+i*self.parspertrace]
+            sigma = par[5+tel*self.parspertrace]
+            alpha = par[6+tel*self.parspertrace]
             sknorm = skewnorm(self.xip, 0.0, sigma, alpha)
             ip = numconv(sknorm, self.ip) # Convolve Zemax IP with local broadening
             ip = ip / ip.sum() / self.oversamp # Normalize convolved IP
@@ -270,7 +297,7 @@ class FourChunk(object):
                 tempover = 1.0
             else:
                 # Doppler-shift stellar spectrum, put onto same oversampled scale as iodine
-                try: tempover = self.tempinterp[i](wover*(1.0-z))
+                try: tempover = self.tempinterp[tel](wover*(1.0-z))
                 except ValueError: tempover = wover*np.inf 
             if self.juststar:
                 iodover = contf * tempover
@@ -280,12 +307,14 @@ class FourChunk(object):
 
             # oversampled model spectrum
             sover = numconv(iodover, ip) 
-            if i == 0:
+            if tel == 0:
                 try: model = rebin(wover, sover, wobs)
                 except: model = wobs*np.inf
             else:
                 try: model = np.vstack((model, rebin(wover, sover, wobs)))
                 except: model = np.vstack((model,wobs*np.inf))
+
+            tel += 1
 
 #        except ValueError:
 #            print "iodine: ", self.wiod.min(), self.wiod.max()
@@ -301,7 +330,9 @@ class FourChunk(object):
     
     def mpfit_model(self, par, fjac=None, x=None, y=None, err=None):
         model = self.model(par).flatten()
-        obs = self.obchunk.flatten()
+
+        good = np.where(self.active)
+        obs = self.obchunk[good,:][0].flatten()
         err = np.sqrt(obs)
 
         bad = np.where(obs == 0)
@@ -361,11 +392,12 @@ class FourChunk(object):
 
     def mpfitter(self):
         #m = mpfit(self.mpfit_model, self.initpar, parinfo=self.parinfo, xtol=1e-8, quiet=True)
-        pfit, results = mpyfit.fit(self.mpfit_model, self.initpar, parinfo=self.parinfo, maxiter=5000, xtol=1e-12, ftol=1e-12)
+        pfit, results = mpyfit.fit(self.mpfit_model, self.initpar, parinfo=self.parinfo, maxiter=500, xtol=1e-9, ftol=1e-9)
         model = self.model(pfit)
         self.par = pfit
         self.mod = model
-        self.resid = self.obchunk - model
+        good = np.where(self.active)
+        self.resid = self.obchunk[good,:][0] - model
         npar = len(self.par)
         dim = self.obchunk.shape
         ntel = dim[0]
@@ -380,7 +412,7 @@ class FourChunk(object):
             for i in range(nbad):
                 print bad[0][i], 'is bad'
         """
-        sigmasq = self.obchunk # sigma = sqrt(Ncts), sigma^2 = Ncts
+        sigmasq = self.obchunk[good,:][0] # sigma = sqrt(Ncts), sigma^2 = Ncts
 
         # mask bad values
         bad = np.where(sigmasq == 0.0)
@@ -394,17 +426,22 @@ class FourChunk(object):
         self.chisq = chisq
         self.redchi = redchi
         self.chi = np.sqrt(redchi) # sqrt(chi^2) =~ number of sigmas 
+
         wav = np.append(np.append(-1, self.xchunk), 1) * pfit[2] + pfit[1]
         dV = np.median(wav - np.roll(wav,-1))/wav * self.c
         if self.bstar:
             self.weight = np.zeros(self.ntel)
         else:
+            self.weight = np.array([])
+            tel = 0
             for i in range(ntel):
-                I = self.tempinterp[i](wav)
+                if not self.active[i]: continue
+                I = self.tempinterp[tel](wav)
                 dI = I - np.roll(I, -1)
                 dIdV = dI[1:len(wav)-1]/dV[1:len(wav)-1]
                 sigmaV = 1.0 / np.sqrt(np.sum(dIdV**2 / I[1:len(wav)-1]))
-                self.weight[i] = 1.0/sigmaV**2
+                self.weight = np.append(self.weight, 1.0/sigmaV**2)
+                tel += 1
         return model, pfit
 
 def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
@@ -424,17 +461,19 @@ def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
                                        ('slope1',float),('slope2',float),('slope3',float),('slope4',float),
                                        ('sigma1',float),('sigma2',float),('sigma3',float),('sigma4',float),
                                        ('alpha1',float),('alpha2',float),('alpha3',float),('alpha4',float),
-                                       ('wt1',float), ('wt2',float), ('wt3',float), ('wt4',float), 
+                                       ('wt1',float),('wt2',float),('wt3',float),('wt4',float),
                                        ('chi1',float),('chi2',float),('chi3',float),('chi4',float)])
+
     chrec = np.rec.array(chrec, dtype=chrec.dtype)
+    spectrum = Spectrum(obsname,bstar=bstar)
     for i, Ord in enumerate(order):
         for j, Pix in enumerate(pixel):
             chstart = timer()
             if printit:
                 print '------'
                 print 'Order:', Ord, 'Pixel:', Pix
-            ch = FourChunk(obsname, Ord, Pix, dpix, bstar=bstar)
-
+            ch = FourChunk(spectrum, Ord, Pix, dpix)
+            if ch == None: continue
 
             mod, bp = ch.mpfitter() # Full fit
 #            try: mod, bp = ch.mpfitter() # Full fit
@@ -444,61 +483,46 @@ def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
             chrec[chind].pixel = Pix
             chrec[chind].order = Ord
 #            chrec[chind].bp = bp
-
+            chrec[chind].z1 = chrec[chind].z2 = chrec[chind].z3 = chrec[chind].z4 = float('nan') 
+            chrec[chind].w01 = chrec[chind].w02 = chrec[chind].w03 = chrec[chind].w04 = float('nan') 
+            chrec[chind].dwdx1 = chrec[chind].dwdx2 = chrec[chind].dwdx3 = chrec[chind].dwdx4 = float('nan') 
+            chrec[chind].cts1 = chrec[chind].cts2 = chrec[chind].cts3 = chrec[chind].cts4 = float('nan') 
+            chrec[chind].slope1 = chrec[chind].slope2 = chrec[chind].slope3 = chrec[chind].slope4 = float('nan') 
+            chrec[chind].sigma1 = chrec[chind].sigma2 = chrec[chind].sigma3 = chrec[chind].sigma4 = float('nan') 
+            chrec[chind].alpha1 = chrec[chind].alpha2 = chrec[chind].alpha3 = chrec[chind].alpha4 = float('nan')
+            chrec[chind].wt1 = chrec[chind].wt2 = chrec[chind].wt3 = chrec[chind].wt4 = float('nan') 
+            chrec[chind].chi1 = chrec[chind].chi2 = chrec[chind].chi3 = chrec[chind].chi4 = float('nan') 
+            
             parspertrace = 7
 
-            # there must be a better way...
-            chrec[chind].z1 = bp[0 + 0*parspertrace]
-            chrec[chind].z2 = bp[0 + 1*parspertrace]
-            chrec[chind].z3 = bp[0 + 2*parspertrace]
-            chrec[chind].z4 = bp[0 + 3*parspertrace]
+            tel = 0
+            for i in range(ch.ntel):
 
-            chrec[chind].w01 = bp[1 + 0*parspertrace]
-            chrec[chind].w02 = bp[1 + 1*parspertrace]
-            chrec[chind].w03 = bp[1 + 2*parspertrace]
-            chrec[chind].w04 = bp[1 + 3*parspertrace]
+                if not ch.active[i]: continue
 
-            chrec[chind].dwdx1 = bp[2 + 0*parspertrace]
-            chrec[chind].dwdx2 = bp[2 + 1*parspertrace]
-            chrec[chind].dwdx3 = bp[2 + 2*parspertrace]
-            chrec[chind].dwdx4 = bp[2 + 3*parspertrace]
-
-            chrec[chind].cts1 = bp[3 + 0*parspertrace]
-            chrec[chind].cts2 = bp[3 + 1*parspertrace]
-            chrec[chind].cts3 = bp[3 + 2*parspertrace]
-            chrec[chind].cts4 = bp[3 + 3*parspertrace]
-
-            chrec[chind].slope1 = bp[4 + 0*parspertrace]
-            chrec[chind].slope2 = bp[4 + 1*parspertrace]
-            chrec[chind].slope3 = bp[4 + 2*parspertrace]
-            chrec[chind].slope4 = bp[4 + 3*parspertrace]
-
-            chrec[chind].sigma1 = bp[5 + 0*parspertrace]
-            chrec[chind].sigma2 = bp[5 + 1*parspertrace]
-            chrec[chind].sigma3 = bp[5 + 2*parspertrace]
-            chrec[chind].sigma4 = bp[5 + 3*parspertrace]
-
-            chrec[chind].alpha1 = bp[6 + 0*parspertrace]
-            chrec[chind].alpha2 = bp[6 + 1*parspertrace]
-            chrec[chind].alpha3 = bp[6 + 2*parspertrace]
-            chrec[chind].alpha4 = bp[6 + 3*parspertrace]
-            
-            chrec[chind].wt1 = ch.weight[0]
-            chrec[chind].wt2 = ch.weight[1]
-            chrec[chind].wt3 = ch.weight[2]
-            chrec[chind].wt4 = ch.weight[3]
-
-            chrec[chind].chi1 = ch.chi[0]
-            chrec[chind].chi2 = ch.chi[1]
-            chrec[chind].chi3 = ch.chi[2]
-            chrec[chind].chi4 = ch.chi[3]
+                exec("chrec[chind].z%s     = bp[0 + tel*parspertrace]" % (i+1))
+                exec("chrec[chind].w0%s    = bp[1 + tel*parspertrace]" % (i+1))
+                exec("chrec[chind].dwdx%s  = bp[2 + tel*parspertrace]" % (i+1))
+                exec("chrec[chind].cts%s   = bp[3 + tel*parspertrace]" % (i+1))
+                exec("chrec[chind].slope%s = bp[4 + tel*parspertrace]" % (i+1))
+                exec("chrec[chind].sigma%s = bp[5 + tel*parspertrace]" % (i+1))
+                exec("chrec[chind].alpha%s = bp[6 + tel*parspertrace]" % (i+1))
+                exec("chrec[chind].wt%s    = ch.weight[tel]" % (i+1))
+                exec("chrec[chind].chi%s   = ch.chi[tel]" % (i+1))
+                tel+=1
+                
             if plot:
                 col = ['b', 'g', 'y', 'r']
-                for i in range(4): 
-                    wav = bp[1+i*parspertrace] + bp[2+i*parspertrace]*np.arange(mod.shape[1])
+                
+                tel = 0
+                for i in range(ch.ntel):
+                    if not ch.active[i]: continue
+                    wav = bp[1+tel*parspertrace] + bp[2+tel*parspertrace]*np.arange(mod.shape[1])
                     pl.plot(wav, ch.obchunk[i, :], col[i]+'.')
                     pl.plot(wav, mod[i, :], col[i])
                     pl.plot(wav, ch.resid[i, :]+0.6*mod.flatten().min(), col[i]+'.')
+                    tel+=1
+
                 pl.xlabel('Wavelength [Ang]')
                 pl.ylabel('Flux [cts/pixel]')
                 pl.xlim((wav.min(), wav.max()))
@@ -509,7 +533,11 @@ def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
                 if len(np.where(np.isnan(ch.chi))[0]) != 0: ipdb.set_trace()
                 end = timer()
                 print 'Chunk time: ', (end-chstart), 'seconds'
-        end = timer()
+                
+
+            end = timer()
+
+    spectrum.h.close()
     print 'Total time: ', (end-start)/60., 'minutes'
     return chrec
 
@@ -562,7 +590,7 @@ def globgrind(globobs, bstar=False, returnfile=False, printit=False,plot=False,r
 
     for i, ffile in enumerate(files):
 
-        ofile = os.path.splitext(ffile)[0] + '.chrec5.npy'
+        ofile = os.path.splitext(ffile)[0] + '.chrec6.npy'
 
         firsttime = False
 
@@ -596,8 +624,8 @@ def globgrindall(shuffle=False):
 #        ofarr = globgrind(datadir + '/*HD*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
 #        ofarr = globgrind(datadir + '/*HR*.proc.fits', bstar=True, returnfile=False, printit=True, plot=False)
         ofarr = globgrind(datadir + '/*HD122064*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
-        ofarr = globgrind(datadir + '/*HD185144*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
-        ofarr = globgrind(datadir + '/*daytimeSky*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
+#        ofarr = globgrind(datadir + '/*HD185144*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
+#        ofarr = globgrind(datadir + '/*daytimeSky*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
 
 #ofarr = globgrind('/Data/kiwispec-proc/n20160212/n20160212.HD191408A.0017.proc.fits',bstar=False,returnfile=False,printit=True,plot=False)
 
