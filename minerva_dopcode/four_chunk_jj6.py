@@ -634,7 +634,7 @@ def globgrindall(shuffle=False):
 
 
 
-chrec = grind('/Data/kiwispec-proc/n20160515/n20160515.HD122064.0015.proc.fits',bstar=False,returnfile=False,printit=True,plot=False)
+chrec = globgrind('/Data/kiwispec-proc/n20160515/n20160515.HD122064.0015.proc.fits',bstar=False,returnfile=False,printit=True,plot=False)
 ipdb.set_trace()
 
 globgrindall(shuffle=True)
