@@ -146,8 +146,7 @@ class FourChunk(object):
         self.c = spectrum.c
         self.nactive = spectrum.nactive
 
-        if self.nactive == 0: return None
-
+        if self.nactive == 0: return
 
 #        ffile = obsname
 #        self.fits = ffile
@@ -473,11 +472,6 @@ def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
                 print '------'
                 print 'Order:', Ord, 'Pixel:', Pix
             ch = FourChunk(spectrum, Ord, Pix, dpix)
-            if ch == None: continue
-
-            mod, bp = ch.mpfitter() # Full fit
-#            try: mod, bp = ch.mpfitter() # Full fit
-#            except: return # no template for observation
 
             chind = j+i*npix
             chrec[chind].pixel = Pix
@@ -491,36 +485,44 @@ def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
             chrec[chind].sigma1 = chrec[chind].sigma2 = chrec[chind].sigma3 = chrec[chind].sigma4 = float('nan') 
             chrec[chind].alpha1 = chrec[chind].alpha2 = chrec[chind].alpha3 = chrec[chind].alpha4 = float('nan')
             chrec[chind].wt1 = chrec[chind].wt2 = chrec[chind].wt3 = chrec[chind].wt4 = float('nan') 
-            chrec[chind].chi1 = chrec[chind].chi2 = chrec[chind].chi3 = chrec[chind].chi4 = float('nan') 
-            
+            chrec[chind].chi1 = chrec[chind].chi2 = chrec[chind].chi3 = chrec[chind].chi4 = float('nan')             
             parspertrace = 7
 
+            if ch.nactive == 0: continue
+
+            mod, bp = ch.mpfitter() # Full fit
+#            try: mod, bp = ch.mpfitter() # Full fit
+#            except: return # no template for observation
+
+
+
+
             tel = 0
-            for i in range(ch.ntel):
+            for ii in range(ch.ntel):
 
                 if not ch.active[i]: continue
 
-                exec("chrec[chind].z%s     = bp[0 + tel*parspertrace]" % (i+1))
-                exec("chrec[chind].w0%s    = bp[1 + tel*parspertrace]" % (i+1))
-                exec("chrec[chind].dwdx%s  = bp[2 + tel*parspertrace]" % (i+1))
-                exec("chrec[chind].cts%s   = bp[3 + tel*parspertrace]" % (i+1))
-                exec("chrec[chind].slope%s = bp[4 + tel*parspertrace]" % (i+1))
-                exec("chrec[chind].sigma%s = bp[5 + tel*parspertrace]" % (i+1))
-                exec("chrec[chind].alpha%s = bp[6 + tel*parspertrace]" % (i+1))
-                exec("chrec[chind].wt%s    = ch.weight[tel]" % (i+1))
-                exec("chrec[chind].chi%s   = ch.chi[tel]" % (i+1))
+                exec("chrec[chind].z%s     = bp[0 + tel*parspertrace]" % (ii+1))
+                exec("chrec[chind].w0%s    = bp[1 + tel*parspertrace]" % (ii+1))
+                exec("chrec[chind].dwdx%s  = bp[2 + tel*parspertrace]" % (ii+1))
+                exec("chrec[chind].cts%s   = bp[3 + tel*parspertrace]" % (ii+1))
+                exec("chrec[chind].slope%s = bp[4 + tel*parspertrace]" % (ii+1))
+                exec("chrec[chind].sigma%s = bp[5 + tel*parspertrace]" % (ii+1))
+                exec("chrec[chind].alpha%s = bp[6 + tel*parspertrace]" % (ii+1))
+                exec("chrec[chind].wt%s    = ch.weight[tel]" % (ii+1))
+                exec("chrec[chind].chi%s   = ch.chi[tel]" % (ii+1))
                 tel+=1
                 
             if plot:
                 col = ['b', 'g', 'y', 'r']
                 
                 tel = 0
-                for i in range(ch.ntel):
-                    if not ch.active[i]: continue
+                for ii in range(ch.ntel):
+                    if not ch.active[ii]: continue
                     wav = bp[1+tel*parspertrace] + bp[2+tel*parspertrace]*np.arange(mod.shape[1])
-                    pl.plot(wav, ch.obchunk[i, :], col[i]+'.')
-                    pl.plot(wav, mod[i, :], col[i])
-                    pl.plot(wav, ch.resid[i, :]+0.6*mod.flatten().min(), col[i]+'.')
+                    pl.plot(wav, ch.obchunk[ii, :], col[ii]+'.')
+                    pl.plot(wav, mod[ii, :], col[ii])
+                    pl.plot(wav, ch.resid[ii, :]+0.6*mod.flatten().min(), col[ii]+'.')
                     tel+=1
 
                 pl.xlabel('Wavelength [Ang]')
@@ -536,6 +538,7 @@ def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
                 
 
             end = timer()
+    end = timer()
 
     spectrum.h.close()
     print 'Total time: ', (end-start)/60., 'minutes'
