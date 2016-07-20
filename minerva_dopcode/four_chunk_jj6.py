@@ -609,7 +609,7 @@ def globgrind(globobs, bstar=False, returnfile=False, printit=False,plot=False,r
         if not returnfile:
             # if the user requested to redo it, it's the first time, or there's a stale empty file, run the fit
             st = os.stat(ofile)
-            if redo or firsttime or ((time.time() - st.st_mtime) > 600 and (st.st_size == 0.0)):
+            if redo or firsttime or ((time.time() - st.st_mtime) > 3600 and (st.st_size == 0.0)):
                 chrec = grind(ffile, bstar=bstar, juststar=juststar, printit=printit, plot=plot)
                 if chrec != None: 
                     np.save(ofile,chrec)
@@ -632,6 +632,10 @@ def globgrindall(shuffle=False):
 #globgrind('/Data/kiwispec-proc/n20160520/n20160520.HD62613.0030.proc.fits',bstar=False, returnfile=False, printit=True, plot=False)
 #ipdb.set_trace()
 
+
+
+chrec = grind('/Data/kiwispec-proc/n20160515/n20160515.HD122064.0015.proc.fits',bstar=False,returnfile=False,printit=True,plot=False)
+ipdb.set_trace()
 
 globgrindall(shuffle=True)
 ipdb.set_trace()
