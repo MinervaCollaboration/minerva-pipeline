@@ -500,7 +500,7 @@ def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
             tel = 0
             for ii in range(ch.ntel):
 
-                if not ch.active[i]: continue
+                if not ch.active[ii]: continue
 
                 exec("chrec[chind].z%s     = bp[0 + tel*parspertrace]" % (ii+1))
                 exec("chrec[chind].w0%s    = bp[1 + tel*parspertrace]" % (ii+1))
@@ -612,6 +612,8 @@ def globgrind(globobs, bstar=False, returnfile=False, printit=False,plot=False,r
         if not returnfile:
             # if the user requested to redo it, it's the first time, or there's a stale empty file, run the fit
             st = os.stat(ofile)
+
+            ipdb.set_trace()
             if redo or firsttime or ((time.time() - st.st_mtime) > 3600 and (st.st_size == 0.0)):
                 chrec = grind(ffile, bstar=bstar, juststar=juststar, printit=printit, plot=plot)
                 if chrec != None: 
@@ -634,11 +636,6 @@ def globgrindall(shuffle=False):
 
 #globgrind('/Data/kiwispec-proc/n20160520/n20160520.HD62613.0030.proc.fits',bstar=False, returnfile=False, printit=True, plot=False)
 #ipdb.set_trace()
-
-
-
-chrec = globgrind('/Data/kiwispec-proc/n20160515/n20160515.HD122064.0015.proc.fits',bstar=False,returnfile=False,printit=True,plot=False)
-ipdb.set_trace()
 
 globgrindall(shuffle=True)
 ipdb.set_trace()
