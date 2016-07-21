@@ -614,7 +614,7 @@ def globgrind(globobs, bstar=False, returnfile=False, printit=False,plot=False,r
             st = os.stat(ofile)
 
             ipdb.set_trace()
-            if redo or firsttime or ((time.time() - st.st_mtime) > 3600 and (st.st_size == 0.0)):
+            if redo or firsttime or (((time.time() - st.st_mtime) > 3600) and (st.st_size == 0.0)):
                 chrec = grind(ffile, bstar=bstar, juststar=juststar, printit=printit, plot=plot)
                 if chrec != None: 
                     np.save(ofile,chrec)
