@@ -446,10 +446,11 @@ class FourChunk(object):
 def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
     print 'Fitting ', obsname
     start = timer()
-    order = np.arange(2, 20)
+    order = np.arange(2, 23)
     nord = len(order)
-    dpix = 128
-    pixel = np.arange(64, 1900, dpix)
+#    dpix = 128
+    dpix = 90
+    pixel = np.arange(30, 1922, dpix)
     npix = len(pixel)
     #charr = np.empty((npix,nord), dtype=object)
     chrec = np.zeros(npix*nord, dtype=[('pixel',int),('order',int),
@@ -593,7 +594,7 @@ def globgrind(globobs, bstar=False, returnfile=False, printit=False,plot=False,r
 
     for i, ffile in enumerate(files):
 
-        ofile = os.path.splitext(ffile)[0] + '.chrec6.npy'
+        ofile = os.path.splitext(ffile)[0] + '.chrec7.npy'
 
         firsttime = False
 
@@ -624,10 +625,11 @@ def globgrindall(shuffle=False):
     datadirs = glob(getpath() + '*')
     if shuffle: random.shuffle(datadirs)
     for datadir in datadirs:
-        ofarr = globgrind(datadir + '/*daytimeSky*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
-        ofarr = globgrind(datadir + '/*HD*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
-        ofarr = globgrind(datadir + '/*HR*.proc.fits', bstar=True, returnfile=False, printit=True, plot=False)
-#        ofarr = globgrind(datadir + '/*HD122064*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
+#        ofarr = globgrind(datadir + '/*daytimeSky*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
+#        ofarr = globgrind(datadir + '/*HD*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
+#        ofarr = globgrind(datadir + '/*HR*.proc.fits', bstar=True, returnfile=False, printit=True, plot=False)
+
+        ofarr = globgrind(datadir + '/*HD122064*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
 #        ofarr = globgrind(datadir + '/*HD185144*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
 #        ofarr = globgrind(datadir + '/*daytimeSky*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
 

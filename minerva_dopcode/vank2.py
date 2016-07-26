@@ -1,3 +1,6 @@
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 import numpy as np
 import os
 import glob
@@ -7,16 +10,23 @@ from astropy.io import fits
 import pyfits
 from astropy.time import Time
 import os, sys
-import matplotlib.pyplot as plt
+
 import targetlist
 import math
 import allantools 
+import socket
+
+
+exten = '2'
 
 def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
 
     c = 299792458.0
 
-    filenames = glob.glob('/Data/kiwispec-proc/n20160[5,6]*/*' + objname + '*.chrec5.npy')
+    if socket.gethostname() == 'Main':
+        filenames = glob.glob('/Data/kiwispec-proc/n20160[5,6]*/*' + objname + '*.chrec' + exten + '.npy')
+    else:
+        filenames = glob.glob('/n/home12/jeastman/minerva/data/n20160{514..612}/*' + objname + '*.chrec' + exten + '.npy')
 
     ntel = 4
     nobs = len(filenames)*ntel
@@ -201,7 +211,7 @@ def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
     plt.title(objname)
     plt.xlabel('Days since UT 2016-01-01')
     plt.ylabel('RV (m/s)')
-    plt.savefig(objname + '.png')
+    plt.savefig(objname + '.' + exten + '.png')
     plt.close()
     
     nightlyrvs = {'all':np.array([]),
@@ -228,7 +238,7 @@ def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
     plt.title(objname)
     plt.xlabel('Days since UT 2016-01-01')
     plt.ylabel('Nightly binned RV (m/s)')
-    plt.savefig(objname + '.binned.png')
+    plt.savefig(objname + '.' + exten + '.binned.png')
     plt.close()
     print objname + ' nightly binned RMS:'
     print "All: " + str(np.nanstd(nightlyrvs['all']))
@@ -261,7 +271,7 @@ def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
     plt.bar(center, hist, align='center', width=width)
     plt.xlabel('Intranight RMS (m/s)')
     plt.ylabel('# of Nights')
-    plt.savefig(objname + '.hist.png')
+    plt.savefig(objname + '.' + exten + '.hist.png')
     plt.close()
 
 
@@ -273,7 +283,7 @@ def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
     plt.title(objname)
     plt.xlabel('Chunk number')
     plt.ylabel('sigma')
-    plt.savefig(objname + '.sigmavchunk.png')
+    plt.savefig(objname + '.' + exten + '.sigmavchunk.png')
     plt.close()
 
     # plot median alpha as a function of chunk number
@@ -284,7 +294,7 @@ def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
     plt.title(objname)
     plt.xlabel('Chunk number')
     plt.ylabel('alpha')
-    plt.savefig(objname + '.alphavchunk.png')
+    plt.savefig(objname + '.' + exten + '.alphavchunk.png')
     plt.close()
 
     # plot median slope as a function of chunk number
@@ -295,7 +305,7 @@ def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
     plt.title(objname)
     plt.xlabel('Chunk number')
     plt.ylabel('slope')
-    plt.savefig(objname + '.slopevchunk.png')
+    plt.savefig(objname + '.' + exten + '.slopevchunk.png')
     plt.close()
 
 
@@ -308,7 +318,7 @@ def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
     plt.title(objname)
     plt.xlabel('Days since UT 2016-01-01')
     plt.ylabel('sigma')
-    plt.savefig(objname + '.sigma150vtime.png')
+    plt.savefig(objname + '.' + exten + '.sigma150vtime.png')
     plt.close()
 
 
@@ -318,7 +328,7 @@ def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
     plt.title(objname)
     plt.xlabel('Sigma_v_j')
     plt.ylabel('Intranight RMS (m/s)')
-    plt.savefig(objname + '.SNR.png')
+    plt.savefig(objname + '.' + exten + '.SNR.png')
     plt.close()
 
     # subtract a linear trend from vj
@@ -339,7 +349,7 @@ def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
     plt.title(objname)
     plt.xlabel('Days since UT 2016-01-01')
     plt.ylabel('RV (m/s)')
-    plt.savefig(objname + '.detrended.png')
+    plt.savefig(objname + '.' + exten + '.detrended.png')
     plt.close()
     print objname + " Detrended RMS: " + str(np.nanstd(vj[good]-vjtrend))
 
@@ -368,11 +378,11 @@ def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
     plt.ylabel('Precision (m/s)')
         
 
-    plt.savefig(objname + '.allan.png')
+    plt.savefig(objname + '.' + exten + '.allan.png')
     plt.close()
 
 
-    ipdb.set_trace()
+#    ipdb.set_trace()
 
 #    rate = 1.0/float(data_interval_in_s)
 #    taus = [1,2,3,4,8,16]
