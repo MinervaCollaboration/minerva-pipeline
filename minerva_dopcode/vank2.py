@@ -17,7 +17,7 @@ import allantools
 import socket
 
 
-exten = '2'
+exten = '7'
 
 def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
 
@@ -26,7 +26,10 @@ def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
     if socket.gethostname() == 'Main':
         filenames = glob.glob('/Data/kiwispec-proc/n20160[5,6]*/*' + objname + '*.chrec' + exten + '.npy')
     else:
-        filenames = glob.glob('/n/home12/jeastman/minerva/data/n20160{514..612}/*' + objname + '*.chrec' + exten + '.npy')
+        filenames = glob.glob('/n/home12/jeastman/minerva/data/n2016051[4-9]/*' + objname + '*.chrec' + exten + '.npy') +\
+            glob.glob('/n/home12/jeastman/minerva/data/n201605[2-3]?/*' + objname + '*.chrec' + exten + '.npy') +\
+            glob.glob('/n/home12/jeastman/minerva/data/n2016060?/*' + objname + '*.chrec' + exten + '.npy') +\
+            glob.glob('/n/home12/jeastman/minerva/data/n2016061[0-2]/*' + objname + '*.chrec' + exten + '.npy')
 
     ntel = 4
     nobs = len(filenames)*ntel
@@ -256,7 +259,7 @@ def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
     errbin = []
     sigmabin = []
     for i in range(mindate,maxdate):
-        match = np.where((jdutcs >= i) & (jdutcs < (i+1)))
+        match = np.where((jdutcs >= i) & (jdutcs < (i+1)) & (np.isfinite(vj)))
         if len(match[0]) > 1:
             jdbin.append(mindate)
             rvbin.append(np.mean(vj[match]))
@@ -264,10 +267,10 @@ def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
             sigmabin.append(np.mean(sigmavj[match]))
 
 #    print jdbin, rvbin, errbin, sigmabin
-
     hist, bins = np.histogram(errbin, bins=20)
     width = 0.7 * (bins[1] - bins[0])
     center = (bins[:-1] + bins[1:]) / 2
+    
     plt.bar(center, hist, align='center', width=width)
     plt.xlabel('Intranight RMS (m/s)')
     plt.ylabel('# of Nights')
@@ -395,16 +398,12 @@ if __name__ == "__main__":
 #    filename = '/Data/kiwispec-proc/n20160524/n20160524.HD185144.0023.proc.chrec.npy'
 #    vank(filename)
     objnames = ['HD10700','HD9407','HD62613','HD122064','HD191408A','HD185144','HD217107','daytimeSky']
-
     
-    objnames = ['HD122064','HD185144']#['daytimeSky','HD122064','HD185144']
+    objnames = ['HD122064']#,'HD185144']#['daytimeSky','HD122064','HD185144']
     for objname in objnames:
         vank(objname)
-    
     sys.exit()
 
-
     targets = targetlist.rdlist()
-
     for objname in targets['name']:
         vank(objname)
