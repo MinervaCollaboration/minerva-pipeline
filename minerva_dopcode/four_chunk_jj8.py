@@ -560,7 +560,7 @@ def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
 #            except: return # no template for observation
 
             # Sharon MCMC test
-            mod, bp = ch.emcee_fitter(10, 1000, 200)
+            mod, bp = ch.emcee_fitter(30, 1000, 200)
 
             tel = 0
             for ii in range(ch.ntel):
@@ -658,7 +658,7 @@ def globgrind(globobs, bstar=False, returnfile=False, printit=False,plot=False,r
 
     for i, ffile in enumerate(files):
 
-        ofile = os.path.splitext(ffile)[0] + '.chrec7.npy'
+        ofile = os.path.splitext(ffile)[0] + '.chrec8.npy'
 
         firsttime = False
 
@@ -699,8 +699,8 @@ def globgrindall(shuffle=False):
 
 #ofarr = globgrind('/Data/kiwispec-proc/n20160212/n20160212.HD191408A.0017.proc.fits',bstar=False,returnfile=False,printit=True,plot=False)
 
-#globgrind('/Data/kiwispec-proc/n20160606/n20160606.HD122064.0015.proc.fits',bstar=False, returnfile=False, printit=True, plot=False)
-#ipdb.set_trace()
+globgrind('/Data/kiwispec-proc/n20160619/n20160619.HD122064.0014.proc.fits',bstar=False, returnfile=False, printit=True, plot=False)
+ipdb.set_trace()
 
 
 
