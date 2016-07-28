@@ -17,7 +17,7 @@ import allantools
 import socket
 
 
-exten = '7'
+exten = '12'
 
 def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
 
@@ -47,7 +47,12 @@ def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
 
     for filename in filenames:
 
-
+        st = os.stat(filename)
+#        if (st.st_size != 121120): continue
+        if (st.st_size == 0.0): 
+            nobs -= 4
+            continue
+ 
         chrec = np.load(filename)
         fitsname = os.path.splitext(os.path.splitext(filename)[0])[0] + '.fits'
         h = pyfits.open(fitsname,mode='update')
@@ -169,6 +174,8 @@ def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
     hichi = np.percentile(chimed,chithresh)
     bad = np.where(chimed >= hichi)
     vij[bad,:] = np.nan  
+
+    ipdb.set_trace()
 
     # adjust all chunks to have the same RV zero points (step 5)
     # subtract the mean velocity of all observations from each chunk
