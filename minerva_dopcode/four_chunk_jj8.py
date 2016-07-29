@@ -177,7 +177,7 @@ class FourChunk(object):
         pad = 120
         self.xover = np.arange(-(pad+npix/2.0),(pad+npix/2.0),1.0/self.oversamp)
 
-        w0g = spectrum.wls[lpix+npix/2  , order] - offset # Guess at wavelength zero point (w0)
+        w0g = spectrum.wls[lpix+npix/2  , order]  # Guess at wavelength zero point (w0)
         dwg = spectrum.wls[lpix+npix/2+1, order] - spectrum.wls[lpix+npix/2, order] # Guess at dispersion (dw)
         wmin = w0g - (npix/2.0 + 4.0*pad) * dwg # Set min and max ranges of iodine template
         wmax = w0g + (npix/2.0 + 4.0*pad) * dwg
@@ -298,8 +298,7 @@ class FourChunk(object):
             wover = par[1 + tel * self.parspertrace] + par[2 + tel * self.parspertrace] * self.xover
 
             # create continuum shape, defined at center pixel
-            contf = par[3 + tel * self.parspertrace] + \
-                    par[4 + tel * self.parspertrace] * (self.xover - center_pix)
+            contf = par[3 + tel * self.parspertrace] + par[4 + tel * self.parspertrace] * self.xover
 
             # instrumental profile
             sigma = par[5 + tel * self.parspertrace]
