@@ -7,13 +7,13 @@ Created on Tue Mar  1 13:13:36 2016
 import numpy as np
 from scipy.interpolate import interp1d
 
-pre = '/Users/johnjohn/Dropbox/research/dopcode_new/synthetic_IPs/'
+pre = 'synthetic_IPs/'
 ffile = pre+'files.txt'
 
 files = np.loadtxt(ffile, dtype='string')
 ipdict_blank = {'xip':np.array([]), 'ip':np.array([]), 'wav':0., 'order':0.}
 nfiles = len(files)
-osamp = 4.
+osamp = 50.0
 ipdict = [dict() for x in range(nfiles)]
 for i, f in enumerate(files):
     ipa = np.loadtxt(pre+f)
@@ -33,4 +33,4 @@ for i, f in enumerate(files):
     thisipdict['ip'] = ip/ip.sum()/osamp
     ipdict[i] = thisipdict
 
-np.save(pre+'ipdict.npy', ipdict)
+np.save(pre+'ipdict.' + str(int(osamp)).zfill(3) + '.npy', ipdict)

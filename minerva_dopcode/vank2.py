@@ -17,7 +17,7 @@ import allantools
 import socket
 
 
-exten = '12'
+exten = '9'
 
 def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
 

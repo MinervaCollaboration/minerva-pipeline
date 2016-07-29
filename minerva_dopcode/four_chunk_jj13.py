@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+0# -*- coding: utf-8 -*-
 """
 Created on Mon Mar 28 09:33:31 2016
 
@@ -134,7 +134,7 @@ class Spectrum(object):
             self.bstar = bstar
 
 class FourChunk(object):
-    def __init__(self, spectrum, order, lpix, dpix, fixip=False, juststar=False):
+    def __init__(self, spectrum, order, lpix, dpix, fixip=False, juststar=False, offset=0.0):
         """ NOTE TO SELF: the GRIND code will have to use the BC to make an informed
         guess about where in the spectrum, pixel-wise, to start the analysis so that
         everything is performed in the star's reference frame. This will result in a
@@ -165,17 +165,22 @@ class FourChunk(object):
         shape = obspec.shape
         npix = shape[1]
 
-        self.xchunk = np.arange(npix)
-        self.oversamp = 8.0
+        self.xchunk = np.arange(npix) - npix/2.0
+        self.oversamp = 4.0
         pad = 120
-        self.xover  = np.arange(-(pad+npix)/2.0,(pad+npix)/2.0,1.0/self.oversamp)
+        self.xover  = np.arange(-(pad+npix/2.0),(pad+npix/2.0),1.0/self.oversamp)
 
-        w0g = spectrum.wls[lpix+npix/2  , order] # Guess at wavelength zero point (w0)
-        dwg = spectrum.wls[lpix+npix/2+1, order] - spectrum.wls[lpix+dpix/2, order] # Guess at dispersion (dw)
+        w0g = spectrum.wls[lpix+npix/2  , order] - offset # Guess at wavelength zero point (w0)
+        dwg = spectrum.wls[lpix+npix/2+1, order] - spectrum.wls[lpix+npix/2, order] # Guess at dispersion (dw)
         wmin = w0g - (npix/2.0 + 4.0*pad) * dwg # Set min and max ranges of iodine template
         wmax = w0g + (npix/2.0 + 4.0*pad) * dwg
 
-        self.wiod, self.siod  = get_iodine(spectrum.iodine, wmin, wmax)
+        try: self.wiod, self.siod  = get_iodine(spectrum.iodine, wmin, wmax)
+        except:
+            # out of bounds
+            self.nactive = 0
+            return
+        
         self.iodinterp = interp1d(self.wiod, self.siod) # Set up iodine interpolation function
 
         self.tempinterp = []
@@ -275,8 +280,6 @@ class FourChunk(object):
         model = None
         tel = 0
 
-        ipdb.set_trace()
-
         for i in range(self.ntel):
 
             if not self.active[i]: continue
@@ -328,8 +331,6 @@ class FourChunk(object):
 #            print "wover:  ", wover.min(), wover.max()
 #            print "WLS pars: ", par[1:4]
             
-        print model
-
         return model
 
     def lm_model(self, x, *par):
@@ -456,7 +457,7 @@ class FourChunk(object):
 def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
     print 'Fitting ', obsname
     start = timer()
-    order = np.arange(1, 28)
+    order = np.arange(0, 28)
     nord = len(order)
     dpix = 128
 #    dpix = 90
@@ -478,14 +479,15 @@ def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
     chrec = np.rec.array(chrec, dtype=chrec.dtype)
     spectrum = Spectrum(obsname,bstar=bstar)
     chunk = 1
+    offset = 0.0
     for i, Ord in enumerate(order):
         for j, Pix in enumerate(pixel):
             chstart = timer()
             if printit:
                 print '------'
                 print 'Order:', Ord, 'Pixel:', Pix
-            ch = FourChunk(spectrum, Ord, Pix, dpix)
-
+            ch = FourChunk(spectrum, Ord, Pix, dpix, offset=offset)
+            
             chind = j+i*npix
             chrec[chind].pixel = Pix
             chrec[chind].order = Ord
@@ -503,6 +505,32 @@ def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
             if ch.nactive == 0: continue
 
             mod, bp = ch.mpfitter() # Full fit
+            good = np.where(ch.chi < 3.5)
+            newoffset = offset
+            niter = 0
+            offsets = np.array([0.25,-0.25,0.5,-0.5,0.75,-0.75,1,-1,1.25,-1.25,1.5,-1.5,1.75,-1.75,2,-2,2.25,-2.25,2.5,-2.5])
+            maxiter = len(offsets)
+            bestch = ch
+            triedneighbor=False
+
+            while len(good[0]) != ch.nactive and niter < maxiter: 
+                if len(good[0]) == 0 or triedneighbor:
+                    # none weere good, try different offset
+                    newoffset = offsets[niter] + offset
+                    ch = FourChunk(spectrum, Ord, Pix, dpix, offset=newoffset)
+                    print 'No traces were ok, trying offset of ' + str(newoffset)
+                    niter += 1
+                elif len(good[0]) < ch.nactive:
+                    newoffset += np.mean(ch.initpar[1+good[0]*parspertrace] - bp[1+good[0]*parspertrace])
+                    print 'Using average of good trace offset of ' + str(newoffset)
+                    ch = FourChunk(spectrum, Ord, Pix, dpix, offset=newoffset)        
+                    triedneighbor=True
+                mod, bp = ch.mpfitter() # Full fit
+                good = np.where(ch.chi < 3.5)
+                better = np.where(ch.chi < bestch.chi)
+                if len(better[0]) >= 2:
+                    bestch = ch
+            ch = bestch
 
             tel = 0
             for ii in range(ch.ntel):
@@ -518,31 +546,36 @@ def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
                 exec("chrec[chind].alpha%s = bp[6 + tel*parspertrace]" % (ii+1))
                 exec("chrec[chind].wt%s    = ch.weight[tel]" % (ii+1))
                 exec("chrec[chind].chi%s   = ch.chi[tel]" % (ii+1))
-                print 'wavelength offset:' + self.initpar[1+tel*parspertrace] - self.bp[1+tel*parspertrace]
                 tel+=1
                 
             if plot:
-                col = ['r', 'g', 'b', 'o']
+                col = ['r', 'g', 'b', 'orange']
                 
                 tel = 0
+                xmin = np.inf
+                xmax = -np.inf
                 for ii in range(ch.ntel):
                     if not ch.active[ii]: continue
                     wav = bp[1+tel*parspertrace] + bp[2+tel*parspertrace]*np.arange(mod.shape[1])
-                    pl.plot(wav, ch.obchunk[ii, :], col[ii]+'.')
-                    pl.plot(wav, mod[ii, :], col[ii])
-                    pl.plot(wav, ch.resid[ii, :]+0.6*mod.flatten().min(), col[ii]+'.')
+                    pl.plot(wav, ch.obchunk[ii, :], '.', color=col[ii])
+                    pl.plot(wav, mod[ii, :], color=col[ii])
+                    pl.plot(wav, ch.resid[ii, :]+0.6*mod.flatten().min(), '.', color=col[ii])
                     tel+=1
+                    if wav.min() < xmin: xmin = wav.min() 
+                    if wav.max() > xmax: xmax = wav.max()
 
                 pl.xlabel('Wavelength [Ang]')
                 pl.ylabel('Flux [cts/pixel]')
-                pl.xlim((wav.min(), wav.max()))
+                pl.xlim((xmin, xmax))
                 pl.savefig(obsname + '.' + str(chunk).zfill(3) + '.png')
+                pl.close()
                 chunk += 1
             #charr[j, i] = ch
             if printit:
                 print 'chi^2 = ', ch.chi
                 if len(np.where(np.isnan(ch.chi))[0]) != 0: ipdb.set_trace()
                 end = timer()
+                print 'wavelength offset: ', (ch.initpar[1+good[0]*parspertrace] - bp[1+good[0]*parspertrace])
                 print 'Chunk time: ', (end-chstart), 'seconds'
                 
 
