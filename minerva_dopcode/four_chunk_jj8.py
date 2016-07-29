@@ -172,15 +172,15 @@ class FourChunk(object):
         shape = obspec.shape
         npix = shape[1]
 
-        self.xchunk = np.arange(npix)
-        self.oversamp = oversamp
+        self.xchunk = np.arange(npix) - npix/2.0
+        self.oversamp = 4.0
         pad = 120
-        self.xover = np.arange(-pad, npix + pad, 1. / self.oversamp)
+        self.xover = np.arange(-(pad+npix/2.0),(pad+npix/2.0),1.0/self.oversamp)
 
-        w0g = spectrum.wls[lpix, order]  # Guess at wavelength zero point (w0)
-        dwg = spectrum.wls[lpix + 1, order] - spectrum.wls[lpix, order]  # Guess at dispersion (dw)
-        wmin = w0g - 4.0 * pad * dwg  # Set min and max ranges of iodine template
-        wmax = w0g + (npix + 4 * pad) * dwg
+        w0g = spectrum.wls[lpix+npix/2  , order] - offset # Guess at wavelength zero point (w0)
+        dwg = spectrum.wls[lpix+npix/2+1, order] - spectrum.wls[lpix+npix/2, order] # Guess at dispersion (dw)
+        wmin = w0g - (npix/2.0 + 4.0*pad) * dwg # Set min and max ranges of iodine template
+        wmax = w0g + (npix/2.0 + 4.0*pad) * dwg
 
         self.wiod, self.siod = get_iodine(spectrum.iodine, wmin, wmax)
         self.iodinterp = interp1d(self.wiod, self.siod)  # Set up iodine interpolation function
@@ -262,7 +262,7 @@ class FourChunk(object):
             # IP skew guess
             self.initpar[6 + tel * self.parspertrace] = 0.0
             self.parinfo[6 + tel * self.parspertrace]['limited'] = (True, True)
-            self.parinfo[6 + tel * self.parspertrace]['limits'] = (-1.0, 1.0)
+            self.parinfo[6 + tel * self.parspertrace]['limits'] = (-5.0, 5.0)
             if fixip: self.parinfo[6 + tel * self.parspertrace]['fixed'] = True
 
             tel += 1
@@ -290,12 +290,12 @@ class FourChunk(object):
             # redshift
             z = par[0 + tel * self.parspertrace]
 
-            center_pix = self.xchunk[len(self.xchunk) / 2]
+            center_pix = self.xover[len(self.xover) / 2]
             # observed wavelength scale
-            wobs = par[1 + tel * self.parspertrace] + par[2 + tel * self.parspertrace] * (self.xchunk - center_pix)
+            wobs = par[1 + tel * self.parspertrace] + par[2 + tel * self.parspertrace] * self.xchunk
 
             # oversampled wavelength scale
-            wover = par[1 + tel * self.parspertrace] + par[2 + tel * self.parspertrace] * (self.xover - center_pix)
+            wover = par[1 + tel * self.parspertrace] + par[2 + tel * self.parspertrace] * self.xover
 
             # create continuum shape, defined at center pixel
             contf = par[3 + tel * self.parspertrace] + \
@@ -431,7 +431,7 @@ class FourChunk(object):
                     ((par0[4] - abs(par0[4] * 0.5)) < par[4] < (par0[4] + abs(par0[4] * 0.5)))
 
         # IP, a bit more than bounds set by mpfitter to allow jiggle initial walkers
-        ip_cond = (0.01 <= par[5] <= 5.0) and (-1.1 <= par[6] <= 1.1)
+        ip_cond = (0.01 <= par[5] <= 5.0) and (-5.1 <= par[6] <= 5.1)
 
         if cz_cond and w0_cond and dw_cond and cont_cond and ip_cond:
             return 0.0
