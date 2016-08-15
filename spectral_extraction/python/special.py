@@ -22,9 +22,11 @@ from matplotlib import cm
 import scipy.special as sp
 import scipy.interpolate as si
 import scipy.optimize as opt
-#import scipy.sparse as sparse
+import lmfit
+import scipy.sparse as sparse
 #import scipy.signal as sig
 #import scipy.linalg as linalg
+#import astropy.stats as stats
 
 def gaussian(axis, sigma, center=0, height=1,bg_mean=0,bg_slope=0,power=2):
     """Returns gaussian output values for a given input array, sigma, center,
@@ -36,18 +38,43 @@ def gaussian(axis, sigma, center=0, height=1,bg_mean=0,bg_slope=0,power=2):
 #    print sigma, center, height, bg_mean,bg_slope,power
 #    print gaussian
     return gaussian   
-    
-def cladding(axis,width,center=0,height=1):
-    """Function ONLY for rough use on preliminary MINERVA data.  This is to
-       give a VERY rough estimate for the cladding profile.
-    """
-    zl = axis[axis<=center]
-    zr = axis[axis>center]
-    left = height*0.5*(1+sp.erf((zl-center+width/2)/width))
-    right = height*0.5*(1+sp.erf(-(zr-center-width/2)/width))
-    return np.append(left,right)
 
-def chi_fit(d,P,N):
+def sigma_clip(residuals,sigma=3,max_iters=1):
+    """ My own sigma clipping since I don't like the astropy version.
+        Use the median, not the mean for comparison to outliers.
+        Only clips one point per iteration
+        Also only written for symmetric clipping (upper and lower bounds are the same)
+        INPUTS:
+            residuals - array of data minus fit, or just data is fine too
+            sigma - number of stddevs to clip
+            max_iters - will repeatedly clip data up to max_iters cycles
+        OUTPUTS:
+            residual_mask - boolean mask of clipped data (1 = keep, 0 = mask/reject)
+    """
+    iter_count = 0
+    residual_mask = np.ones(len(residuals),dtype=bool)
+    residual_mask_old = np.zeros(len(residuals),dtype=bool)
+    while (sum(residual_mask) != sum(residual_mask_old)) and iter_count < max_iters:
+        residual_mask_old = np.copy(residual_mask)        
+        med = np.median(residuals[residual_mask])
+        std = np.std(residuals[residual_mask]) #May be a better measure than this, but it's a start
+        if np.max(abs(residuals[residual_mask])) >= (med + sigma*std):
+            r_ind = np.argsort(abs(residuals))[::-1][iter_count]
+            residual_mask[r_ind] = 0
+        iter_count += 1
+    return residual_mask
+                
+#def cladding(axis,width,center=0,height=1):
+#    """Function ONLY for rough use on preliminary MINERVA data.  This is to
+#       give a VERY rough estimate for the cladding profile.
+#    """
+#    zl = axis[axis<=center]
+#    zr = axis[axis>center]
+#    left = height*0.5*(1+sp.erf((zl-center+width/2)/width))
+#    right = height*0.5*(1+sp.erf(-(zr-center-width/2)/width))
+#    return np.append(left,right)
+
+def chi_fit(d,P,N,return_errors=False):
     """Routine to find parameters c for a model using chi-squared minimization.
        Note, all calculations are done using numpy matrix notation.
        Inverse is calculated using the matrix SVD.
@@ -55,7 +82,7 @@ def chi_fit(d,P,N):
            d = data (n-dim array)
            P = Profile (n x c dim array) (c = number of parameters)
            N = Noise (n x n array) (reported as inverse variance)
-           
+           return_errors = gives the errors (diagonals of covariance)
        Outputs:
            c = coefficients (parameters)
            chi_min = value of chi-squared for coefficients
@@ -73,12 +100,65 @@ def chi_fit(d,P,N):
         s[s==0]=0.001
         S = np.matrix(np.diag(1/s))
         PtNPinv = np.transpose(V)*S*np.transpose(U)
-        PtNd = Pmt*Nm*dm
-        c = PtNPinv*PtNd
+        PtN = Pmt*Nm
+        err_matrix = PtNPinv*PtN
+        c = err_matrix*dm
         chi_min = np.transpose(dm - Pm*c)*Nm*(dm - Pm*c)
-        c = np.asarray(c)
+        c = np.asarray(c)[:,0]
         #chi_min2 = np.transpose(dm)*Nm*dm - np.transpose(c)*(np.transpose(Pm)*Nm*Pm)*c
-        return c, chi_min
+        if return_errors:
+            return c, np.sqrt(np.diag(abs(err_matrix)))
+        else:
+            return c, chi_min
+
+def fit_polynomial_coeffs(xarr,yarr,invar,order,return_errors=False):
+    """ Use chi-squared fitting routine to return polynomial coefficients.
+        INPUTS:
+            xarr - x values of data
+            yarr - y values of data
+            invar - inverse variance of each yarr value
+            order - order of polynomial to fit (2 = quadratic)
+            return_errors - returns error estimates for each coefficient
+        OUTPUTS:
+            poly_coeffs - array of length order+1 with coefficients
+    """
+    if len(xarr) != len(yarr) or len(xarr) != len(invar):
+        print("x, y, and invar arrays must have the same length")
+        exit(0)
+    # Build profile matrix
+    profile = np.power(np.tile(xarr,(order+1,1)).T,np.arange(order+1))
+    noise = np.diag(invar) #assumes independent data points
+    poly_coeffs, coeff_errs = chi_fit(yarr,profile,noise,return_errors=return_errors)
+#    plt.plot(xarr,yarr)
+#    plt.plot(xarr,np.dot(profile,poly_coeffs))
+#    print np.dot(profile,poly_coeffs)
+#    print np.shape(poly_coeffs)
+#    plt.show()
+#    plt.close()
+    if return_errors:
+        return poly_coeffs, coeff_errs
+    else:
+        return poly_coeffs
+    
+def eval_polynomial_coeffs(xarr,poly_coeffs):
+    """ Given polynomial coefficients, evaluates f(x) at all given xarr
+        INPUTS:
+            xarr - points to evaluate
+            poly_coeffs - array of polynomial coefficients
+        OUTPUTS:
+            ypoly - y values calculated from polynomial
+    """
+    order = len(poly_coeffs)-1 #assumes a nonzero array is entered
+    profile = np.power(np.tile(xarr,(order+1,1)).T,np.arange(order+1))
+    ypoly = np.dot(profile,poly_coeffs)
+#    print ypoly    
+#    print poly_coeffs
+#    plt.plot(xarr,ypoly)
+#    plt.show()
+#    plt.close()
+    return ypoly
+    
+    
 
 def best_linear_gauss(axis,sig,mn,data,invar,power=2):
     """ Use linear chi^2 fitting to find height and background estimates
@@ -86,7 +166,7 @@ def best_linear_gauss(axis,sig,mn,data,invar,power=2):
     noise = np.diag(invar)
     profile = np.vstack((gaussian(axis,sig,mn,1,power=power),np.ones(len(axis)))).T
     coeffs, chi = chi_fit(data, profile, noise)
-    return coeffs[0][0], coeffs[1][0]
+    return coeffs[0], coeffs[1]
 
 def best_mean(axis,sig,mn,hght,bg,data,invar,spread,power=2):
     """ Finds the mean that minimizes squared sum of weighted residuals
@@ -104,12 +184,15 @@ def best_mean(axis,sig,mn,hght,bg,data,invar,spread,power=2):
         chi_min_inds =np.arange(-2,3)+np.argmin(chis)
         chi_min_inds = chi_min_inds[(chi_min_inds>=0)*(chi_min_inds<len(mn_rng))]
         if len(chi_min_inds)<4:
+#            plt.plot(axis,gaussian(axis,sig,mn,hght,bg,power=power))
             return mn, spread
         else:
             poly_coeffs = np.polyfit(mn_rng[chi_min_inds],chis[chi_min_inds],2)
             bq = poly_coeffs[1]
             aq = poly_coeffs[0]
             best_mn = -bq/(2*aq)
+#            print sig, hght, bg, power
+#            plt.plot(axis,gaussian(axis,sig,best_mn,hght,bg,power=power))
             sigma = 1 #1 standard dev, 4 = 2 std devs
             if not(aq>0):
                 aq = -aq
@@ -121,12 +204,27 @@ def best_mean(axis,sig,mn,hght,bg,data,invar,spread,power=2):
     ###Coarse find
     ###Tradeoff with coarse sig - too small and initial guess is critical,
     ### too big and more susceptible to comsic ray influence
+#    plt.plot(axis,data)
     best_mn, best_mn_std = mn_find(axis,mn,spread)
     ###Fine find
     best_mn, best_mn_std = mn_find(axis,best_mn,best_mn_std)
+#    plt.show()
+#    plt.close()
     ###Finer find
 #    best_mn, best_mn_std = mn_find(axis,best_mn,best_mn_std/100)
     return best_mn, best_mn_std
+    
+def fit_mn_hght_bg(xvals,zorig,invorig,sigj,mn_new,spread,powj=2):
+#    mn_new = xc-xj
+    mn_old = -100
+    lp_ct = 0
+    while abs(mn_new-mn_old)>0.001:
+        mn_old = np.copy(mn_new)
+        hght, bg = best_linear_gauss(xvals,sigj,mn_old,zorig,invorig,power=powj)
+        mn_new, mn_new_std = best_mean(xvals,sigj,mn_old,hght,bg,zorig,invorig,spread,power=powj)
+        lp_ct+=1
+        if lp_ct>1e3: break
+    return mn_new, hght,bg
 
 def build_psf(xcenter,ycenter,N,samp,offset=[0.5,0.5]):
     """Function to build 2D PSF for a given central point (in pixel units).
@@ -583,3 +681,259 @@ def fit_height(xvals,zvals,invvals,sig,xc,bgm=0,bgs=0,power=2):
     noise = np.diag(invvals)
     height, chi = chi_fit(zvals,profile,noise)
     return height
+    
+def interpolate_coeffs(coeffs,c_invars,pord,hcenters,coeff_mask,method='polynomial',view_plot=False,pos_vals=False):
+    """ Routine designed to be used iteratively to smooth coefficients
+        (of splines, models, etc.) across one trace of an arc image.
+        INPUTS:
+            coeffs - best fit coefficients for each emission line (2D array, #emission lines x #coeffs/line)
+            c_invars - inverse variance estimates of each coefficient
+            pord - polynomial order (2=quadratic, etc.)
+            hcenters - best fit horizontal (x) centers of emission lines
+            coeff_mask - a mask, same length as hcenters, to omit "bad" lines.  For now "bad" is hardcoded as 3sigma deviation from smooth estimate.
+                My convention is opposite 'normal.'  That is, 1 = masked point, 0 = good point
+            method - NOT IMPLEMENTED YET.  Can be 'polynomial' or 'bspline' interpolation.  Right now, only polynomial works
+            view_plot - boolean, will show coefficients and fits
+            pos_vals - boolean, masks lines with negative amplitude in first coeff (only useful right now in radial spline fit)
+        OUTPUTS:
+            For recursion only:
+                coeffs_smooth - fitted (smoothed) coefficient values
+                coeffs_smooth_invar - inverse variance estimate for each fitted coefficient
+                coeffs_smooth_mask - updated mask of any bad lines (from sigma clipping)
+            Final outputs:
+                poly_coeffs - a pord+1 by #coeffs/line array of fitted coefficients
+                poly_errs - error estimates (std) on each of the coefficients
+    """
+    if view_plot:
+        colormap = iter(cm.rainbow(np.linspace(0,1,len(coeffs[0]))))
+        fig, ax = plt.subplots()
+#    coeffs_smooth = zeros((np.shape(coeffs)))
+    coeff_mask_old = np.ones((np.shape(coeff_mask)))
+    poly_coeffs = np.zeros((pord+1,len(coeffs[0])))
+    poly_errs = np.zeros((pord+1,len(coeffs[0])))
+    while (sum(coeff_mask_old) != sum(coeff_mask)):
+        coeff_mask_old = np.copy(coeff_mask)
+    ### Loop through each coefficient, fits as a function of position
+        for l in range(len(coeffs[0])):
+#            print coeff_mask
+            if pos_vals:
+                if np.min(coeffs[:,0])<0:
+                    coeff_mask[coeffs[:,0]<0] += len(coeffs[0])
+#            print coeff_mask
+            poly_coeffs[:,l], poly_errs[:,l] = fit_polynomial_coeffs(hcenters[coeff_mask==0],coeffs[:,l][coeff_mask==0],c_invars[:,l][coeff_mask==0],pord,return_errors=True)
+            coeffs_smooth = eval_polynomial_coeffs(hcenters,poly_coeffs[:,l])
+            #Crude error estimates - there must be a better way...
+    #        print coeff_mask
+    #        print poly_coeffs
+    #        print poly_errs
+    #        coeffs_smooth_maxes = eval_polynomial_coeffs(hcenters,poly_coeffs[:,l]+poly_errs[:,l])
+    #        coeffs_smooth_mins = eval_polynomial_coeffs(hcenters,poly_coeffs[:,l]-poly_errs[:,l])
+    #        coeff_errs = coeffs_smooth_maxes-coeffs_smooth_mins
+    #        coeffs_smooth_invar[:,l] = 1/(coeff_errs**2)
+            ### Mask based on sigma clipping of residuals
+            sclip_mask = sigma_clip(coeffs_smooth-coeffs[:,l],sigma=2,max_iters=3)
+    #        print coeffs_smooth[:,l]
+    #        print sclip_coeffs
+            coeff_mask[sclip_mask==1] += 1 ### Allow this to be greater than 1 - will return to 1 at the end
+        ### Now only mask a line if a threshhold number of coefficients reject that line
+    #    mask_thresh = np.floor(0.1*np.shape(coeffs)[1]) #10% of coeffs show bad fit
+        mask_thresh = 2 #For strictest masking (may falsely mask some lines)
+    #    print (coeffs_smooth_mask[coeff_mask>0] >= mask_thresh)
+        coeff_mask[coeff_mask<mask_thresh] = np.zeros(len(coeff_mask[coeff_mask<mask_thresh]))
+        coeff_mask[coeff_mask>=mask_thresh] = np.ones(len(coeff_mask[coeff_mask>=mask_thresh]))
+#        if mask_thresh > 1:
+#            coeff_mask += coeff_mask_old
+        ### If any extra points were masked, repeat with the new mask
+    #    print sum(coeffs_smooth_mask)
+    #    print sum(coeff_mask)
+    if view_plot:
+        for l in range(len(coeffs[0])):
+            color = next(colormap)
+            coeffs_smooth = eval_polynomial_coeffs(hcenters,poly_coeffs[:,l])
+    #        ax.plot(hcenters,coeffs[:,l]-coeffs_smooth[:,l],color=color)
+            ax.plot(hcenters,coeffs[:,l],color=color)
+            ax.plot(hcenters,coeffs_smooth,color=color)
+            ax.axhline(y=0, color='k')
+        plt.show()
+        plt.close()
+    return poly_coeffs, poly_errs
+    
+def build_2D_action():
+    """ Function to build the profile/action matrix for 2D extraction.
+        INPUTS:
+        
+        OUTPUTS:
+    """
+    
+def extract_2D(d,A,N,return_no_conv=False):
+    """ Runs 2D extraction on a sample of data.  Requires input of a 
+        profile (aka. action) matrix.
+        INPUTS:
+            d - data (usually converted from ccd section) to extract (mx1)
+            A - profile/action matrix (can be matrix or 2D array) (mxc)
+            N - Per pixel inverse variance matrix (diagonal if independent) (mxm)
+            return_no_conv - Boolean T/F.  If True, does not do reconvolution (F by default)
+        OUTPUTS:
+            fluxtilde - reconvolved flux output (default when return_no_conv = False) (cx1)
+            flux - non reconvolved flux output (only if return_no_conv = True) (cx1)
+    """
+    A = np.matrix(A)
+    d = np.reshape(np.matrix(d),(len(d),1)) #Ensure column vector
+    Ninv = np.matrix(N)
+    Cinv = A.T*Ninv*A
+    ### TODO - refine this, possibly with sparse matrix implementation)
+    U, s, Vt = linalg.svd(Cinv)
+    Cpsuedo = Vt.T*np.matrix(np.diag(1/s))*U.T
+    flux = Cpsuedo*(A.T*Ninv*d)
+    if return_no_conv:
+        flux = np.asarray(flux)
+        flux = np.reshape(flux,(len(flux),))
+        return flux
+    else:
+        ### Now find reconvolution matrix
+        f, Wt = linalg.eig(Cinv)
+        F = np.matrix(np.diag(np.asarray(f)))
+        F = np.abs(F) ## Hack...
+        Wt = np.real(Wt)
+        WtDhW = Wt*np.sqrt(F)*Wt.T
+        WtDhW = np.asarray(WtDhW)
+#        s = 
+        S = np.matrix(np.diag(np.sum(WtDhW,axis=1)))
+        Sinv = linalg.inv(S)
+        WtDhW = np.matrix(WtDhW)
+        R = Sinv*WtDhW
+        ### Convert to final formats    
+        fluxtilde = R*flux
+        fluxtilde = np.asarray(fluxtilde)
+        fluxtilde = np.reshape(fluxtilde,(len(fluxtilde),))
+        return fluxtilde
+        
+def extract_2D_sparse(d,A,N,return_no_conv=False):
+    """ Runs 2D extraction on a sample of data.  Requires input of a 
+        profile (aka. action) matrix.  Uses sparse matrices for calculation.
+        INPUTS:
+            d - data (usually converted from ccd section) to extract (mx1)
+            A - profile/action matrix (can be matrix or 2D array) (mxc)
+            N - Per pixel inverse variance matrix (diagonal if independent) (mxm)
+            return_no_conv - Boolean T/F.  If True, does not do reconvolution (F by default)
+        OUTPUTS:
+            fluxtilde - reconvolved flux output (default when return_no_conv = False) (cx1)
+            flux - non reconvolved flux output (only if return_no_conv = True) (cx1)
+    """
+    A = np.matrix(A)
+    d = np.reshape(np.matrix(d),(len(d),1)) #Ensure column vector
+    Ninv = np.matrix(N)
+    ### Convert to sparse
+    A = sparse.csr_matrix(A)
+    d = sparse.csr_matrix(d)
+    Ninv = sparse.csr_matrix(Ninv)
+    ###
+    Cinv = A.T*Ninv*A
+    U, s, Vt = linalg.svd(Cinv.todense())
+    Cpsuedo = Vt.T*np.matrix(np.diag(1/s))*U.T
+    Cpsuedo = sparse.csr_matrix(Cpsuedo)
+#    U, s, Vt = sparse.linalg.svds(Cinv,k=np.min(Cinv.shape)-2)
+#    U = sparse.csr_matrix(U)
+#    Vt = sparse.csr_matrix(Vt)
+#    U, s, Vt = linalg.svd(Cinv)
+#    Cpsuedo = Vt.T*sparse.csr_matrix(np.diag(1/s))*U.T
+    flux = Cpsuedo*(A.T*Ninv*d)
+    flux = flux.todense()
+    if return_no_conv:
+        flux = np.asarray(flux)
+        flux = np.reshape(flux,(len(flux),))
+        return flux
+    else:
+        ### Now find reconvolution matrix
+        Cinv = sparse.csc_matrix(Cinv)
+        f, Wt = sparse.linalg.eigs(Cinv,k=int(np.min(Cinv.shape)-2))
+        F = np.matrix(np.diag(np.asarray(f)))
+        F = np.abs(F) ## Hack...
+        ### Faster to do dense than sparse (at least in my one test session)
+#        F = sparse.csr_matrix(F)
+#        print np.real(Wt)
+        Wt = np.real(Wt)
+#        Wt = sparse.csr_matrix(Wt)
+        WtDhW = Wt*np.sqrt(F)*Wt.T
+#        WtDhW = WtDhW.toarray()
+        WtDhW = np.asarray(WtDhW)
+        s = np.sum(WtDhW,axis=1)
+        Sinv = linalg.inv(np.diag(s))
+#        S = sparse.csr_matrix(np.diag(s)) ### warning goes away if this is csc, but then it's slower...
+#        Sinv = sparse.linalg.inv(S)  ### This line gives a warning, but still works
+#        WtDhW = sparse.csr_matrix(WtDhW)
+        WtDhW = np.matrix(WtDhW)
+        R = Sinv*WtDhW
+#        R = R.todense()
+        ### Convert to final formats    
+        fluxtilde = R*flux
+        fluxtilde = np.asarray(fluxtilde)
+        fluxtilde = np.reshape(fluxtilde,(len(fluxtilde),))
+        return fluxtilde
+        
+def recenter_img(img,old_center,new_center):
+    """ Resamples image to shift center.  Note that this assumes a sub-pixel
+        shift.  Also note, my convention, "v" is row, "h" is column.
+        INPUTS:
+            img - 2D data array
+            old_center - [vc,hc] in pixel coordinates
+            new_center - [vn,hn] in pixel coordinates
+        OUTPUTS:
+            new_img
+    """
+    [vc,hc] = old_center
+    [vn,hn] = new_center
+    dv = vn-vc
+    dh = hn-hc
+    #set sign
+    if dv>= 0:
+        sv = 1
+    else:
+        sv = -1
+    if dh >= 0:
+        sh = 1
+    else:
+        sh = -1
+    dv = abs(dv)
+    dh = abs(dh)
+    new_img = np.zeros(np.shape(img))
+    for i in range(np.shape(img)[0]):
+        for j in range(np.shape(img)[1]):
+            ### Linear combination of nearest 4 (excluding edges)
+            px1 = img[i,j]*(1-dv)*(1-dh)
+            if i-sv >= 0 and i-sv < np.shape(img)[0]:
+                px2 = img[i-sv,j]*dv*(1-dh)
+            else:
+                px2 = img[i,j]*dv*(1-dh)
+            if j-sh >= 0 and j-sh < np.shape(img)[1]:
+                px3 = img[i,j-sh]*(1-dv)*dh
+            else:
+                px3 = img[i,j]*(1-dv)*dh            
+            if i-sv >= 0 and i-sv < np.shape(img)[0] and j-sh >= 0 and j-sh < np.shape(img)[1]:
+                px4 = img[i-sv,j-sh]*dv*dh
+            else:
+                px4 = img[i,j]*dv*dh
+            new_img[i,j] = px1 + px2 + px3 + px4
+    return new_img
+    
+def radial_quad_fct(xarr,a,b,c,x0,y0):
+    val = a + b*(((xarr-x0)**2+y0**2)**(1/2)) + c*((xarr-x0)**2+y0**2)
+    return val
+
+def radial_quad_res(params,data,xarr):
+    """ For use with lmfit - residuals of cross section of radial quadratic
+        function (built for testing purposes)
+    """
+    if len(data) != len(xarr):
+        print("Data and xarr array must be equal length")
+        exit(0)
+    ### quadratic parameters
+    a = params['a'].value
+    b = params['b'].value
+    c = params['c'].value
+    ### Offset from center of circle
+    x0 = params['x0'].value
+    y0 = params['y0'].value
+    ### residuals
+    residuals = data - radial_quad_fct(xarr,a,b,c,x0,y0)
+    return residuals
