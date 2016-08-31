@@ -21,6 +21,7 @@ import time
 import glob
 from photutils import aperture_photometry, CircularAperture, CircularAnnulus
 import pyfits
+import ghip
 
 def addzb(fitsname, redo=False):
     telescopes = ['1','2','3','4']
@@ -210,6 +211,13 @@ def jjgauss(x, *a):
     """ For free parameters create a Gaussian defined at x """
     return a[0] * np.exp(-0.5*((x - a[1])/a[2])**2) 
 
+# returns the Gauss-Hermite polynomial sum of the first len(amp)-1 terms
+# of x. param is a dictionary that contains computationally expensive
+# operations that rarely need to be recomputed. It is calculated and
+# returned if not provided to speed future calculations
+def get_ghip(x,par,param={}):
+    return ghip.ghfunc(x,par,param)
+    
 def get_ip(ipdict, wmin, wmax, orderin):
     """ Search for synthetic IPs in requested wavelength range and specified order"""
     order = orderin+1 #Stuart's relative orders are offset from orders in Matt C.'s reduced spectra
@@ -372,7 +380,7 @@ def pdf(x):
 def cdf(x):
     return (1.0 + erf(x/np.sqrt(2.0))) / 2.0
 
-def skewnorm(x,xo=0,sigma=1,alpha=0):
+def skewnorm(x,xo=0.0,sigma=1.0,alpha=0.0):
     t = (x - xo) / sigma
     return 2.0 / sigma * pdf(t) * cdf(alpha*t)
 

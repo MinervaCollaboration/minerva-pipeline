@@ -189,6 +189,8 @@ class FourChunk(object):
         self.obchunk = obchunk # Bookkeeping for what was "cleaned" by crclean
 
         self.xip, self.ip = get_ip(spectrum.ipdict,wmin,wmax,order)
+        ipdb.set_trace()
+
         """ List of Parameters:
         par[0 + N*parspertrace] = zguess for telescope N
         par[1 + N*parspertrace] = w0 for telescope N
