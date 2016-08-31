@@ -236,6 +236,13 @@ def jjgauss(x, *a):
     """ For free parameters create a Gaussian defined at x """
     return a[0] * np.exp(-0.5*((x - a[1])/a[2])**2) 
 
+# returns the Gauss-Hermite polynomial sum of the first len(amp)-1 terms
+# of x. param is a dictionary that contains computationally expensive
+# operations that rarely need to be recomputed. It is calculated and
+# returned if not provided to speed future calculations
+def get_ghip(x,par,param={}):
+    return ghip.ghfunc(x,par,param)
+
 def get_ip(ipdict, wmin, wmax, orderin, oversamp=4.0):
     """
     Search for synthetic IPs in requested wavelength range and specified order
