@@ -1,0 +1,955 @@
+0# -*- coding: utf-8 -*-
+"""
+Created on Mon Mar 28 09:33:31 2016
+
+@author: johnjohn
+"""
+import matplotlib
+matplotlib.use('Agg')
+
+import numpy as np
+import matplotlib.pyplot as pl
+from scipy.interpolate import interp1d
+from astropy.io import fits
+import numpy.random as rand
+from scipy.optimize import curve_fit
+from scipy.io.idl import readsav
+from scipy.integrate import simps
+import mpyfit #This requires a special installation
+import emcee
+from timeit import default_timer as timer
+from utils import *
+from astropy.time import Time
+from glob import glob
+import socket, ipdb, os
+import csv
+import math
+import random
+from scipy.optimize import minimize
+
+class Spectrum(object):
+    def __init__(self, obsname, bstar=False):
+        self.c = 2.99792458e8 # speed of light
+        ffile = obsname
+        self.fits = ffile
+        self.h = fits.open(ffile)
+
+        # is this right?
+        self.ntel = self.h[0].data.shape[0]
+
+        t = Time(self.h[0].header['DATE-OBS'], format='isot', scale='utc')
+        self.jd = t.jd
+
+#        self.wls = np.transpose(self.h[2].data[3,0:28,:])
+        self.wls = np.load('templates/wls.n20160612.HR5511.0018.npy')
+#        wls = np.load('templates/ThAr_wavsol_T1_DuncanWright.npy')
+#        wls = np.load('templates/MC_bstar_wls.air.npy')
+#        ipdb.set_trace()
+
+        self.iodine = np.load('templates/MINERVA_I2_0.1_nm.npy')
+        self.template = []
+        self.ipdict = np.load('synthetic_IPs/ipdict.npy')
+
+        # don't assume the same object or same redshift for each trace
+        self.objname = np.array([])
+        self.active = np.array([])
+        self.zbc = np.array([])
+        self.zguess = np.array([])
+        self.weight = np.zeros(self.ntel)
+        self.nactive = 0
+
+        for i in range(self.ntel):
+            self.objname = np.append(self.objname,self.h[0].header['OBJECT' + str(i+1)])
+
+            try:
+                # try to get the barycentric redshift
+                self.zbc = np.append(self.zbc,float(self.h[0].header['BARYCOR' + str(i)]))
+            except:
+                # if the barycentric redshift not in the headers, calculate it
+                ra = self.h[0].header['TARGRA' + str(i+1)]
+                dec = self.h[0].header['TARGDEC' + str(i+1)]
+
+                # if keyword not populated, bu
+                if self.h[0].header['FLUXMID' + str(i+1)] == 'UNKNOWN':
+                    midflux = self.jd + self.h[0].header['EXPTIME']/2.0/86400.0
+                else:
+                    midflux = self.h[0].header['FLUXMID' + str(i+1)]
+
+                try: pmra = self.h[0].header['PMRA' + str(i+1)]
+                except: pmra = 0.0
+                try: pmdec = self.h[0].header['PMDEC' + str(i+1)]
+                except: pmdec = 0.0
+                try: parallax = self.h[0].header['PARLAX' + str(i+1)]
+                except: parallax = 0.0
+                try: rv = h[0].header['RV' + str(i+1)]
+                except: rv = 0.0
+                self.zbc = np.append(self.zbc,barycorr(midflux, ra, dec, pmra=pmra, pmdec=pmdec, parallax=parallax, rv=rv)/self.c)
+
+            try:
+                self.active = np.append(self.active, self.h[0].header['FAUSTAT' + str(i+1)] == 'GUIDING')
+            except:
+                print 'FAUSTAT' + str(i+1) + ' keyword not present'
+                self.active = np.append(self.active, "True")
+
+            if self.active[i]: self.nactive += 1
+
+            if not bstar:
+            
+                if 'HD' in self.objname[i] and 'A' in self.objname[i]:
+                    self.objname[i] = self.objname[i].split('A')[0]
+
+                templatename = None
+                # get the barycentric correction of the template from kbcvel.ascii
+                if 'daytimeSky' in self.objname[i]: 
+                    # starting point for solar spectrum template
+                    self.template = np.append(self.template,readsav('templates/nso.sav'))
+                    self.zguess = np.append(self.zguess,2.8e-4)
+                elif 'HD' in self.objname[i]:
+                    with open('templates/kbcvel.ascii','rb') as fh:
+                        fh.seek(1) # skip the header
+                        for line in fh:
+                            entries = line.split()
+                            if len(entries) >= 6:
+                                obstype = entries[5]
+                                tempobjname = entries[1]
+                                # **this assumes all stars are designated by their HD names!**
+                                if obstype == 't' and tempobjname == self.objname[i].split('D')[1]:
+                                    ztemp = float(entries[2])/self.c # template redshift
+                                    templatename = 'templates/dsst' + tempobjname + 'ad_' + entries[0].split('.')[0] + '.dat'
+                                    if os.path.exists(templatename): 
+                                        self.template = np.append(self.template,readsav(templatename))
+                                        break
+                    if templatename == None:
+                        print 'ERROR: no template for ' + obsname
+                        self.active[i] = False
+                        continue
+                    if not os.path.exists(templatename):
+                        print 'ERROR: no template for ' + obsname
+                        self.active[i] = False
+                        continue
+
+                    # the starting guess for the redshift will be the difference 
+                    # between the barycentric correction of the observation and 
+                    # the template
+                    self.zguess = np.append(self.zguess,(1.0+ztemp)/(1.0+self.zbc[i]) - 1.0)
+            else:
+                self.zguess = np.append(self.zguess,0.0)
+            self.bstar = bstar
+
+class FourChunk(object):
+    def __init__(self, spectrum, order, lpix, dpix, fixip=False, juststar=False, linear=False, offset=0.0):
+        """ NOTE TO SELF: the GRIND code will have to use the BC to make an informed
+        guess about where in the spectrum, pixel-wise, to start the analysis so that
+        everything is performed in the star's reference frame. This will result in a
+        variable lpix from obs to obs
+        """
+        
+#        self.c = 2.99792458e8 # speed of light
+
+        self.order = order
+        self.pixel = lpix
+        self.ntel = spectrum.ntel
+        self.bstar = spectrum.bstar
+        self.active = spectrum.active
+        self.juststar = juststar
+        self.c = spectrum.c
+        self.nactive = spectrum.nactive
+
+        if self.nactive == 0: return
+
+#        ffile = obsname
+#        self.fits = ffile
+#        h = fits.open(ffile)
+#        t = Time(h[0].header['DATE-OBS'], format='isot', scale='utc')
+#        self.jd = t.jd
+
+        rpix = lpix + dpix
+        obspec = spectrum.h[0].data[:, order, lpix:rpix]
+        shape = obspec.shape
+        npix = shape[1]
+
+        self.xchunk = np.arange(npix) - npix/2.0
+        self.oversamp = 4.0
+        pad = 120
+        self.xover  = np.arange(-(pad+npix/2.0),(pad+npix/2.0),1.0/self.oversamp)
+
+        w0g = spectrum.wls[lpix+npix/2  , order] - offset # Guess at wavelength zero point (w0)
+        dwg = spectrum.wls[lpix+npix/2+1, order] - spectrum.wls[lpix+npix/2, order] # Guess at dispersion (dw)
+        dw2g = 0.0
+
+        if np.isnan(w0g) or np.isnan(dwg) or np.isnan(dw2g):
+            self.nactive = 0
+            return
+
+#        ipdb.set_trace()
+
+
+        wmin = w0g - (npix/2.0 + 4.0*pad) * dwg - (npix/2.0 + 4.0*pad)**2*dw2g # Set min and max ranges of iodine template
+        wmax = w0g + (npix/2.0 + 4.0*pad) * dwg + (npix/2.0 + 4.0*pad)**2*dw2g 
+
+#        # solve for zeropoint (w0g), dispersion (dwg), and quadratic term (dw2g) analytically
+#        X1 = -npix/2; X2 = 0; X3 = X1+npix
+#        Y1 = spectrum.wls[lpix+X1,order] ; Y2 = spectrum.wls[lpix+X2,order] ; Y3 = spectrum.wls[lpix+X3,order]
+#        dw2g = ((Y2-Y1)*(X1-X3) + (Y3-Y1)*(X2-X1))/((X1-X3)*(X2**2-X1**2) + (X2-X1)*(X3**2-X1**2))
+#        dwg  = ((Y2 - Y1) - dw2g*(X2**2 - X1**2)) / (X2-X1)
+#        w0g  = Y1 - dw2g*X1**2 - dwg*X1
+#        wmin2 = w0g - (npix/2.0 + 4.0*pad) * dwg - (npix/2.0 + 4.0*pad)**2*dw2g # Set min and max ranges of iodine template
+#        wmax2 = w0g + (npix/2.0 + 4.0*pad) * dwg + (npix/2.0 + 4.0*pad)**2*dw2g 
+#        print wmin2, wmax2
+
+        try: self.wiod, self.siod  = get_iodine(spectrum.iodine, wmin, wmax)
+        except:
+            # out of bounds
+            self.nactive = 0
+            return
+        
+        self.iodinterp = interp1d(self.wiod, self.siod) # Set up iodine interpolation function
+
+        self.tempinterp = []
+        for i in range(spectrum.ntel):
+            if not spectrum.active[i]: continue
+            if not spectrum.bstar:
+                wtemp, stemp = get_template(spectrum.template[i], wmin, wmax)
+                if (wtemp[0] - (wtemp[1]-wtemp[0]) > wmin) or (wtemp[-1] + (wtemp[-1]-wtemp[-2]) < wmax):
+                    self.nactive=0
+                    return
+                self.tempinterp.append(interp1d(wtemp, stemp))
+                
+
+        obchunk = np.copy(obspec)
+
+#       JDE 2016-05-24: remove CR cleaning; gave DOF <= 0 error (and fixed in extraction?)
+#        for i in range(4):
+#            obchunk[i,:] = crclean(obspec[i,:]) # remove hot/dead pixels
+
+        self.origchunk = obspec
+        self.obchunk = obchunk # Bookkeeping for what was "cleaned" by crclean
+        self.xip, self.ip = get_ip(spectrum.ipdict,wmin,wmax,order)
+
+        """ List of Parameters:
+        par[0 + N*parspertrace] = zguess for telescope N
+        par[1 + N*parspertrace] = w0 for telescope N
+        par[2 + N*parspertrace] = dw/dx for telescope N
+        par[3 + N*parspertrace] = dw2/dx2 for telescope N
+        par[4 + N*parspertrace] = continuum shape offset for telescope N
+        par[5 + N*parspertrace] = continuum shape slope for telescope N
+        par[6 + N*parspertrace] = IP Gaussian width telescope N
+        par[7 + N*parspertrace] = IP Hermite Polynomial 1 coefficient
+        par[8 + N*parspertrace] = IP Hermite Polynomial 2 coefficient
+        par[9 + N*parspertrace] = IP Hermite Polynomial 3 coefficient
+        par[10 + N*parspertrace] = IP Hermite Polynomial 4 coefficient
+        par[11 + N*parspertrace] = IP Hermite Polynomial 5 coefficient
+        par[12 + N*parspertrace] = IP Hermite Polynomial 6 coefficient
+        par[13 + N*parspertrace] = IP Hermite Polynomial 7 coefficient
+        par[14 + N*parspertrace] = IP Hermite Polynomial 8 coefficient
+        par[15 + N*parspertrace] = IP Hermite Polynomial 9 coefficient
+        par[16 + N*parspertrace] = IP Hermite Polynomial 10 coefficient
+        par[17 + N*parspertrace] = IP Hermite Polynomial 11 coefficient
+        par[18 + N*parspertrace] = IP Hermite Polynomial 12 coefficient
+        par[19 + N*parspertrace] = IP Hermite Polynomial 13 coefficient
+        par[20 + N*parspertrace] = IP Hermite Polynomial 14 coefficient
+        par[21 + N*parspertrace] = IP Hermite Polynomial 15 coefficient
+        """
+        self.parspertrace = 22
+
+        npar = self.parspertrace*spectrum.ntel
+        self.initpar = np.zeros(npar)
+
+        # the fibers are tilted, which changes the wavelength offset per telescope
+        # this has been previously measured and ~static (unless the fiber assembly is moved)
+        coef = np.array([0.00059673, 0.06555841]) # wavelength offset per trace...per order
+        dwdtrace = np.polyval(coef, order) # find wavelength offset per trace for this order
+        offset = np.arange(spectrum.ntel)[::-1] * dwdtrace
+
+        # parameter properties for MPYFIT
+        self.parinfo = [{'fixed':False, 'limited':(False,False), 'limits':(None, None), 'relstep':0.0} for i in range(npar)]
+        
+        tel = 0
+        for i in range(spectrum.ntel):
+
+            # don't fit the spectrum if it wasn't active
+            if not spectrum.active[i]: continue
+
+            # redshift guess (may tie these together for each trace, if same object)
+            self.initpar[0+tel*self.parspertrace] = spectrum.zguess[i]
+            self.parinfo[0+tel*self.parspertrace]['relstep'] = 0.01        
+            if spectrum.bstar: self.parinfo[0+tel*self.parspertrace]['fixed'] = True
+
+            # wavelength zeropoint guess
+            self.initpar[1+tel*self.parspertrace] = w0g + offset[i]
+            self.parinfo[1+tel*self.parspertrace]['relstep'] = 1e-6
+            if juststar: self.parinfo[1+tel*self.parspertrace]['fixed'] = True
+
+            # wavelength dispersion guess (may tie these together for each trace)
+            self.initpar[2+tel*self.parspertrace] = dwg
+            self.parinfo[2+tel*self.parspertrace]['relstep'] = 0.005
+            if juststar: self.parinfo[2+tel*self.parspertrace]['fixed'] = True
+
+            # wavelength dispersion non-linearity guess (may tie these together for each trace)
+            self.initpar[3+tel*self.parspertrace] = dw2g
+            self.parinfo[3+tel*self.parspertrace]['relstep'] = 0.005
+            if juststar: self.parinfo[3+tel*self.parspertrace]['fixed'] = True
+            if linear: self.parinfo[3+tel*self.parspertrace]['fixed'] = True
+
+            # continuum offset guess
+            self.initpar[4+tel*self.parspertrace] = np.amax(self.obchunk[i,:])
+            
+            # continuum slope guess
+            self.initpar[5+tel*self.parspertrace] = 0.0
+
+            # IP Gaussian width guess
+            self.initpar[6+tel*self.parspertrace] = 1.24440239
+            self.parinfo[6+tel*self.parspertrace]['limited'] = (True,True)
+            self.parinfo[6+tel*self.parspertrace]['limits'] = (0.1, 4.0)
+            if fixip: self.parinfo[6+tel*self.parspertrace]['fixed'] = True
+
+            # IP Hermite Polynomial coefficients guess
+            coeffs = [0.65911276,-0.00259249,-0.14417569, 0.00252155,0.03087891,
+                      0.00223927, 0.02103587,-0.00284472,-0.00441220,0.00316753,
+                      0.01717350,-0.00131543, 0.00026649, 0.00107627,0.00597305]
+            for i,coeff in enumerate(coeffs):
+                self.initpar[7+i+tel*self.parspertrace] = coeff
+                self.parinfo[7+i+tel*self.parspertrace]['limited'] = (True,True)
+                self.parinfo[7+i+tel*self.parspertrace]['limits'] = (-5.0, 5.0)
+                if fixip: self.parinfo[7+i+tel*self.parspertrace]['fixed'] = True
+               
+            tel += 1
+ 
+        xstep = 1.0/self.oversamp
+        self.dxip = xstep
+        self.initmod = self.model(self.initpar)
+
+    def __call__(self, par): # For EMCEE
+        model = self.model(par)
+        if model == None: return 0.0 # zero likelihood
+        good = np.where(self.active)
+        lnprob = (self.obchunk[good,:][0]-model)**2
+        return -lnprob[3:len(lnprob)-1].sum()
+    
+    def model(self, par): # For other solvers such as MPYFIT
+        
+        model = None
+        tel = 0
+
+        for i in range(self.ntel):
+
+            if not self.active[i]: continue
+
+            # redshift
+            z = par[0+tel*self.parspertrace]
+
+            # observed wavelength scale
+            wobs = par[1+tel*self.parspertrace] + par[2+tel*self.parspertrace]*self.xchunk + par[3+tel*self.parspertrace]*self.xchunk**2
+
+            # oversampled wavelength scale
+            wover = par[1+tel*self.parspertrace] + par[2+tel*self.parspertrace]*self.xover + par[3+tel*self.parspertrace]*self.xover**2
+
+            # create continuum shape
+            contf = par[4+tel*self.parspertrace] + par[5+tel*self.parspertrace]*self.xover
+
+            # instrumental profile
+#            sigma = par[6+tel*self.parspertrace]
+#            alpha = par[7+tel*self.parspertrace]
+#            sknorm = skewnorm(self.xip, 0.0, sigma, alpha)
+#            ip = numconv(sknorm, self.ip) # Convolve Zemax IP with local broadening
+#            ip = ip / ip.sum() / self.oversamp # Normalize convolved IP
+#            print len(ip), ip, len(ip)
+            
+            ip = ghip.ghfunc(self.xip,par[6+tel*self.parspertrace:tel*self.parspertrace + self.parspertrace])
+            
+            '''
+            # force centering IP, try to break w0-alpha degeneracy, Sharon X. Wang July 2016
+            center_pos = simps(self.xip*ip, dx=1.0 / self.oversamp) / simps(ip, dx=1.0 / self.oversamp)
+            pad_len = 10
+            ip_ext = np.append(np.append(np.zeros(pad_len), ip), np.zeros(pad_len))
+            xip_pad = np.arange(self.xip[-1] + 1.0 / self.oversamp,
+                                self.xip[-1] + 1.0 / self.oversamp * (pad_len + 0.9), 1.0 / self.oversamp)
+            xip_ext = np.append(np.append(-xip_pad[::-1], self.xip), xip_pad)
+            xip_ext -= center_pos  # shift IP to center
+            shift_ip_func = interp1d(xip_ext, ip_ext)
+            ip = shift_ip_func(self.xip)  # re-centered!
+            '''
+
+            if self.bstar:
+                tempover = 1.0
+            else:
+                # Doppler-shift stellar spectrum, put onto same oversampled scale as iodine
+                try: tempover = self.tempinterp[tel](wover*(1.0-z))
+                except ValueError: tempover = wover*np.inf 
+            if self.juststar:
+                iodover = contf * tempover
+            else:
+                try: iodover = self.iodinterp(wover)*contf*tempover
+                except ValueError: iodover = wover*np.inf
+
+            # oversampled model spectrum
+            sover = numconv(iodover, ip) 
+            if tel == 0:
+                try: model = rebin(wover, sover, wobs)
+                except: model = wobs*np.inf
+            else:
+                try: model = np.vstack((model, rebin(wover, sover, wobs)))
+                except: model = np.vstack((model,wobs*np.inf))
+
+            tel += 1
+
+#        except ValueError:
+#            print "iodine: ", self.wiod.min(), self.wiod.max()
+#            print "wover:  ", wover.min(), wover.max()
+#            print "WLS pars: ", par[1:4]
+            
+        try: 
+            if np.isnan(model[0,0]): ipdb.set_trace()
+        except: 
+            ipdb.set_trace()
+        
+        return model
+
+    def amoeba_model(self,par):
+        model = self.model(par).flatten()
+        good = np.where(self.active)
+        obs = self.obchunk[good,:][0].flatten()
+        err = np.sqrt(obs)
+
+        bad = np.where(obs == 0)
+        err[bad] = float('inf')
+
+        return ((obs-model)/err)**2
+
+
+    def lm_model(self, x, *par):
+        model = self.model(par)
+        #print par[0], par[1]
+        return model
+    
+    def mpfit_model(self, par, fjac=None, x=None, y=None, err=None):
+        model = self.model(par).flatten()
+
+        good = np.where(self.active)
+        obs = self.obchunk[good,:][0].flatten()
+        err = np.sqrt(obs)
+
+        bad = np.where(obs == 0)
+        err[bad] = float('inf')
+
+        return (obs-model)/err
+
+    def fprof(self, par):
+        oversamp = 1.0/self.dxip
+        xip = self.xip
+        cenwid = par[0]
+        cengau = jjgauss(xip, 1., 0, cenwid)
+        sh_sep = par[1]
+        sh_amp = par[2]
+        lgau = jjgauss(xip, sh_amp, -sh_sep, cenwid)
+        rgau = jjgauss(xip, sh_amp,  sh_sep, cenwid)
+        f = par[3]
+        shoulders = f*lgau + (1-f)*rgau
+        ip = cengau + shoulders
+        return ip/(ip.sum()/oversamp)
+        
+    def gpfunc(self, pars):
+        ip = jjgauss(self.xip, 1.0, 0.0, pars[0])
+        for i, sig in enumerate(self.ipsig):
+            gau = jjgauss(self.xip, pars[i+1], self.ippix[i], sig)
+            ip += gau 
+        return ip / ip.sum() / self.dxip
+
+    def emcee_fitter(self, nwalkers, niter, nburn):
+        #p0 = self.initpar
+        s, p0 = self.mpfitter() # initialize parameters using least-sq fit
+        ndims = len(p0)
+        p0arr = np.array([])
+        for i, p in enumerate(p0):
+            if p != 0:
+                amp = self.dstep[i] * p
+            else:
+                amp = self.dstep[i]
+            randp = p + amp*(rand.random(nwalkers) - 0.5)
+            p0arr = np.append(p0arr, randp)
+        p0arr.shape = (ndims, nwalkers)
+        p0arr = p0arr.transpose()
+        
+        sampler = emcee.EnsembleSampler(nwalkers,ndims,self)
+        print "Starting burn-in with "+str(nburn)+" links"  
+        pos, prob, state = sampler.run_mcmc(p0arr, nburn)
+        sampler.reset()
+        print "Starting main MCMC run with "+str(nwalkers)+" walkers and "+str(niter)+ " links."
+        foo = sampler.run_mcmc(pos, niter, rstate0=state)
+        m = np.argmax(sampler.flatlnprobability)
+        bpar = sampler.flatchain[m,:]
+        return sampler, bpar
+        
+    def amoeba_fitter(self):
+        pfit = minimize(self.amoeba_model,self.initpar,method='nelder-mead',options={'xtol':1e-8,'disp':False})
+        model = self.model(pfit)
+        return model, pfit
+
+    def lm_fitter(self):
+        bestpar, cov = curve_fit(self.lm_model, self.xchunk, self.obchunk, p0=self.initpar)
+        return self.model(bestpar), bestpar
+
+    def mpfitter(self):
+
+        #m = mpfit(self.mpfit_model, self.initpar, parinfo=self.parinfo, xtol=1e-8, quiet=True)
+        pfit, results = mpyfit.fit(self.mpfit_model, self.initpar, parinfo=self.parinfo, maxiter=500, xtol=1e-9, ftol=1e-9) 
+        model = self.model(pfit)
+        self.par = pfit[:]
+        self.mod = model[:,:]
+        good = np.where(self.active)
+        self.resid = self.obchunk[good,:][0] - model
+        npar = len(self.par)
+        dim = self.obchunk.shape
+        ntel = dim[0]
+        npix = dim[1]
+        dof = npix - self.parspertrace # neglects any fixed parameters!
+#        dofpertrace = npix - npar
+#        self.chiarr = np.sqrt(np.sum((self.resid)**2/self.mod, axis=1) / dofpertrace)
+#        bad = np.where(self.chiarr > 3)
+        """
+        if bad[0]:
+            nbad = len(bad[0])
+            for i in range(nbad):
+                print bad[0][i], 'is bad'
+        """
+        sigmasq = self.obchunk[good,:][0] # sigma = sqrt(Ncts), sigma^2 = Ncts
+        # ignores sky noise, read noise, flat fielding...
+
+        # mask bad values
+        bad = np.where(sigmasq == 0.0)
+        sigmasq[bad] = float('inf')
+
+        chisq = np.sum(self.resid**2/sigmasq,axis=1)
+
+        if len(np.where(np.isnan(chisq))[0]) != 0: ipdb.set_trace()
+
+        redchi = chisq/dof
+        self.chisq = chisq[:]
+        self.redchi = redchi[:]
+        self.chi = np.sqrt(redchi) # sqrt(chi^2) =~ number of sigmas 
+
+        wav = np.append(np.append(-1, self.xchunk), 1) * pfit[2] + pfit[1]
+        dV = np.median(wav - np.roll(wav,-1))/wav * self.c
+        if self.bstar:
+            self.weight = np.zeros(self.ntel)
+        else:
+            self.weight = np.array([])
+            tel = 0
+            for i in range(ntel):
+                if not self.active[i]: continue
+                I = self.tempinterp[tel](wav)
+                dI = I - np.roll(I, -1)
+                dIdV = dI[1:len(wav)-1]/dV[1:len(wav)-1]
+                sigmaV = 1.0 / np.sqrt(np.sum(dIdV**2 / I[1:len(wav)-1]))
+                self.weight = np.append(self.weight, 1.0/sigmaV**2)
+                tel += 1
+        return model, pfit
+
+def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
+    print 'Fitting ', obsname
+    start = timer()
+    order = np.arange(0, 28)
+    nord = len(order)
+    dpix = 128
+#    dpix = 90
+#    pixel = np.arange(30, 1922, dpix)
+    pixel = np.arange(64, 1900, dpix)
+    npix = len(pixel)
+    #charr = np.empty((npix,nord), dtype=object)
+    chrec = np.zeros(npix*nord, dtype=[('pixel',int),('order',int),
+                                       ('z1',float),('z2',float),('z3',float),('z4',float),
+                                       ('w01',float),('w02',float),('w03',float),('w04',float),
+                                       ('dwdx1',float),('dwdx2',float),('dwdx3',float),('dwdx4',float),
+                                       ('dw2dx21',float),('dw2dx22',float),('dw2dx23',float),('dw2dx24',float),
+                                       ('cts1',float),('cts2',float),('cts3',float),('cts4',float),
+                                       ('slope1',float),('slope2',float),('slope3',float),('slope4',float),
+                                       ('sigma1',float),('sigma2',float),('sigma3',float),('sigma4',float),
+                                       ('gh11',float),('gh12',float),('gh13',float),('gh14',float),
+                                       ('gh21',float),('gh22',float),('gh23',float),('gh24',float),
+                                       ('gh31',float),('gh32',float),('gh33',float),('gh34',float),
+                                       ('gh41',float),('gh42',float),('gh43',float),('gh44',float),
+                                       ('gh51',float),('gh52',float),('gh53',float),('gh54',float),
+                                       ('gh61',float),('gh62',float),('gh63',float),('gh64',float),
+                                       ('gh71',float),('gh72',float),('gh73',float),('gh74',float),
+                                       ('gh81',float),('gh82',float),('gh83',float),('gh84',float),
+                                       ('gh91',float),('gh92',float),('gh93',float),('gh94',float),
+                                       ('gh101',float),('gh102',float),('gh103',float),('gh104',float),
+                                       ('gh111',float),('gh112',float),('gh113',float),('gh114',float),
+                                       ('gh121',float),('gh122',float),('gh123',float),('gh124',float),
+                                       ('gh131',float),('gh132',float),('gh133',float),('gh134',float),
+                                       ('gh141',float),('gh142',float),('gh143',float),('gh144',float),
+                                       ('gh151',float),('gh152',float),('gh153',float),('gh154',float),
+                                       ('wt1',float),('wt2',float),('wt3',float),('wt4',float),
+                                       ('chi1',float),('chi2',float),('chi3',float),('chi4',float)])
+
+    chrec = np.rec.array(chrec, dtype=chrec.dtype)
+    spectrum = Spectrum(obsname,bstar=bstar)
+    chunk = 1
+
+    for i, Ord in enumerate(order):
+        for j, Pix in enumerate(pixel):
+
+            chstart = timer()
+            offset = 0.0
+
+            if printit:
+                print '------'
+                print 'Order:', Ord, 'Pixel:', Pix
+
+            ch = FourChunk(spectrum, Ord, Pix, dpix, offset=offset)
+
+            chind = j+i*npix
+            chrec[chind].pixel = Pix
+            chrec[chind].order = Ord
+            chrec[chind].z1 = chrec[chind].z2 = chrec[chind].z3 = chrec[chind].z4 = float('nan') 
+            chrec[chind].w01 = chrec[chind].w02 = chrec[chind].w03 = chrec[chind].w04 = float('nan') 
+            chrec[chind].dwdx1 = chrec[chind].dwdx2 = chrec[chind].dwdx3 = chrec[chind].dwdx4 = float('nan') 
+            chrec[chind].dw2dx21 = chrec[chind].dw2dx22 = chrec[chind].dw2dx23 = chrec[chind].dw2dx24 = float('nan') 
+            chrec[chind].cts1 = chrec[chind].cts2 = chrec[chind].cts3 = chrec[chind].cts4 = float('nan') 
+            chrec[chind].slope1 = chrec[chind].slope2 = chrec[chind].slope3 = chrec[chind].slope4 = float('nan') 
+            chrec[chind].sigma1 = chrec[chind].sigma2 = chrec[chind].sigma3 = chrec[chind].sigma4 = float('nan') 
+            chrec[chind].gh11 = chrec[chind].gh12 = chrec[chind].gh13 = chrec[chind].gh14 = float('nan')
+            chrec[chind].gh21 = chrec[chind].gh22 = chrec[chind].gh23 = chrec[chind].gh24 = float('nan')
+            chrec[chind].gh31 = chrec[chind].gh32 = chrec[chind].gh33 = chrec[chind].gh34 = float('nan')
+            chrec[chind].gh41 = chrec[chind].gh42 = chrec[chind].gh43 = chrec[chind].gh44 = float('nan')
+            chrec[chind].gh51 = chrec[chind].gh52 = chrec[chind].gh53 = chrec[chind].gh54 = float('nan')
+            chrec[chind].gh61 = chrec[chind].gh62 = chrec[chind].gh63 = chrec[chind].gh64 = float('nan')
+            chrec[chind].gh71 = chrec[chind].gh72 = chrec[chind].gh73 = chrec[chind].gh74 = float('nan')
+            chrec[chind].gh81 = chrec[chind].gh82 = chrec[chind].gh83 = chrec[chind].gh84 = float('nan')
+            chrec[chind].gh91 = chrec[chind].gh92 = chrec[chind].gh93 = chrec[chind].gh94 = float('nan')
+            chrec[chind].gh101 = chrec[chind].gh102 = chrec[chind].gh103 = chrec[chind].gh104 = float('nan')
+            chrec[chind].gh111 = chrec[chind].gh112 = chrec[chind].gh113 = chrec[chind].gh114 = float('nan')
+            chrec[chind].gh121 = chrec[chind].gh122 = chrec[chind].gh123 = chrec[chind].gh124 = float('nan')
+            chrec[chind].gh131 = chrec[chind].gh132 = chrec[chind].gh133 = chrec[chind].gh134 = float('nan')
+            chrec[chind].gh141 = chrec[chind].gh142 = chrec[chind].gh143 = chrec[chind].gh144 = float('nan')
+            chrec[chind].gh151 = chrec[chind].gh152 = chrec[chind].gh153 = chrec[chind].gh154 = float('nan')
+            chrec[chind].wt1 = chrec[chind].wt2 = chrec[chind].wt3 = chrec[chind].wt4 = float('nan') 
+            chrec[chind].chi1 = chrec[chind].chi2 = chrec[chind].chi3 = chrec[chind].chi4 = float('nan')             
+            parspertrace = 22
+            if ch.nactive == 0: continue
+
+            try: mod, bp = ch.mpfitter() # Full fit
+            except: ipdb.set_trace()
+
+            good = np.where(ch.chi < 3.5)
+            bestchi = ch.chi[:]
+            bestweight = ch.weight[:]
+            bestresid = ch.resid[:,:]
+            bestpar = bp[:]
+            bestmod = mod[:]
+            bestgood = good[0][:]
+
+            newoffset = offset
+            niter = 0
+            offsets = np.array([0.0,0.05,-0.05])#,0.1,-0.1,0.15,-0.15,0.2,-0.2,0.25,-0.25])#,0.75,-0.75,1,-1,1.25,-1.25,1.5,-1.5,1.75,-1.75,2,-2,2.25,-2.25,2.5,-2.5])
+            maxiter = len(offsets)
+            triedneighbor=False
+
+            while len(bestgood) != ch.nactive and niter < maxiter: 
+                if len(bestgood) == 0 or triedneighbor:
+                    # none were good, try different offset
+                    newoffset = offsets[niter] + offset
+                    ch = FourChunk(spectrum, Ord, Pix, dpix, offset=newoffset)
+                    print 'No traces were ok, trying offset of ' + str(newoffset)
+                    niter += 1
+                elif len(bestgood) < ch.nactive:
+                    newoffset += np.mean(ch.initpar[1+bestgood*parspertrace] - bp[1+bestgood*parspertrace])
+                    print 'Using average of good trace offset of ' + str(newoffset)
+                    ch = FourChunk(spectrum, Ord, Pix, dpix, offset=newoffset)        
+                    triedneighbor=True
+                mod, bp = ch.mpfitter() # Full fit
+                good = np.where(ch.chi < 3.5)
+                if np.sum(ch.chi) < np.sum(bestchi):
+                    bestchi = ch.chi[:]
+                    bestweight = ch.weight[:]
+                    bestresid = ch.resid[:,:]
+                    bestpar = bp[:]
+                    bestmod = mod[:]
+                    bestgood = good[0][:]
+
+            ch.chi = bestchi[:]
+            ch.weight = bestweight[:]
+            ch.resid = bestresid[:,:]
+            bp = bestpar[:]
+            mod = bestmod[:]
+
+
+            tel = 0
+            for ii in range(ch.ntel):
+
+                if not ch.active[ii]: continue
+
+                exec("chrec[chind].z%s      = bp[0 + tel*parspertrace]" % (ii+1))
+                exec("chrec[chind].w0%s     = bp[1 + tel*parspertrace]" % (ii+1))
+                exec("chrec[chind].dwdx%s   = bp[2 + tel*parspertrace]" % (ii+1))
+                exec("chrec[chind].dw2dx2%s = bp[3 + tel*parspertrace]" % (ii+1))
+                exec("chrec[chind].cts%s    = bp[4 + tel*parspertrace]" % (ii+1))
+                exec("chrec[chind].slope%s  = bp[5 + tel*parspertrace]" % (ii+1))
+                exec("chrec[chind].sigma%s  = bp[6 + tel*parspertrace]" % (ii+1))
+                for jj in range(parspertrace-7): exec("chrec[chind].gh%s%s  = bp[7 + jj + tel*parspertrace]" % (jj+1,ii+1))
+                exec("chrec[chind].wt%s     = ch.weight[tel]" % (ii+1))
+                exec("chrec[chind].chi%s    = ch.chi[tel]" % (ii+1))
+                tel+=1
+                
+            if plot:
+                col = ['r', 'g', 'b', 'orange']
+                
+                tel = 0
+                xmin = np.inf
+                xmax = -np.inf
+                for ii in range(ch.ntel):
+                    if not ch.active[ii]: continue
+                    wav = bp[1+tel*parspertrace] + bp[2+tel*parspertrace]*ch.xchunk + bp[3+tel*parspertrace]*ch.xchunk**2
+                    pl.plot(wav, ch.obchunk[ii, :], '.', color=col[ii])
+                    pl.plot(wav, mod[tel, :], color=col[ii])
+                    pl.plot(wav, ch.resid[tel, :]+0.6*mod.flatten().min(), '.', color=col[ii])
+                    tel+=1
+                    if wav.min() < xmin: xmin = wav.min() 
+                    if wav.max() > xmax: xmax = wav.max()
+
+                pl.xlabel('Wavelength [Ang]')
+                pl.ylabel('Flux [cts/pixel]')
+                pl.xlim((xmin, xmax))
+                pl.savefig(os.path.splitext(obsname)[0] + '.' + str(chunk).zfill(3) + '.png')
+                pl.close()
+                chunk += 1
+            #charr[j, i] = ch
+            if printit:
+                print 'chi^2 = ', ch.chi
+                if len(np.where(np.isnan(ch.chi))[0]) != 0: ipdb.set_trace()
+                end = timer()
+                print 'wavelength offset: ', (ch.initpar[1+bestgood*parspertrace] - bp[1+bestgood*parspertrace] + newoffset)
+                print 'Chunk time: ', (end-chstart), 'seconds'
+
+            end = timer()
+    end = timer()
+
+    spectrum.h.close()
+    print 'Total time: ', (end-start)/60., 'minutes'
+    return chrec
+
+'''
+def getparr(charr, plot=False):
+    sh = charr.shape
+    if len(sh) < 2: ipdb.set_trace()
+    nc = sh[0]
+    nord = sh[1]
+    npar = len(charr[0,0].par)
+    pararr = np.empty((nc,nord,npar+4), dtype=float)
+    nxip = len(charr[0,0].newip)
+    iparr = np.zeros((nxip, nc, nord))
+    for i in range(nc):
+        for j in range(nord):
+            iparr[:,i,j] = charr[i,j].newip
+            if plot: pl.plot(charr[i,j].newip)
+            pararr[i,j,:] = np.append(charr[i,j].par, charr[i,j].chiarr)
+    if plot: pl.show()       
+    return pararr, iparr
+
+def getpararray(obsname):
+
+    night = obsname.split('.')[0]
+    ofile = getpath(night=night,data=True) + '/' + obsname
+    test = np.load(ofile[0])
+    sh = test.shape
+    parr = np.zeros((len(ofile), sh[0], sh[1], sh[2]))
+    for i, ffile in enumerate(ofile):
+        p = np.load(ffile)
+        parr[i, :, :, :] = p
+    return parr
+'''
+
+def getpath(night=''):
+    hostname = socket.gethostname()
+    if hostname == 'Main':
+        return '/Data/kiwispec-proc/' + night
+    elif hostname == 'jjohnson-mac':
+        return '/Users/johnjohn/Dropbox/research/dopcode_new/MINERVA_data/'
+    else:
+        return '/n/home12/jeastman/minerva/data/'
+#
+#        print 'hostname ' + hostname + ') not recognized; exiting'
+#        sys.exit()
+
+def globgrind(globobs, bstar=False, returnfile=False, printit=False,plot=False,redo=False):
+    files = glob(globobs)
+    ofarr = [] # object f? array?
+
+    for i, ffile in enumerate(files):
+
+        ofile = os.path.splitext(ffile)[0] + '.chrec15.npy'
+
+        firsttime = False
+
+        # make it thread safe
+        if not os.path.exists(ofile):
+            open(ofile, 'a').close()
+            firsttime = True
+
+        h = fits.open(ffile)
+
+        # if the iodine cell is not in, just fit the star without iodine
+        juststar = h[0].header['I2POSAS'] != 'in'
+
+        ofarr.append(ofile)
+
+        if not returnfile:
+            # if the user requested to redo it, it's the first time, or there's a stale empty file, run the fit
+            st = os.stat(ofile)
+
+            if redo or firsttime or (((time.time() - st.st_mtime) > 1800) and (st.st_size == 0.0)):
+                chrec = grind(ffile, bstar=bstar, juststar=juststar, printit=printit, plot=plot)
+                if chrec != None: 
+                    np.save(ofile,chrec)
+                    print ofile, h[0].header['I2POSAS']
+    return ofarr
+
+def globgrindall(shuffle=False, plot=False):
+    datadirs = glob(getpath() + '*')
+    if shuffle: random.shuffle(datadirs)
+    for datadir in datadirs:
+#        ofarr = globgrind(datadir + '/*daytimeSky*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
+#        ofarr = globgrind(datadir + '/*HD*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
+#        ofarr = globgrind(datadir + '/*HR*.proc.fits', bstar=True, returnfile=False, printit=True, plot=False)
+
+        ofarr = globgrind(datadir + '/*HD122064*.proc.fits', bstar=False, returnfile=False, printit=True, plot=plot)
+#        ofarr = globgrind(datadir + '/*HD185144*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
+#        ofarr = globgrind(datadir + '/*daytimeSky*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
+
+ofarr = globgrind('/Data/kiwispec-proc/n20160212/n20160212.HD191408A.0017.proc.fits',bstar=False,returnfile=False,printit=True,plot=False)
+
+#globgrind('../../data/n20160606/n20160606.HD122064.0015.proc.fits',bstar=False, returnfile=False, printit=True, plot=True)
+#ipdb.set_trace()
+
+# this is for generating the initial wavelength solution guess
+#globgrind('../../data/n20160612/n20160612.HR5511.0018.proc.fits',bstar=True, returnfile=False, printit=True, plot=True, redo=True)
+#ipdb.set_trace()
+
+
+
+globgrindall(shuffle=True, plot=True)
+ipdb.set_trace()
+
+
+
+'''
+# a quality set of daytime sky spectra
+globobs = getpath(night='n20160305') + '/n20160305.daytimeSky.008*.proc.fits'
+ofarr = globgrind(globobs, bstar=False, returnfile=False, printit=True, plot=True)
+ipdb.set_trace()
+
+# a quality spectrum of HD9407
+globobs = getpath(night='n20160505') + '/n20160505.HD*.proc.fits'
+ofarr = globgrind(globobs, bstar=False, returnfile=False, printit=True, plot=False)
+ipdb.set_trace()
+
+# poor quality spectra (missing telescopes, etc)
+globobs = getpath(night='n20160504') + '/n20160504.HD*.proc.fits'
+ofarr = globgrind(globobs, bstar=False, returnfile=False, printit=True, plot=True)
+ipdb.set_trace()
+
+# mixed quality B star spectra
+globobs = getpath(night='n20160504') + '/n20160504.HR*.proc.fits'
+ofarr = globgrind(globobs, bstar=True, returnfile=False, printit=True, plot=True)
+ipdb.set_trace()
+'''
+
+#obsname = getpath(night='n20160305') + '/n20160305.daytimeSky.0065.proc.fits'
+#chrec = grind(obsname, plot=False, printit=True)
+#parr, iparr = getparr(charr) #This no longer needed with CHREC variable
+
+
+
+
+ipdb.set_trace()
+parray = getpararray(ofarr)
+#######################
+
+ipdb.set_trace()
+
+#gfile = getpath(night='n20160323') + '/n20160323.HR4828.00*.proc.fits'
+#globobs = 'n20160323.HR4828.00*.proc.fits'
+globobs = 'n20160410.HR5511.00*.proc.fits'
+
+ofarr = globgrind(globobs, bstar=True, returnfile=False)
+parray = getpararray(ofarr)
+
+wr = (parray[:,:,:,1]- np.median(parray[:,:,:,1], axis=0))
+sh = wr.shape
+wr = wr.reshape((sh[0], sh[1]*sh[2]))
+medwr = np.median(wr, axis=1)
+#pl.plot(medwr, 'o')
+g = glob(globobs)
+
+for i, ff in enumerate(g):
+    h = fits.open(ff)
+    this = Time(h[0].header['DATE-OBS'])
+    if i == 0:
+        t = this.jd
+        temp = float(h[0].header['TEMPD2'])
+    else:
+        t = np.append(t, this.jd)
+        temp = np.append(temp, float(h[0].header['TEMPD2']))
+    h.close()
+
+coef = np.polyfit(t-t.min(), medwr/5500.*3e8, 1)
+fit = np.polyval(coef, t-t.min())
+pl.plot((t-t.min())*24, medwr/5500.*3e8, 'o')
+pl.plot((t-t.min())*24, fit)
+pl.ylabel('Wavelength Shift [m/s]')
+pl.xlabel('Time [hrs]')
+pl.show()
+
+#pl.plot(temp, medwr/5500.*3e8, 'o')
+pl.plot(t-t.min(), temp, 'o')
+#pl.xlabel('Temperature [degrees C]')
+#pl.ylabel('Wavelength Shift [m/s]')
+pl.xlabel('Time')
+pl.ylabel('Temperature [degrees C]')
+
+pl.show()
+
+#charr = grind(ffile, bstar=True, plot=True, printit=True)
+#parr, iparr = getparr(charr)
+#pl.plot(parr[:,:,1].T.flatten(), parr[:,:,14].T.flatten(), '.')
+#pl.ylim((1,3))
+#pl.show()
+
+
+#ffile = getpath(night='n20160323') + '/n20160323.HR4828.0020.proc.fits'
+obsname = 'n20160305.daytimeSky.0065.proc.fits' #iodine
+#ffile = getpath(night='n20160305') + '/n20160305.daytimeSky.0069.proc.fits'
+wls = np.load('templates/MC_bstar_wls.air.npy')
+
+ffile = getpath(night='n20160305') + '/'+obsname
+h = fits.open(ffile)
+lpix = 1400
+dpix = 100
+rpix = lpix + dpix
+Ord = 3
+w0 = wls[lpix, Ord]
+dw = wls[lpix+1, Ord] - w0
+wguess = np.array([w0, dw])
+#ch = FourChunk(ffile, Ord, lpix, dpix, bstar=False, juststar=True, fixip=False)
+ch = FourChunk(obsname, Ord, lpix, dpix, fixip=False)
+
+#for i in range(len(ch.initpar)):
+#    print 'Par', i, 'value', ch.initpar[i]
+
+col = ['b', 'g', 'y', 'r']
+#mod = ch.model(ch.initpar)
+mod, bp = ch.mpfitter()
+wav = bp[1] + bp[2]*ch.xchunk + bp[3]*ch.xchunk**2
+
+for i in range(4): 
+    woff = bp[3]*i
+    pl.plot(wav-woff, ch.obchunk[i, :], col[i]+'.')
+    pl.plot(wav-woff, mod[i, :], col[i])
+    pl.plot(wav-woff, ch.resid[i, :]+0.6*mod.flatten().min(), col[i]+'.')
+pl.xlabel('Wavelength [Ang]')
+pl.ylabel('Flux [cts/pixel]')
+pl.show()
+
+#print h[0].data[:, 13, 500:600].shape
+#h.close()
+
