@@ -730,7 +730,7 @@ def globgrind(globobs, bstar=False, returnfile=False, printit=False,plot=False,r
 
     for i, ffile in enumerate(files):
 
-        ofile = os.path.splitext(ffile)[0] + '.chrec15.npy'
+        ofile = os.path.splitext(ffile)[0] + '.chrec14.npy'
 
         firsttime = False
 

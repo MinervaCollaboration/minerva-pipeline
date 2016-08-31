@@ -44,7 +44,7 @@ def ghfunc_old(x,p,par,oldwidth,herm_arr,pow_arr,zarr,normarr):
 #
 
 def ghfunc(x,par,param={}):
-    amp = [1.0,par[1:-1]]
+    amp = fan(np.append(1.0,np.array(par[1:-1])),len(x),transpose=True)
 
     # if the width has changed (not equal to par[0]) or param has not been
     # initialized, we need to (re)calculate param
@@ -54,36 +54,36 @@ def ghfunc(x,par,param={}):
     except:
         set_param(x,par,param)
 
-    ipro = np.sum(amp*param['p'],axis=1)
+    ipro = np.sum(amp*param['p'],axis=0)
     return ipro/scipy.integrate.simps(ipro, x=x)
 
 
 def set_param(x,par,param={}):#herm_arr,pow_arr,zarr,normarr,width=25.):
 
+    nx = len(x)
+    # number of GH polynomials to compute
+    # the first element is the gaussian width, rest are GH polynomial amplitudes
+    n = len(par)-1 
+
     # param not set, calculate it
     if len(param) == 0:
-        nx = len(x)
-
-        # number of GH polynomials to compute
-        # the first element is the gaussian width, rest are GH polynomial amplitudes
-        n = len(par)-1 
-
 
         param['coeffs'] = make_herm(n-1) 
         pow = np.arange(n)
         param['powers'] = fan(pow, nx,transpose=True)
         xarr = fan(x,n)
-        param['zarr'] = xarr**coeffs['powers']
+        param['zarr'] = xarr**param['powers']
         norm = 1.0/np.sqrt(2.0**pow * np.sqrt(np.pi) * scipy.misc.factorial(pow))
         param['normarr'] = fan(norm,nx,transpose=True) 
 
     param['width'] = par[0]
-    beta = np.zeros(nx, dtype=np.float64) + width
+    beta = np.zeros(nx, dtype=np.float64) + param['width']
     betarr = fan(beta,n)**param['powers']
     gauss = np.exp(-(x * beta)**2/2.0)
     gaussarr = fan(gauss,n)
     t = np.dot(param['coeffs'],(param['zarr'] * betarr))
-    param['p'] = param['nornarr'] * gaussarr * t
+
+    param['p'] = param['normarr'] * gaussarr * t
 
     return param
 
