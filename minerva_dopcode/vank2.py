@@ -17,9 +17,9 @@ import allantools
 import socket
 
 
-exten = '9'
+exten = '14'
 
-def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
+def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
 
     c = 299792458.0
 
@@ -56,7 +56,6 @@ def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
         chrec = np.load(filename)
         fitsname = os.path.splitext(os.path.splitext(filename)[0])[0] + '.fits'
         h = pyfits.open(fitsname,mode='update')
-#        h = fits.open(fitsname)
         
 #        # reject chunks with bad DSST (Step 1)
 #        bad = np.where(chrec['wt' + str(i)] == 0)
@@ -77,6 +76,10 @@ def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
             bad = np.where(chrec['chi' + str(i)] <= 0.3)
             chrec['z' + str(i)][bad] = np.nan
 
+            # bad fits will have bad chi^2
+            bad = np.where(chrec['chi' + str(i)] >= 5)
+            chrec['z' + str(i)][bad] = np.nan
+
             # very noisy data can find great fits
             bad = np.where((chrec['alpha' + str(i)] <= -0.95) | (chrec['alpha' + str(i)] >= 0.95))
             chrec['z' + str(i)][bad] = np.nan
@@ -86,7 +89,7 @@ def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
             chrec['z' + str(i)][bad] = np.nan
 
             # reject chunks with the lowest DSST weight (Step 3) or bad weights (Step 1)
-            lowweight = np.percentile(chrec['wt' + str(i)],weightthresh)
+            lowweight = np.nanpercentile(chrec['wt' + str(i)],weightthresh)
             bad = np.where((chrec['wt' + str(i)] <= lowweight) | (chrec['wt' + str(i)] == 0))
             chrec['z' + str(i)][bad] = np.nan
 
@@ -128,10 +131,15 @@ def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
 #            active = np.append(active ,h[0].header['FAUSTAT' + str(i)] == 'GUIDING')
             if h[0].header['FAUSTAT' + str(i)] == 'GUIDING' or 'daytimeSky' in h[0].header['OBJECT' + str(i)]:
 
+                rvs = c*((1.0+chrec['z' + str(i)])*(1.0+zb)-1.0)
+
+                # if all chunks are bad, skip it
+                if len(np.where(np.isnan(rvs))[0]) == len(rvs): 
+                    nobs-=1
+                    continue
+
                 jdutcs = np.append(jdutcs,midflux)
                 telescope = np.append(telescope,i)
-
-                rvs = c*((1.0+chrec['z' + str(i)])*(1.0+zb)-1.0)
 
                 if len(vji) == 0: vji = rvs
                 else: vji = np.vstack((vji,rvs))
@@ -140,7 +148,7 @@ def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
                 else: wji = np.vstack((wji,chrec['wt' + str(i)]))
             
                 if len(chiji) == 0: chiji = chrec['chi' + str(i)]
-                else: chiji = np.vstack((chiji,chrec['wt' + str(i)]))
+                else: chiji = np.vstack((chiji,chrec['chi' + str(i)]))
 
                 if len(ctsji) == 0: ctsji = chrec['cts' + str(i)]
                 else: ctsji = np.vstack((ctsji,chrec['cts' + str(i)]))
@@ -167,15 +175,13 @@ def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
     ipsigmaij = np.transpose(ipsigmaji)
     slopeij = np.transpose(slopeji)
     
-    snr = np.sqrt(np.sum(ctsij,axis=0))
+    snr = np.sqrt(np.nansum(ctsij,axis=0))
 
     # reject chunks with the worst fits (step 4)
     chimed = np.nanmedian(chiij,axis=1)
-    hichi = np.percentile(chimed,chithresh)
+    hichi = np.nanpercentile(chimed,100.0-chithresh)
     bad = np.where(chimed >= hichi)
     vij[bad,:] = np.nan  
-
-    ipdb.set_trace()
 
     # adjust all chunks to have the same RV zero points (step 5)
     # subtract the mean velocity of all observations from each chunk
@@ -192,9 +198,9 @@ def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
     # reject the highest sigmai (step 7)
     bad = np.where(sigmai == 0.0)
     sigmai[bad] = np.inf
-    hisigma = np.percentile(sigmai,sigmaithresh)
+    hisigma = np.nanpercentile(sigmai,100.0-sigmaithresh)
     bad = np.where(sigmai >= hisigma)
-    sigmai[ bad] = np.inf
+    sigmai[bad] = np.inf
 
     # compute rj (eq 2.7)
     rj = np.nanmedian(np.abs(Deltaij)*np.transpose(np.tile(sigmai,(nobs,1))),axis=0) # eq 2.7
@@ -212,7 +218,6 @@ def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
     print objname + " RMS: " + str(np.nanstd(vj))
     
     # plot scatter vs time
-#    plt.plot(jdutcs-2457389,vj,'bo')
     colors = ['','r','g','b','orange']
     for i in range(1,ntel+1):
         match = np.where(telescope == i)
@@ -290,6 +295,10 @@ def vank(objname, weightthresh=10.0,chithresh=90.0, sigmaithresh=10.0):
         match = np.where(telescope == tel)
         for chunk in range(np.shape(ipsigmaij)[0]):
             plt.plot(chunk,np.nanmedian(ipsigmaij[chunk,match]),'o',color=colors[tel])
+            sigmawav.append()
+            sigmaall.append(np.nanmedian(ipsigmaij[chunk,match]))
+            sigmatel.append(tel)
+            
     plt.title(objname)
     plt.xlabel('Chunk number')
     plt.ylabel('sigma')

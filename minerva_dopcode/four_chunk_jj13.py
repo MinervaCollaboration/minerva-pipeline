@@ -14,6 +14,7 @@ from astropy.io import fits
 import numpy.random as rand
 from scipy.optimize import curve_fit
 from scipy.io.idl import readsav
+from scipy.integrate import simps
 import mpyfit #This requires a special installation
 import emcee
 from timeit import default_timer as timer
@@ -267,7 +268,7 @@ class FourChunk(object):
         xstep = 1.0/self.oversamp
         self.dxip = xstep
         self.initmod = self.model(self.initpar)
-       
+
     def __call__(self, par): # For EMCEE
         model = self.model(par)
         if model == None: return 0.0 # zero likelihood
@@ -303,6 +304,19 @@ class FourChunk(object):
             ip = numconv(sknorm, self.ip) # Convolve Zemax IP with local broadening
             ip = ip / ip.sum() / self.oversamp # Normalize convolved IP
             
+            '''
+            # force centering IP, try to break w0-alpha degeneracy, Sharon X. Wang July 2016
+            center_pos = simps(self.xip*ip, dx=1.0 / self.oversamp) / simps(ip, dx=1.0 / self.oversamp)
+            pad_len = 10
+            ip_ext = np.append(np.append(np.zeros(pad_len), ip), np.zeros(pad_len))
+            xip_pad = np.arange(self.xip[-1] + 1.0 / self.oversamp,
+                                self.xip[-1] + 1.0 / self.oversamp * (pad_len + 0.9), 1.0 / self.oversamp)
+            xip_ext = np.append(np.append(-xip_pad[::-1], self.xip), xip_pad)
+            xip_ext -= center_pos  # shift IP to center
+            shift_ip_func = interp1d(xip_ext, ip_ext)
+            ip = shift_ip_func(self.xip)  # re-centered!
+            '''
+
             if self.bstar:
                 tempover = 1.0
             else:
@@ -506,11 +520,16 @@ def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
 
             mod, bp = ch.mpfitter() # Full fit
             good = np.where(ch.chi < 3.5)
+            bestchi = ch.chi[:]
+            bestweight = ch.weight[:]
+            bestresid = ch.resid[:,:]
+            bestpar = bp[:]
+            bestmod = mod[:]
+
             newoffset = offset
             niter = 0
             offsets = np.array([0.25,-0.25,0.5,-0.5,0.75,-0.75,1,-1,1.25,-1.25,1.5,-1.5,1.75,-1.75,2,-2,2.25,-2.25,2.5,-2.5])
             maxiter = len(offsets)
-            bestch = ch
             triedneighbor=False
 
             while len(good[0]) != ch.nactive and niter < maxiter: 
@@ -527,10 +546,19 @@ def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
                     triedneighbor=True
                 mod, bp = ch.mpfitter() # Full fit
                 good = np.where(ch.chi < 3.5)
-                better = np.where(ch.chi < bestch.chi)
-                if len(better[0]) >= 2:
-                    bestch = ch
-            ch = bestch
+                if np.sum(ch.chi) < np.sum(bestchi):
+                    bestchi = ch.chi[:]
+                    bestweight = ch.weight[:]
+                    bestresid = ch.resid[:,:]
+                    bestpar = bp[:]
+                    bestmod = mod[:]
+
+            ch.chi = bestchi[:]
+            ch.weight = bestweight[:]
+            ch.resid = bestresid[:,:]
+            bp = bestpar[:]
+            mod = bestmod[:]
+
 
             tel = 0
             for ii in range(ch.ntel):
@@ -577,7 +605,6 @@ def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
                 end = timer()
                 print 'wavelength offset: ', (ch.initpar[1+good[0]*parspertrace] - bp[1+good[0]*parspertrace])
                 print 'Chunk time: ', (end-chstart), 'seconds'
-                
 
             end = timer()
     end = timer()

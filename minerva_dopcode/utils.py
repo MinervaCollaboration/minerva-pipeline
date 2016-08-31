@@ -22,6 +22,32 @@ import glob
 from photutils import aperture_photometry, CircularAperture, CircularAnnulus
 import pyfits
 
+# creates a wavelength solution in the format expected for grind
+# given a chunk record file of solved chunks
+# wls = utils.mkwls('../../data/n20160612/n20160612.HR5511.0018.proc.chrec14.npy')
+def mkwls(chrecfile):
+    chrec = np.load(chrecfile)
+
+    dpix = chrec['pixel'][1] - chrec['pixel'][0]
+    xchunk = np.arange(dpix) - dpix/2
+
+    wls= np.ndarray(shape=(2048,28),dtype=float) + np.nan
+    for chunk in range(len(chrec)):
+        
+        Ord = chrec['order'][chunk]
+        Pix = chrec['pixel'][chunk]
+
+        w0 = chrec['w04'][chunk]
+        dwdx = chrec['dwdx4'][chunk]
+
+        try: dw2dx2 = chrec['dw2dx24'][chunk]
+        except: dw2dx2 = 0.0
+
+        wls[Pix:Pix+dpix,Ord] = w0 + dwdx*xchunk + dw2dx2*xchunk**2
+
+    return wls
+
+
 def addzb(fitsname, redo=False):
     telescopes = ['1','2','3','4']
     night = (fitsname.split('/'))[3]
@@ -237,6 +263,8 @@ def get_ip(ipdict, wmin, wmax, orderin, oversamp=4.0):
     if (oversamp != 4):
         xip_half = np.arange(0, max(xip), 1/oversamp)
         xip_new = np.append(-xip_half[1:][::-1], xip_half)
+
+        print 'interpolating IP'
         interp_ip = interp1d(xip, ip)
         ip_new = interp_ip(xip_new)
         return xip_new, ip_new
@@ -360,7 +388,7 @@ def rebin(wold, sold, wnew, z=0):
     wfine += dsub/2.0 # Center each subgrid on the pixel
     ifunction = interp1d(wold*(1+z), sold) #Create spline-interpolation function
     sfine = ifunction(wfine) #Calculate interpolated spectrum 
-    sfine_blocks = sfine.reshape([Npixels,Nsub]) #Prepare for integration
+    sfine_blocks = sfine.reshape([Npixels,int(Nsub)]) #Prepare for integration
     snew = np.sum(sfine_blocks, axis=1)/Nsub #Efficient, vector-based integration! 
     return snew
 
