@@ -37,7 +37,43 @@ def gaussian(axis, sigma, center=0, height=1,bg_mean=0,bg_slope=0,power=2):
     gaussian = height*exp(-abs(axis-center)**power/(2*(abs(sigma)**power)))+bg_mean+bg_slope*(axis-center)
 #    print sigma, center, height, bg_mean,bg_slope,power
 #    print gaussian
-    return gaussian   
+    return gaussian
+    
+def gaussian_int(axis, sigma, center=0, height=1,bg_mean=0,bg_slope=0,power=2,pts_per_px=100):
+    """Returns gaussian output values for a given input array, sigma, center,
+       and height.  Center defaults to zero and height to 1.  Can also
+       tweak the exponent parameter if desired."""
+    dlt_axis = axis[1]-axis[0] ### assumes even spacing
+    axis_new = np.arange(axis[0]-dlt_axis/2,axis[-1]+dlt_axis/2,dlt_axis/pts_per_px)
+    gaussian_long = height*exp(-abs(axis_new-center)**power/(2*(abs(sigma)**power)))+bg_mean+bg_slope*(axis_new-center)
+    gaussian_int = np.sum(gaussian_long.reshape(len(axis),pts_per_px),axis=1)/pts_per_px
+    return gaussian_int
+    
+def gaussian_erf(axis, sigma, center=0, height=1,bg_mean=0,bg_slope=0,power=2):
+    """Returns gaussian output values for a given input array, sigma, center,
+       and height.  Center defaults to zero and height to 1.  Can also
+       tweak the exponent parameter if desired."""
+    dlt_axis = axis[1]-axis[0]
+    axis_new = np.arange(axis[0]-dlt_axis/2,axis[-1]+3*dlt_axis/2,dlt_axis)
+    z = ((axis_new-center)/sigma)**(power/2)
+    hmax = 1#height*np.sqrt(pi)/2
+    gauss_int_erf = hmax*sp.erf(z)
+    gaussian_int = np.ediff1d(gauss_int_erf)
+    print len(axis),len(axis_new),len(gauss_int_erf),len(gaussian_int)
+    return gaussian_int
+    
+def gauss_residual(params,xvals,zvals,invals):
+    """ Residual function for gaussian with constant background, for use with
+        lmfit.minimize()
+    """
+    sigma = params['sigma'].value
+    mn = params['mean'].value
+    hght = params['hght'].value
+    bg = params['bg'].value
+    power = params['power'].value
+    gauss = gaussian(xvals,sigma,center=mn,height=hght,bg_mean=bg,power=power)
+    residuals = (gauss-zvals)*np.sqrt(invals)
+    return residuals
 
 def sigma_clip(residuals,sigma=3,max_iters=1):
     """ My own sigma clipping since I don't like the astropy version.
@@ -163,9 +199,19 @@ def eval_polynomial_coeffs(xarr,poly_coeffs):
 def best_linear_gauss(axis,sig,mn,data,invar,power=2):
     """ Use linear chi^2 fitting to find height and background estimates
     """
+#    t1 = time.time()
     noise = np.diag(invar)
-    profile = np.vstack((gaussian(axis,sig,mn,1,power=power),np.ones(len(axis)))).T
+#    t2 = time.time()
+    profile = np.ones((len(axis),2))
+    profile[:,0] = gaussian(axis,sig,mn,1,power=power)
+#    profile = np.vstack((gaussian(axis,sig,mn,1,power=power),np.ones(len(axis)))).T
+#    t3 = time.time()    
     coeffs, chi = chi_fit(data, profile, noise)
+#    t4 = time.time()
+#    print("  % time noise = {}s".format((t2-t1)/(t4-t1)))
+#    print("  % time profile = {}s".format((t3-t2)/(t4-t1)))
+#    print("  % time chi = {}s".format((t4-t3)/(t4-t1)))
+#    time.sleep(2)
     return coeffs[0], coeffs[1]
 
 def best_mean(axis,sig,mn,hght,bg,data,invar,spread,power=2):
@@ -178,24 +224,25 @@ def best_mean(axis,sig,mn,hght,bg,data,invar,spread,power=2):
         """
         mn_rng = np.linspace(mn-spread,mn+spread,10)
         chis = np.zeros(len(mn_rng))
+        ### Find chi^2 at a range of means aroung the best guess
         for i in range(len(mn_rng)):        
             gguess = gaussian(axis,sig,mn_rng[i],hght,bg,power=power)
             chis[i] = sum((data-gguess)**2*invar)
+        ### Now take a subset of 5 points around the lowest chi^2 for fitting
         chi_min_inds =np.arange(-2,3)+np.argmin(chis)
         chi_min_inds = chi_min_inds[(chi_min_inds>=0)*(chi_min_inds<len(mn_rng))]
+        ### If 3 or less good points remain, can't fit - return guesses
         if len(chi_min_inds)<4:
-#            plt.plot(axis,gaussian(axis,sig,mn,hght,bg,power=power))
             return mn, spread
         else:
+            ### Otherwise, do
             poly_coeffs = np.polyfit(mn_rng[chi_min_inds],chis[chi_min_inds],2)
             bq = poly_coeffs[1]
             aq = poly_coeffs[0]
             best_mn = -bq/(2*aq)
-#            print sig, hght, bg, power
-#            plt.plot(axis,gaussian(axis,sig,best_mn,hght,bg,power=power))
             sigma = 1 #1 standard dev, 4 = 2 std devs
-            if not(aq>0):
-                aq = -aq
+            aq = abs(aq) ### Ensure positive
+            ### Find values sqrt(sigma) std devs to each side
             mn_p = (-bq + np.sqrt(4*aq*np.sqrt(sigma)))/(2*aq)
             mn_m = (-bq - np.sqrt(4*aq*np.sqrt(sigma)))/(2*aq)
             best_mn_std = abs(mn_p-mn_m)/2
@@ -204,13 +251,10 @@ def best_mean(axis,sig,mn,hght,bg,data,invar,spread,power=2):
     ###Coarse find
     ###Tradeoff with coarse sig - too small and initial guess is critical,
     ### too big and more susceptible to comsic ray influence
-#    plt.plot(axis,data)
     best_mn, best_mn_std = mn_find(axis,mn,spread)
     ###Fine find
     best_mn, best_mn_std = mn_find(axis,best_mn,best_mn_std)
-#    plt.show()
-#    plt.close()
-    ###Finer find
+    ###Finer find - doesn't seem to change final answer at all
 #    best_mn, best_mn_std = mn_find(axis,best_mn,best_mn_std/100)
     return best_mn, best_mn_std
     
@@ -937,3 +981,13 @@ def radial_quad_res(params,data,xarr):
     ### residuals
     residuals = data - radial_quad_fct(xarr,a,b,c,x0,y0)
     return residuals
+    
+def make_rarr(x,y,xc,yc,q=1,PA=0):
+    """ Makes 2D array with radius from center at each coordinate.
+    """
+    x_matrix = np.tile(x,(len(y),1))
+    y_matrix = np.tile(y,(len(x),1)).T
+    x_ell = (y_matrix-yc)*cos(PA) + (x_matrix-xc)*sin(PA)
+    y_ell = (x_matrix-xc)*cos(PA) - (y_matrix-yc)*sin(PA)
+    r_matrix = np.sqrt((x_ell)**2*q + (y_ell)**2/q)
+    return r_matrix

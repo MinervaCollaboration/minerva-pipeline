@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 #-*- coding: utf-8 -*-
 """
 Created on Wed Mar 23 14:32:46 2016
@@ -22,9 +23,10 @@ import glob
 from photutils import aperture_photometry, CircularAperture, CircularAnnulus
 import pyfits
 
-def addzb(fitsname, redo=False):
+def addzb(fitsname, redo=False, fau_dir=None):
     telescopes = ['1','2','3','4']
-    night = (fitsname.split('/'))[3]
+#    night = (fitsname.split('/'))[3]
+    night = (fitsname.split('/'))[-2]
 
     print 'beginning ' + fitsname
 
@@ -65,7 +67,10 @@ def addzb(fitsname, redo=False):
         except: rv = 0.0
 
         objname = h[0].header['OBJECT' + telescope]
-        faupath = '/Data/t' + telescope + '/' + night + '/' + night + '.T' + telescope + '.FAU.' + objname + '.????.fits'
+        if fau_dir is None:
+            faupath = '/Data/t' + telescope + '/' + night + '/' + night + '.T' + telescope + '.FAU.' + objname + '.????.fits'
+        else:
+            faupath = fau_dir + '/t' + telescope + '/' + night + '/' + night + '.T' + telescope + '.FAU.' + objname + '.????.fits'
         guideimages = glob.glob(faupath)
 
 #        if telescope == '2' and "HD62613" in fitsname: ipdb.set_trace()

@@ -6,6 +6,7 @@
 from __future__ import division
 import pyfits
 import os
+import sys
 #import math
 import time
 import numpy as np
@@ -28,10 +29,24 @@ import minerva_utils as utils
 t0 = time.time()
 
 ######## Import environmental variables #################
-data_dir = os.environ['MINERVA_DATA_DIR']
-redux_dir = os.environ['MINERVA_REDUX_DIR']
-sim_dir = os.environ['MINERVA_SIM_DIR']
+try:
+    data_dir = os.environ['MINERVA_DATA_DIR']
+except KeyError:
+    print("Must set MINERVA_DATA_DIR")
+    exit(0)
 
+try:
+    redux_dir = os.environ['MINERVA_REDUX_DIR']
+except KeyError:
+    print("Must set MINERVA_REDUX_DIR")
+    exit(0)
+    
+try:
+    sim_dir = os.environ['MINERVA_SIM_DIR']
+except KeyError:
+    print("Must set MINERVA_SIM_DIR")
+    exit(0)
+    
 #########################################################
 ########### Allow input arguments #######################
 #########################################################
@@ -175,8 +190,10 @@ else:
 ##############################
 #### Do optimal extraction ###
 ##############################
-spec, spec_invar, spec_mask, image_model = utils.extract_1D(ccd,trace_coeffs,i_coeffs=trace_intense_coeffs,s_coeffs=trace_sig_coeffs,p_coeffs=trace_pow_coeffs,readnoise=readnoise,gain=gain,return_model=True)
-
+spec, spec_invar, spec_mask, image_model = utils.extract_1D(ccd,trace_coeffs,i_coeffs=trace_intense_coeffs,s_coeffs=trace_sig_coeffs,p_coeffs=trace_pow_coeffs,readnoise=readnoise,gain=gain,return_model=True,verbose=True)
+### Evaluate fit
+chi2total = np.sum((image_model[image_model != 0]-ccd[image_model != 0])**2*(1/(ccd[image_model != 0]+readnoise**2)))/(np.size(ccd[image_model != 0])-actypix*num_fibers*3)
+print("Reduced chi^2 of ccd vs. model is {}".format(chi2total))
 
 ############################################################
 ######### Import wavelength calibration ####################        
@@ -267,8 +284,12 @@ if not args.nosave:
     hdulist.append(hdu4)
     if not os.path.isdir(os.path.join(redux_dir,savedate)):
         os.makedirs(os.path.join(redux_dir,savedate))
-    print os.path.join(redux_dir,savedate,savefile+'.proc.fits')
+#    print os.path.join(redux_dir,savedate,savefile+'.proc.fits')
     hdulist.writeto(os.path.join(redux_dir,savedate,savefile+'.proc.fits'),clobber=True)
+
+### Now add Jason Eastman's custom headers for barycentric corrections  
+import utils as dop_utils
+dop_utils.addzb(os.path.join(redux_dir,savedate,savefile+'.proc.fits'),fau_dir=data_dir)
 
 tf = time.time()
 print("Total extraction time = {}s".format(tf-t0))
