@@ -269,8 +269,8 @@ def get_iodine(iodine, wmin, wmax):
         wsub = w[(w > lw) & (w < (lw+dw))]
         npix = len(ssub)
         inds = np.argsort(ssub)
-        ww[i] = wsub[inds[npix*0.95]]
-        ss[i] = ssub[inds[npix*0.95]]
+        ww[i] = wsub[inds[int(npix*0.95)]]
+        ss[i] = ssub[inds[int(npix*0.95)]]
     par = np.polyfit(ww[:nwin-1], ss[:nwin-1], 1)
     polyf = np.poly1d(par)
     #pl.plot(w, s)
@@ -325,7 +325,7 @@ def numconv(y, kern):
 
     new /= kern.sum()
     nel = len(kern)+lenex*2
-    return new[nel/2.0:len(new)-nel/2.0+1.0]
+    return new[int(nel/2.0):int(len(new)-nel/2.0+1.0)]
     
 def rebin(wold, sold, wnew, z=0):
     """ Define the left and right limits of the first Wnew pixel. Keep in mind

@@ -1,8 +1,8 @@
-0# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 Created on Mon Mar 28 09:33:31 2016
 
-@author: johnjohn
+OA@author: johnjohn
 """
 import matplotlib
 matplotlib.use('Agg')
@@ -61,35 +61,39 @@ class Spectrum(object):
         for i in range(self.ntel):
             self.objname = np.append(self.objname,self.h[0].header['OBJECT' + str(i+1)])
 
-            try:
-                # try to get the barycentric redshift
-                self.zbc = np.append(self.zbc,float(self.h[0].header['BARYCOR' + str(i)]))
-            except:
-                # if the barycentric redshift not in the headers, calculate it
-                ra = self.h[0].header['TARGRA' + str(i+1)]
-                dec = self.h[0].header['TARGDEC' + str(i+1)]
+            if not 'daytimeSky' in self.objname[i]:
+                try:
+                    # try to get the barycentric redshift
+                    self.zbc = np.append(self.zbc,float(self.h[0].header['BARYCOR' + str(i)]))
+                except:
+                    # if the barycentric redshift not in the headers, calculate it
+                    ra = self.h[0].header['TARGRA' + str(i+1)]
+                    dec = self.h[0].header['TARGDEC' + str(i+1)]
 
-                # if keyword not populated, bu
-                if self.h[0].header['FLUXMID' + str(i+1)] == 'UNKNOWN':
-                    midflux = self.jd + self.h[0].header['EXPTIME']/2.0/86400.0
-                else:
-                    midflux = self.h[0].header['FLUXMID' + str(i+1)]
+                    # if keyword not populated, bu
+                    if self.h[0].header['FLUXMID' + str(i+1)] == 'UNKNOWN':
+                        midflux = self.jd + self.h[0].header['EXPTIME']/2.0/86400.0
+                    else:
+                        midflux = self.h[0].header['FLUXMID' + str(i+1)]
 
-                try: pmra = self.h[0].header['PMRA' + str(i+1)]
-                except: pmra = 0.0
-                try: pmdec = self.h[0].header['PMDEC' + str(i+1)]
-                except: pmdec = 0.0
-                try: parallax = self.h[0].header['PARLAX' + str(i+1)]
-                except: parallax = 0.0
-                try: rv = h[0].header['RV' + str(i+1)]
-                except: rv = 0.0
-                self.zbc = np.append(self.zbc,barycorr(midflux, ra, dec, pmra=pmra, pmdec=pmdec, parallax=parallax, rv=rv)/self.c)
+                    try: pmra = self.h[0].header['PMRA' + str(i+1)]
+                    except: pmra = 0.0
+                    try: pmdec = self.h[0].header['PMDEC' + str(i+1)]
+                    except: pmdec = 0.0
+                    try: parallax = self.h[0].header['PARLAX' + str(i+1)]
+                    except: parallax = 0.0
+                    try: rv = h[0].header['RV' + str(i+1)]
+                    except: rv = 0.0
+                    self.zbc = np.append(self.zbc,barycorr(midflux, ra, dec, pmra=pmra, pmdec=pmdec, parallax=parallax, rv=rv)/self.c)
 
-            try:
-                self.active = np.append(self.active, self.h[0].header['FAUSTAT' + str(i+1)] == 'GUIDING')
-            except:
-                print 'FAUSTAT' + str(i+1) + ' keyword not present'
-                self.active = np.append(self.active, "True")
+            if 'daytimeSky' in self.objname[i]:
+                self.active = np.append(self.active,True)
+            else:
+                try:
+                    self.active = np.append(self.active, self.h[0].header['FAUSTAT' + str(i+1)] == 'GUIDING')
+                except:
+                    print 'FAUSTAT' + str(i+1) + ' keyword not present'
+                    self.active = np.append(self.active, "True")
 
             if self.active[i]: self.nactive += 1
 
@@ -155,7 +159,9 @@ class FourChunk(object):
         self.c = spectrum.c
         self.nactive = spectrum.nactive
 
-        if self.nactive == 0: return
+        if self.nactive == 0: 
+            print 'no active spectra'
+            return
 
 #        ffile = obsname
 #        self.fits = ffile
@@ -178,6 +184,7 @@ class FourChunk(object):
         dw2g = 0.0
 
         if np.isnan(w0g) or np.isnan(dwg) or np.isnan(dw2g):
+            print 'w0g = ' + str(w0g) + ', dwg = ' + str(dwg) + ', dw2g = ' + str(dw2g)
             self.nactive = 0
             return
 
@@ -199,7 +206,7 @@ class FourChunk(object):
 
         try: self.wiod, self.siod  = get_iodine(spectrum.iodine, wmin, wmax)
         except:
-            # out of bounds
+            print 'iodine out of bounds'
             self.nactive = 0
             return
         
@@ -589,6 +596,9 @@ def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
     for i, Ord in enumerate(order):
         for j, Pix in enumerate(pixel):
 
+#            Ord = 15
+#            Pix = 1728
+
             chstart = timer()
             offset = 0.0
 
@@ -626,6 +636,7 @@ def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
             chrec[chind].wt1 = chrec[chind].wt2 = chrec[chind].wt3 = chrec[chind].wt4 = float('nan') 
             chrec[chind].chi1 = chrec[chind].chi2 = chrec[chind].chi3 = chrec[chind].chi4 = float('nan')             
             parspertrace = 22
+            
             if ch.nactive == 0: continue
 
             try: mod, bp = ch.mpfitter() # Full fit
@@ -650,14 +661,19 @@ def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
                     # none were good, try different offset
                     newoffset = offsets[niter] + offset
                     ch = FourChunk(spectrum, Ord, Pix, dpix, offset=newoffset)
+                    if ch.nactive == 0: continue
                     print 'No traces were ok, trying offset of ' + str(newoffset)
                     niter += 1
                 elif len(bestgood) < ch.nactive:
                     newoffset += np.mean(ch.initpar[1+bestgood*parspertrace] - bp[1+bestgood*parspertrace])
                     print 'Using average of good trace offset of ' + str(newoffset)
                     ch = FourChunk(spectrum, Ord, Pix, dpix, offset=newoffset)        
+                    if ch.nactive == 0: continue
                     triedneighbor=True
-                mod, bp = ch.mpfitter() # Full fit
+
+                try: mod, bp = ch.mpfitter() # Full fit
+                except: break
+
                 good = np.where(ch.chi < 3.5)
                 if np.sum(ch.chi) < np.sum(bestchi):
                     bestchi = ch.chi[:]
@@ -666,6 +682,8 @@ def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
                     bestpar = bp[:]
                     bestmod = mod[:]
                     bestgood = good[0][:]
+
+            if ch.nactive == 0: continue
 
             ch.chi = bestchi[:]
             ch.weight = bestweight[:]
@@ -718,7 +736,8 @@ def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
                 print 'chi^2 = ', ch.chi
                 if len(np.where(np.isnan(ch.chi))[0]) != 0: ipdb.set_trace()
                 end = timer()
-                print 'wavelength offset: ', (ch.initpar[1+bestgood*parspertrace] - bp[1+bestgood*parspertrace] + newoffset)
+                try: print 'wavelength offset: ', (ch.initpar[1+bestgood*parspertrace] - bp[1+bestgood*parspertrace] + newoffset)
+                except: pass
                 print 'Chunk time: ', (end-chstart), 'seconds'
 
             end = timer()
@@ -797,7 +816,11 @@ def globgrind(globobs, bstar=False, returnfile=False, printit=False,plot=False,r
             # if the user requested to redo it, it's the first time, or there's a stale empty file, run the fit
             st = os.stat(ofile)
 
-            if redo or firsttime or (((time.time() - st.st_mtime) > 1800) and (st.st_size == 0.0)):
+            if redo or firsttime or (((time.time() - st.st_mtime) > 43200.0) and (st.st_size == 0.0)):
+                # recreate it, just in case
+                os.remove(ofile)
+                open(ofile, 'a').close()
+
                 chrec = grind(ffile, bstar=bstar, juststar=juststar, printit=printit, plot=plot)
                 if chrec != None: 
                     np.save(ofile,chrec)
@@ -812,11 +835,27 @@ def globgrindall(shuffle=False, plot=False):
 #        ofarr = globgrind(datadir + '/*HD*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
 #        ofarr = globgrind(datadir + '/*HR*.proc.fits', bstar=True, returnfile=False, printit=True, plot=False)
 
-        ofarr = globgrind(datadir + '/*HD122064*.proc.fits', bstar=False, returnfile=False, printit=True, plot=plot)
-#        ofarr = globgrind(datadir + '/*HD185144*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
-#        ofarr = globgrind(datadir + '/*daytimeSky*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
+#        ofarr = globgrind(datadir + '/*HD122064*.proc.fits', bstar=False, returnfile=False, printit=True, plot=plot)
+#        ofarr = globgrind(datadir + '/*HD185144*.proc.fits', bstar=False, returnfile=False, printit=True, plot=plot)
+        ofarr = globgrind(datadir + '/*daytimeSky*.proc.fits', bstar=False, returnfile=False, printit=True, plot=plot)
 
-ofarr = globgrind('/Data/kiwispec-proc/n20160212/n20160212.HD191408A.0017.proc.fits',bstar=False,returnfile=False,printit=True,plot=False)
+
+
+#ofarr = globgrind('/Data/kiwispec-proc/n20160212/n20160212.HD191408A.0017.proc.fits',bstar=False,returnfile=False,printit=True,plot=False)
+
+#globgrind('../../data/n20160606/n20160606.HD122064.0015.proc.fits',bstar=False, returnfile=False, printit=True, plot=True)
+#ipdb.set_trace()
+
+# for testing
+#globgrind('../../data/n20160626/n20160626.daytimeSkyExpmeter.0047.proc.fits',bstar=False,returnfile=False, printit=True,plot=True, redo=True)
+#ipdb.set_trace()
+
+# for testing
+#globgrind('../../data/n20160426/n20160426.daytimeSkyExpmeter.0076.proc.fits',bstar=False,returnfile=False, printit=True,plot=False, redo=True)
+#ipdb.set_trace()
+
+#globgrind('/n/home12/jeastman/minerva/data/n20160529/n20160529.daytimeSkyExpmeter.0052.proc.fits',bstar=False,returnfile=False, printit=True,plot=False, redo=True)
+#ipdb.set_trace()
 
 #globgrind('../../data/n20160606/n20160606.HD122064.0015.proc.fits',bstar=False, returnfile=False, printit=True, plot=True)
 #ipdb.set_trace()
@@ -827,7 +866,7 @@ ofarr = globgrind('/Data/kiwispec-proc/n20160212/n20160212.HD191408A.0017.proc.f
 
 
 
-globgrindall(shuffle=True, plot=True)
+globgrindall(shuffle=True, plot=False)
 ipdb.set_trace()
 
 
