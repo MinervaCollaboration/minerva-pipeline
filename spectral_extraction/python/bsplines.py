@@ -303,6 +303,8 @@ def spline_2D_radial(img_matrix,invar_matrix,r_breakpoints,params,theta_orders=[
     ### Given h, v arrays and breakpoints, find splines along both directions
     ### Use the h and v splines to construct a 2D profile matrix for linear fitting
     profile_matrix = build_radial_profile(r_arr,theta_arr,r_breakpoints,theta_orders,dim1,order=order,fit_bg=fit_bg)
+#    if fit_bg:
+#        profile_matrix = np.hstack((profile_matrix,np.ones((dim1,1))))
 #    print profile_matrix[:,0]
 #    print profile_matrix[:,-1]
 #    plt.imshow(profile_matrix,interpolation='none')
@@ -409,7 +411,7 @@ def spline_residuals(params,data,invar,breakpoints,theta_orders=[0]):
     residuals = np.ravel(residuals)
     return residuals
     
-def spline_poly_residuals(params,data,invar,breakpoints,x_coords,spline_coeffs,theta_orders=[0],cpad=5):
+def spline_poly_residuals(params,data,invar,breakpoints,x_coords,spline_coeffs,theta_orders=[0],cpad=5,fit_bg=False):
     """ Specific function (maybe can generalize later?) for fitting elliptical
         parameters for a spline function, with quadratic variation over an
         order.
@@ -454,6 +456,10 @@ def spline_poly_residuals(params,data,invar,breakpoints,x_coords,spline_coeffs,t
 #        print r_arr
         profile_base = build_radial_profile(r_arr,theta_arr,breakpoints,theta_orders,dim1,order=4)
         profile_matrix = np.hstack((profile_base,profile_base*x_coord,profile_base*(x_coord**2)))
+        if fit_bg:
+            bg_base = np.zeros((len1,len(x_coords)))
+            bg_base[:,i] = 1
+            profile_matrix = np.hstack((profile_matrix,bg_base)) 
 #        print profile_matrix[5]
         spline_fit = np.dot(profile_matrix,spline_coeffs)
 #        if i == len(x_coords)-1:

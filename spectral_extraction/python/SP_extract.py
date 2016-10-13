@@ -245,14 +245,14 @@ powers = trace_pow_coeffs[2,idx]*hscale**2+trace_pow_coeffs[1,idx]*hscale+trace_
 #>>> for i in range(28):
 #...     low_peak += len(mx_it_d[i][mx_it_d[i]<500])
 
-print("Running Spline Fitting")
+print("Running PSF Fitting")
 
 
 ### 1. Estimate spline amplitudes, centers, w/ circular model
 #r_breakpoints = [0, 1.2, 2.5, 3.7, 5, 8, 10]
 ## 2.3, 3
 #r_breakpoints = np.hstack(([0, 1.5, 2.4, 3],np.arange(3.5,10,0.5))) #For cpad=8
-r_breakpoints = np.hstack(([0, 1.5, 2.4, 3],np.arange(3.5,7.5,1))) #For cpad=6
+r_breakpoints = np.hstack(([0, 1.5, 2.4, 3],np.arange(3.5,7.6,1))) #For cpad=6
 #r_breakpoints = np.hstack(([0, 1.2, 2.3, 3],np.arange(3.5,10,0.5)))
 theta_orders = [0]
 cpad = 6
@@ -261,7 +261,7 @@ invar = 1/(raw_img+readnoise**2)
 ### Initial spline coeff guess
 spline_coeffs, s_scale, fit_params, new_hcenters, new_vcenters = psf.spline_coeff_fit(raw_img,hcenters,vcenters,invar,r_breakpoints,sigmas,powers,theta_orders=theta_orders,cpad=cpad,bp_space=bp_space,return_new_centers=True)
 
-'''
+#'''
 ### 2. Set up and initialize while loop (other steps embedded within loop)
 num_bases = spline_coeffs.shape[1]
 new_hscale = (new_hcenters-actypix/2)/actypix
@@ -295,6 +295,7 @@ params_min = lmfit.Parameters()
 dlt_chi = 1e-4 #difference between successive chi_squared values to cut off
 mx_loops = 100 #eventually must cutoff
 loop_cnt = 0
+fit_bg = True ## True fits a constant background at each subimage
 while abs(np.sum(chi_new)-np.sum(chi_old)) > dlt_chi and loop_cnt < mx_loops:
     print("starting loop {}".format(loop_cnt))
     print("  chi_old mean = {}".format(np.mean(chi_old)))
@@ -304,13 +305,14 @@ while abs(np.sum(chi_new)-np.sum(chi_old)) > dlt_chi and loop_cnt < mx_loops:
 ### 3. Build profile, data, and noise matrices at each pixel point and sum
     dim_s = (2*cpad+1)**2
     dim_h = sum(peak_mask)*dim_s
-    profile_matrix = np.zeros((dim_h,3*num_bases)) #hardcoded for quadratic
-    last_profile = np.zeros((dim_s,3*num_bases))
+    profile_matrix = np.zeros((dim_h,3*num_bases+fit_bg*len(new_hscale))) #hardcoded for quadratic
+#    last_profile = np.zeros((dim_s,3*num_bases+fit_bg))
     data_array = np.zeros((dim_h))
     noise_array = np.zeros((dim_h))
     data_for_fitting = np.zeros((2*cpad+1,2*cpad+1,len(new_hscale)))
     invar_for_fitting = np.zeros((2*cpad+1,2*cpad+1,len(new_hscale)))
     d_scale = np.zeros(len(new_hscale)) # Will build from data
+    bg_data = np.zeros(len(new_hscale))
     for k in range(len(new_hscale)):
         ### Slice subset of image data around each peak
         harr = np.arange(-cpad,cpad+1)+int(np.floor(new_hcenters[k]))
@@ -318,6 +320,7 @@ while abs(np.sum(chi_new)-np.sum(chi_old)) > dlt_chi and loop_cnt < mx_loops:
         data_for_fitting[:,:,k] = raw_img[varr[0]:varr[-1]+1,harr[0]:harr[-1]+1]#/s_scale[k]
         invar_for_fitting[:,:,k] = invar[varr[0]:varr[-1]+1,harr[0]:harr[-1]+1]#/s_scale[k]
         d_scale[k] = np.sum(data_for_fitting[:,:,k])
+        bg_data[k] = psf.poisson_bg(data_for_fitting[:,:,k])
     ### bound s_scale to (hopefully) prevent runaway growth
 #    for k in range(len(new_hscale)):
 #        sig_factor = 1 #Constrain s_scale to be within this man stddevs
@@ -328,6 +331,7 @@ while abs(np.sum(chi_new)-np.sum(chi_old)) > dlt_chi and loop_cnt < mx_loops:
 #        elif s_scale[k] > d_max:
 #            s_scale[k] = d_max
 #    s_scale *= np.sum(d_scale)/np.sum(s_scale)
+    print bg_data
     for k in range(len(new_hscale)):
         ### Pull in best center estimates
         params['hc'].value = params1['hc{}'.format(k)].value
@@ -339,6 +343,7 @@ while abs(np.sum(chi_new)-np.sum(chi_old)) > dlt_chi and loop_cnt < mx_loops:
             params['q'].value = params1['q0'].value + params1['q1'].value*new_hscale[k] + params1['q2'].value*new_hscale[k]**2
         params['PA'].value = params1['PA0'].value + params1['PA1'].value*new_hscale[k] + params1['PA2'].value*new_hscale[k]**2
         ### Scale data
+        data_for_fitting[:,:,k] -= bg_data[k] ### remove bg first
         data_for_fitting[:,:,k] /= s_scale[k]
         invar_for_fitting[:,:,k] *= s_scale[k]
         ### Setup arrays for spline analysis
@@ -350,13 +355,27 @@ while abs(np.sum(chi_new)-np.sum(chi_old)) > dlt_chi and loop_cnt < mx_loops:
         profile_matrix[k*dim_s:(k+1)*dim_s,0:num_bases] = profile_base
         profile_matrix[k*dim_s:(k+1)*dim_s,num_bases:2*num_bases] = profile_base*new_hscale[k]
         profile_matrix[k*dim_s:(k+1)*dim_s,2*num_bases:3*num_bases] = profile_base*(new_hscale[k]**2)
+        if fit_bg:
+            profile_matrix[k*dim_s:(k+1)*dim_s,3*num_bases+k*fit_bg] = 1
+#    plt.imshow(profile_matrix,interpolation='none')
+#    plt.show()
     ### 4. Using matrices from step 3. perform chi^2 fitting for coefficients
     next_coeffs, next_chi = sf.chi_fit(data_array,profile_matrix,np.diag(noise_array))
-    dd2 = int(np.size(next_coeffs)/3)
-    coeff_matrix = next_coeffs.reshape(3,dd2).T
+    if fit_bg:
+        bg_array = next_coeffs[3*num_bases:]
+        print bg_array*s_scale
+        trunc_coeffs = next_coeffs[0:3*num_bases]
+    else:
+        trunc_coeffs = np.copy(next_coeffs)
+    dd2 = int(np.size(trunc_coeffs)/3)
+    coeff_matrix = trunc_coeffs.reshape(3,dd2).T
+#    if fit_bg: ### Don't save background fit term
+#        bg_array = coeff_matrix[:,-1]
+#        print bg_array*s_scale
+#        coeff_matrix = coeff_matrix[:,:-1]
 #    last_coeffs = np.dot(coeff_matrix,(np.vstack((ones(len(new_hscale)),new_hscale,new_hscale**2))))
     ### Check each of the profiles with next_coeffs + adjust scale factor
-    profile_matrix = np.zeros((dim_s,3*num_bases)) #hardcoded for quadratic
+    profile_matrix = np.zeros((dim_s,3*num_bases+fit_bg*len(new_hscale))) #hardcoded for quadratic
     data_array = np.zeros((dim_h))
     noise_array = np.zeros((dim_h))
     chi2_first = np.zeros(len(new_hscale))
@@ -381,6 +400,9 @@ while abs(np.sum(chi_new)-np.sum(chi_old)) > dlt_chi and loop_cnt < mx_loops:
         profile_matrix[:,0:num_bases] = profile_base
         profile_matrix[:,num_bases:2*num_bases] = profile_base*new_hscale[k]
         profile_matrix[:,2*num_bases:3*num_bases] = profile_base*(new_hscale[k]**2)        
+        if fit_bg:
+            profile_matrix[:,3*num_bases:] = 0
+            profile_matrix[:,3*num_bases+k*fit_bg] = 1
         tmp_fit = np.dot(profile_matrix,next_coeffs)
 #        print np.sum(tmp_fit)
 #        fit_sums += np.sum(tmp_fit)
@@ -452,6 +474,7 @@ while abs(np.sum(chi_new)-np.sum(chi_old)) > dlt_chi and loop_cnt < mx_loops:
     args = (data_for_fitting,invar_for_fitting,r_breakpoints,new_hscale,next_coeffs)
     kws = dict()
     kws['theta_orders'] = theta_orders
+    kws['fit_bg'] = fit_bg
     minimizer_results = lmfit.minimize(spline.spline_poly_residuals,params1,args=args,kws=kws)
     ### Re-initialize params1, put in elliptical values.  Will add hc/vc at end
     ### (using mask, so #of values for centers will differ)
@@ -510,10 +533,12 @@ while abs(np.sum(chi_new)-np.sum(chi_old)) > dlt_chi and loop_cnt < mx_loops:
         params['q'].value = q
         params['PA'].value = PA
         sp_coeffs = np.dot(coeff_matrix,np.array(([1,new_hscale[i],new_hscale[i]**2])))
+        if fit_bg:
+            sp_coeffs = np.hstack((sp_coeffs,bg_array[i]))
     #    r_arr, theta_arr, dim1, r_inds = spline.build_rarr_thetaarr(small_img,params)
     #    profile_base = spline.build_radial_profile(r_arr,theta_arr,r_breakpoints,theta_orders,(2*cpad+1)**2,order=4)
     
-        fitted_image = spline.spline_2D_radial(img_matrix,invar_matrix,r_breakpoints,params,theta_orders,order=4,return_coeffs=False,spline_coeffs=sp_coeffs,sscale=None)
+        fitted_image = spline.spline_2D_radial(img_matrix,invar_matrix,r_breakpoints,params,theta_orders,order=4,return_coeffs=False,spline_coeffs=sp_coeffs,sscale=None,fit_bg=fit_bg)
         ### Update s_scale
         chi_new[i] = np.sum(((img_matrix-fitted_image)**2)*invar_matrix)*s_scale[i]/(np.size(img_matrix)-len(sp_coeffs)-2)#*s_scale[i]**2
 #        print chi_new[i]
@@ -595,17 +620,21 @@ for i in range(len(new_hscale)):
     params['q'].value = q
     params['PA'].value = PA
     sp_coeffs = np.dot(coeff_matrix_min,np.array(([1,new_hscale[i],new_hscale[i]**2])))
-
+    if fit_bg:
+        sp_coeffs = np.hstack((sp_coeffs,bg_array[i]))
 #    r_arr, theta_arr, dim1, r_inds = spline.build_rarr_thetaarr(small_img,params)
 #    profile_base = spline.build_radial_profile(r_arr,theta_arr,r_breakpoints,theta_orders,(2*cpad+1)**2,order=4)
 
-    fitted_image = spline.spline_2D_radial(img_matrix,invar_matrix,r_breakpoints,params,theta_orders,order=4,return_coeffs=False,spline_coeffs=sp_coeffs,sscale=None)
+    fitted_image = spline.spline_2D_radial(img_matrix,invar_matrix,r_breakpoints,params,theta_orders,order=4,return_coeffs=False,spline_coeffs=sp_coeffs,sscale=None,fit_bg=fit_bg)
     ### Update s_scale
 #        print chi_new[i]
 #        print chi_new[i]*s_scale[i]
 #        print chi_new[i]*s_scale[i]**2
     chi_sq_red = np.sum(((img_matrix-fitted_image))**2*invar_matrix)/(np.size(img_matrix)-len(sp_coeffs)-2)*(s_scale[i])
     print "Reduced Chi^2 on iteration ", i, " is: ", chi_sq_red
+    plt.plot(fitted_image[:,cpad]/np.max(fitted_image[:,cpad]))
+    plt.plot(np.sum(fitted_image,axis=1)/np.max(np.sum(fitted_image,axis=1)))
+    plt.show()
     plt.imshow(np.hstack((img_matrix,fitted_image,(img_matrix-fitted_image))),interpolation='none')
 #    plt.imshow((img_matrix-fitted_image)*invar_matrix,interpolation='none')
     plt.show()
@@ -752,43 +781,7 @@ params = arrays_to_params(ncenters,nellipse)
 #N = np.identity(101)
 #Ninv = np.matrix(N)
 #ccd += random.poisson(np.shape(ccd))
-         
-### Load section to extract
-testfits = pyfits.open('n20160323.HR4828.0020.fits')
-ccd = testfits[0].data
-ccd = ccd[::-1,0:2048]
-date = 'n20160115' #Fixed for now, late make this dynamic
-bias_hdu = pyfits.open(os.path.join(redux_dir,date,'bias_avg.fits'),uint=True)
-bias = bias_hdu[0].data
 
-### subtract bias (slit will be handled in loop)
-bias = bias[::-1,0:2048] #Remove overscan
-ccd -= bias #Note, if ccd is 16bit array, this operation can cause problems
-### TODO, check and see if this next part is valid
-ccd -= np.median(ccd[ccd<np.mean(ccd)])#+readnoise
-ccd[ccd<0] = 0 #Enforce positivity
-ccd *= gain #include gain
-#plt.imshow(ccd,interpolation='none')
-#plt.show()
-#plt.close()
-
-### Choose small section to extract
-hc = hcenters[5]
-vc = vcenters[5]
-#print hc, vc
-vsp = 8
-hsp = 50
-vinds = np.arange(int(vc-vsp),int(vc+vsp))
-hinds = np.arange(hc-hsp,hc+hsp)
-### set coordinates for opposite corners of box (use in building profile matrix)
-vtl = vinds[0]
-htl = hinds[0]
-vbr = vinds[-1]
-hbr = hinds[-1]
-#print vinds
-#print hinds
-ccd_small = ccd[vinds[0]:vinds[-1],hinds[0]:hinds[-1]]
-ccd_small_invar = 1/(ccd_small + readnoise**2)
 #plt.plot(ccd[:,40])
 #plt.plot(np.arange(20)+93,ccd_small[:,18])
 #plt.show()
@@ -856,7 +849,7 @@ def fit_mn_hght_bg(xvals,zorig,invorig,sigj,mn_new,spread,powj=2):
        
 
 ### First fit xc parameters for traces
-fact = 20 #do 1/fact of the available points
+fact = 10 #do 1/fact of the available points
 rough_pts = int(np.ceil(actypix/fact))
 xc_ccd = np.zeros((num_fibers,rough_pts))
 yc_ccd = np.zeros((num_fibers,rough_pts))
@@ -937,13 +930,20 @@ for i in range(num_fibers):
 #                    plt.plot(xvals,zorig,xvals,fitorig)#2,xvals,fitorig)
 #                    plt.show()
 #                    plt.close()
+                if j == 715:
+                    print mn_new
+                    plt.plot(xvals,zorig,xvals,fitorig)
+                    plt.show()
+                    plt.close()
                 inv_chi[i,jadj] = 1/sum((zorig-fitorig)**2*invorig)
                 xc_ccd[i,jadj] = mn_new+xj+1
                 
 
-tmp_poly_ord = 6
+tmp_poly_ord = 10
 trace_coeffs_ccd = np.zeros((tmp_poly_ord+1,num_fibers))
 for i in range(num_fibers):
+    if i != idx:
+        continue
     #Given orientation makes more sense to swap x/y
     mask = ~np.isnan(xc_ccd[i,:])
     profile = np.ones((len(yc_ccd[i,:][mask]),tmp_poly_ord+1)) #Quadratic fit
@@ -957,9 +957,13 @@ for i in range(num_fibers):
         fit = np.poly1d(tmp_coeffs[::-1])(yvals)
         fit_old = np.poly1d(trace_coeffs[::-1,i])(yvals)
 #        tmp_coeffs = tmp_coeffs[:,0]
-#        plt.plot(yvals,xc_ccd[i,:][mask]-fit,yvals,xc_ccd[i,:][mask]-fit_old)
-#        plt.show()
-#        plt.close()
+#        if i==idx:
+#            print yvals
+#            print xc_ccd[i,:]
+#            plt.plot(yvals,xc_ccd[i,:][mask],yvals,fit)
+#            plt.plot((new_hcenters-actypix/2)/actypix,new_vcenters)
+#            plt.show()
+#            plt.close()
     else:
         tmp_coeffs = np.nan*np.ones((tmp_poly_ord+1))
     trace_coeffs_ccd[:,i] = tmp_coeffs
@@ -993,6 +997,61 @@ def intensity(xsize,ysize,xc,yc,b=0.1,sigma=1.36,q=1,r0=3,theta=0,
     Itail = b*np.exp(-r/r0)/(2*np.pi*r0*(r+rc))
     return (Icore+Itail)
 
+######################################################################
+########## Load and calibrate data ###################################
+######################################################################
+
+### Load section to extract
+testfits = pyfits.open('n20160323.HR4828.0020.fits')
+ccd = testfits[0].data
+ccd = ccd[::-1,0:2048]
+date = 'n20160115' #Fixed for now, late make this dynamic
+bias_hdu = pyfits.open(os.path.join(redux_dir,date,'bias_avg.fits'),uint=True)
+bias = bias_hdu[0].data
+
+### subtract bias (slit will be handled in loop)
+bias = bias[::-1,0:2048] #Remove overscan
+ccd -= bias #Note, if ccd is 16bit array, this operation can cause problems
+### TODO, check and see if this next part is valid
+#print np.median(ccd[ccd<np.mean(ccd)])
+#ccd -= np.median(ccd[ccd<np.mean(ccd)])#+readnoise
+#ccd[ccd<0] = 0 #Enforce positivity
+ccd *= gain #include gain
+#plt.imshow(ccd,interpolation='none')
+#plt.show()
+#plt.close()
+
+### Choose small section to extract
+hc = hcenters[5]
+vc = vcenters[5]
+#print hc, vc
+vsp = 6
+hsp = 50
+vinds = np.arange(int(vc-vsp),int(vc+vsp))
+hinds = np.arange(hc-hsp,hc+hsp)
+### set coordinates for opposite corners of box (use in building profile matrix)
+vtl = vinds[0]
+htl = hinds[0]
+vbr = vinds[-1]
+hbr = hinds[-1]
+#print vinds
+#print hinds
+ccd_small = ccd[vinds[0]:vinds[-1],hinds[0]:hinds[-1]]
+ccd_small_invar = 1/(ccd_small + readnoise**2)
+
+### try removing background...
+bg_mask = np.zeros(ccd_small.shape,dtype=bool)
+bg_mask[int(vsp/2):3*int(vsp/2),:] = 1
+#plt.imshow(bg_mask,interpolation='none')
+#plt.show()
+ccd_tmp = np.copy(ccd_small)
+ccd_tmp[bg_mask] = 0
+rm_bg = np.median(ccd_small[bg_mask==0])
+#plt.imshow(ccd_tmp,interpolation='none')
+#plt.show()
+ccd_bg = psf.poisson_bg(ccd_small)
+#print rm_bg
+ccd_small -= rm_bg
 
         
 #Attempt 2-D extraction
@@ -1017,7 +1076,8 @@ wl_pad = 0#int(cpad/dlth)
 A = np.zeros((wls+2*wl_pad,d0,d1)) # pad A matrix
 A_bg = np.zeros((A.shape[0]))
 bg_idx = 0
-fitpad = 5 ### Padding for fit
+fitpad = 4 ### Padding for fit
+final_centers = np.zeros((wls+2*wl_pad,2))
 for jj in range(-wl_pad,wls+wl_pad):
 #    print jj
     if jj < 0:
@@ -1031,6 +1091,7 @@ for jj in range(-wl_pad,wls+wl_pad):
         vcent = vcents[jj]
     vcent -= 1  ### Something is wrong above - shouldn't need this...
     center = [np.mod(hcent,1)+fitpad,np.mod(vcent,1)+fitpad]
+    final_centers[jj,:] = center
     hpoint = (hcent-actypix/2)/actypix
     sp_ft = spline.make_spline_model(params,best_coeffs,center,hpoint,[2*fitpad+1,2*fitpad+1],r_breakpoints,theta_orders,fit_bg=False)
 #    plt.plot(np.sum(sp_ft,axis=0))
@@ -1044,8 +1105,8 @@ for jj in range(-wl_pad,wls+wl_pad):
 #    plt.plot(sp_ft[:,5])
 #    plt.show()   
     sp_ft /= np.sum(sp_ft) # Normalize to 1
-    A_bg[bg_idx] += (bg_lvl/np.sum(sp_ft))
-    bg_idx += 1
+#    A_bg[bg_idx] += (bg_lvl/np.sum(sp_ft))
+#    bg_idx += 1
 #    plt.imshow(sp_ft,interpolation='none')
 #    plt.show()
 #    plt.close()
@@ -1078,7 +1139,7 @@ for jj in range(-wl_pad,wls+wl_pad):
 #        plt.close()
     
 A = A[wl_pad:wls+wl_pad] #cut off edges
-A_bg_mn = np.mean(A_bg)/(2*fitpad+1)
+#A_bg_mn = np.mean(A_bg)/(2*fitpad+1)
 #A += A_bg_mn
 A_proj = np.sum(A,axis=0)
 #plt.imshow(np.vstack((A_proj/np.sum(A_proj),ccd_small/np.sum(ccd_small))),interpolation='none')
@@ -1091,6 +1152,7 @@ A_proj = np.sum(A,axis=0)
 
 ##Now using the full available data
 B = np.matrix(np.resize(A.T,(d0*d1,wls)))
+B = np.hstack((B,np.ones((d0*d1,1)))) ### add background term
 p = np.matrix(np.resize(ccd_small.T,(d0*d1,1)))
 n = np.diag(np.resize(ccd_small_invar.T,(d0*d1,)))
 #print np.shape(B), np.shape(p), np.shape(n)
@@ -1128,7 +1190,7 @@ img_est = np.dot(B,flux2)
 img_estrc = np.dot(B,fluxtilde2)
 img_recon = np.real(np.resize(img_estrc,(d1,d0)).T)
 plt.figure("Residuals of 2D fit")
-plt.imshow(np.vstack((ccd_small,img_recon,img_recon-ccd_small)),interpolation='none')
+plt.imshow(np.vstack((ccd_small,img_recon,ccd_small-img_recon)),interpolation='none')
 chi_red = np.sum((ccd_small-img_recon)[:,fitpad:-fitpad]**2*ccd_small_invar[:,fitpad:-fitpad])/(np.size(ccd_small[:,fitpad:-fitpad])-jj+1)
 print("Reduced chi2 = {}".format(chi_red))
 #plt.figure()
@@ -1138,13 +1200,15 @@ plt.show()
 #plt.imshow(img_raw,interpolation='none')
 #plt.show()
 plt.figure("Cross section of fit, residuals")
-for i in range(20,21):
-    plt.plot(ccd_small[:,i])
+for i in range(20,26):
+#    plt.plot(ccd_small[:,i])
     plt.plot(img_recon[:,i])
-    plt.plot((img_recon-ccd_small)[:,i])
-    plt.show()
-    plt.close()
-#plt.show()
+#    plt.plot(final_centers[i,1],np.max(ccd_small[:,i]),'kd')
+    plt.plot((ccd_small-img_recon)[:,i])#/np.sqrt(abs(ccd_small[:,i])))
+#    plt.show()
+#    plt.close()
+plt.show()
+plt.close()
 
 
 waves = np.arange(wls)#*101/wls
@@ -1152,6 +1216,7 @@ scale = np.mean(np.ediff1d(hcents))
 #fluxtilde2.reshape(wls,)
 #plt.plot(waves,flux2)
 plt.figure("2D vs. Optimal Extraction")
+fluxtilde2 = fluxtilde2[0:-1] ### remove last point - bg
 plt.plot(hcents,fluxtilde2/scale,linewidth='2')
 #plt.plot(hcents,2*fluxtilde3*scale)
 #plt.show()
@@ -1166,8 +1231,8 @@ plt.plot(np.linspace(hcents[0],hcents[-1],len(opt_dat_sec)),opt_dat_sec,linewidt
 ##plt.plot(yc,max(fluxtilde2)*np.ones(len(yc)),'ko')
 plt.show()
 
-plt.imshow(fitted_image,interpolation='none')
-plt.show()
+#plt.imshow(fitted_image,interpolation='none')
+#plt.show()
 
 #img_opt = np.resize(np.dot(B,opt_dat_sec),(d1,d0)).T
 #plt.imshow(img_opt,interpolation='none')
@@ -1210,7 +1275,7 @@ ln = 0
 #netgrid=gaussgrid*hermgrid
 ##plt.imshow(netgrid.T,interpolation='none')
 ##plt.show()
-
+plt.close()
 
 ###Below is code snipped from simple_opt_ex
 ###Probably a better choice to make new code with general functions (trace-fitting

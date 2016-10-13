@@ -22,6 +22,7 @@ from matplotlib import cm
 import scipy.special as sp
 import scipy.interpolate as si
 import scipy.optimize as opt
+import scipy.integrate as integrate
 import lmfit
 import scipy.sparse as sparse
 #import scipy.signal as sig
@@ -62,6 +63,22 @@ def gaussian_erf(axis, sigma, center=0, height=1,bg_mean=0,bg_slope=0,power=2):
     print len(axis),len(axis_new),len(gauss_int_erf),len(gaussian_int)
     return gaussian_int
     
+def poisson(x,lam):
+    """ Poisson function, written for numerical stability
+    """
+    return np.exp(x*np.log(lam)-lam-sp.gammaln(x+1))
+    
+def schechter_fct(L,L_star,Phi_star,alpha):
+    """ To match eqn. 1
+    """
+    N_L = Phi_star*(L/L_star)**alpha*np.exp(-L/L_star)
+    return N_L
+    
+def weibull(x,k,lam):
+    """ Weibull distribution
+    """
+    return (k/lam)*(x/lam)**(k-1)*np.exp(-(x/lam)**k)    
+    
 def gauss_residual(params,xvals,zvals,invals):
     """ Residual function for gaussian with constant background, for use with
         lmfit.minimize()
@@ -87,10 +104,13 @@ def sigma_clip(residuals,sigma=3,max_iters=1):
         OUTPUTS:
             residual_mask - boolean mask of clipped data (1 = keep, 0 = mask/reject)
     """
+    residuals = np.ravel(residuals)
     iter_count = 0
-    residual_mask = np.ones(len(residuals),dtype=bool)
-    residual_mask_old = np.zeros(len(residuals),dtype=bool)
+    residual_mask = np.ones((residuals.size),dtype=bool)
+    residual_mask_old = np.zeros((residuals.size),dtype=bool)
     while (sum(residual_mask) != sum(residual_mask_old)) and iter_count < max_iters:
+#        print residual_mask
+#        print residuals
         residual_mask_old = np.copy(residual_mask)        
         med = np.median(residuals[residual_mask])
         std = np.std(residuals[residual_mask]) #May be a better measure than this, but it's a start
@@ -362,7 +382,7 @@ def build_psf(xcenter,ycenter,N,samp,offset=[0.5,0.5]):
 #    plt.show()
     return dl_erf
   
-def gauss2d(xaxis, yaxis, sigma_x, sigma_y, xcenter=0, ycenter=0):
+def gauss2d(xaxis, yaxis, sigma_x, sigma_y, xcenter=0, ycenter=0, q=1, PA=0):
     """Returns 2-d normalized Guassian (symmetric in x and y)
     INPUTS:
         xaxis = xvalues to be evaulated
@@ -374,17 +394,58 @@ def gauss2d(xaxis, yaxis, sigma_x, sigma_y, xcenter=0, ycenter=0):
         gauss2d = 2-D array of heights at all values of x and y
     """
     #Reshuffle xaxis and yaxis inputs to be 1-D arrays
-    lx = len(xaxis)
-    ly = len(yaxis)
-    x = np.array((xaxis-xcenter)).reshape(1,lx)
-    y = np.array((yaxis-ycenter)).reshape(1,ly)
+#    lx = len(xaxis)
+#    ly = len(yaxis)
+#    x = np.array((xaxis-xcenter)).reshape(1,lx)
+#    y = np.array((yaxis-ycenter)).reshape(1,ly)
     
     #Convert x and y into a 2-D grid for 2d gaussian exponent
     sig_sq = sigma_x*sigma_y
-    xygrid = sigma_y**2*np.tile(x,(ly,1))**2 + sigma_x**2*np.tile(y.T,(1,lx))**2
+    xygrid = make_rarr(xaxis, yaxis, xcenter, ycenter, q=q, PA=PA)
+#    xygrid = sigma_y**2*np.tile(x,(ly,1))**2 + sigma_x**2*np.tile(y.T,(1,lx))**2
     gauss2d = 1/(2*np.pi*sig_sq)*np.exp(-(1/2)*(xygrid/(sig_sq**2)))
-
+#    plt.imshow(gauss2d,interpolation='none')
+#    plt.show()
+#    plt.close()
     return gauss2d
+ 
+def gauss2d_lmfit(params, xaxis, yaxis, cnt):
+    """Returns 2-d normalized Guassian (symmetric in x and y)
+    INPUTS:
+        xaxis = xvalues to be evaulated
+        yaxis = yvalues to be evaluated
+        sigma_x, sigma_y = spread (assume sigma_x = sigma_y by default)
+        x/ycenter = optional center offset
+        
+    OUTPUTS:
+        gauss2d = 2-D array of heights at all values of x and y
+    """
+    xc = params['xcb{}'.format(cnt)].value
+    yc = params['ycb{}'.format(cnt)].value
+#    sigx = params['sigx{}'.format(cnt)].value
+#    sigy = params['sigy{}'.format(cnt)].value
+    sig = params['sigb{}'.format(cnt)].value
+    hght = params['hght{}'.format(cnt)].value
+    ### Assume q, PA of host galaxy apply to all blobs...
+    q = params['qb{}'.format(cnt)].value
+    PA = params['PAb{}'.format(cnt)].value
+    #Reshuffle xaxis and yaxis inputs to be 1-D arrays
+#    lx = len(xaxis)
+#    ly = len(yaxis)
+#    x = np.array((xaxis-xcenter)).reshape(1,lx)
+#    y = np.array((yaxis-ycenter)).reshape(1,ly)
+    
+    #Convert x and y into a 2-D grid for 2d gaussian exponent
+#    sig_sq = sigx*sigy
+    sig_sq = sig*sig
+    xygrid = make_rarr(xaxis, yaxis, xc, yc, q=q, PA=PA)
+#    xygrid = sigma_y**2*np.tile(x,(ly,1))**2 + sigma_x**2*np.tile(y.T,(1,lx))**2
+    gauss2d = hght/(2*np.pi*sig_sq)*np.exp(-(1/2)*(xygrid/(sig_sq**2)))
+#    plt.imshow(gauss2d,interpolation='none')
+#    plt.show()
+#    plt.close()
+    return gauss2d   
+    
 
 def hermite(order,axis,sigma,center=0):
     """Function to calculate probabilists Hermite function
@@ -991,3 +1052,203 @@ def make_rarr(x,y,xc,yc,q=1,PA=0):
     y_ell = (x_matrix-xc)*cos(PA) - (y_matrix-yc)*sin(PA)
     r_matrix = np.sqrt((x_ell)**2*q + (y_ell)**2/q)
     return r_matrix
+    
+def pdf_draw(pdf,n=1,args=None,int_lims=None,res=1e4):
+    """ Returns n values drawn from function 'pdf'.  Optional input
+        args passed to pdf (parameters, for example).
+        int_lims - used to adjust bounds for normalization integration.
+        I think this is going to be pretty slow in general...
+    """
+    x = np.random.rand(n)
+    xarr = np.zeros((int(res)))
+    if int_lims is None:
+        yarr = np.linspace(-1e3,1e3,int(res))
+        norm = integrate.quad(pdf,-np.inf,np.inf,args=args)
+        for i in range(len(yarr)):
+            result = integrate.quad(pdf,-np.inf,yarr[i],args=args)
+            xarr[i] = result[0]/norm[0]
+    else:
+        a, b = int_lims
+        yarr = np.linspace(a,b,int(res))
+        if args is None:
+            norm = integrate.quad(pdf,a,b)
+        else:
+            norm = integrate.quad(pdf,a,b,args=args)
+        for i in range(len(yarr)):
+            if args is None:
+                result = integrate.quad(pdf,a,yarr[i])
+            else:
+                result = integrate.quad(pdf,a,yarr[i],args=args)
+            xarr[i] = result[0]/norm[0]
+    if n==1:
+        xind = np.sum(xarr<x)
+        y = (yarr[xind-1]+yarr[xind])/2
+    else:
+        y = np.zeros((n))
+        for j in range(n):
+            xind = int(np.sum(xarr<x[j]))
+            if xind == n:
+                y[j] = yarr[xind-1]
+            else:
+                y[j] = (yarr[xind-1]+yarr[xind])/2
+    return y
+    
+def find_peaks2D(image,min_space=1,min_px=4,bg_thresh=None,min_amp=None,offset=[0,0]):
+    """ Finds all peaks in a 2 dimensional image.  Peaks must be separated by
+        at least min_space with magnitude above bg_thresh and at least min_px
+        pixels lit in (2*min_space+1)**2 square.
+        Allow an offset to be used in the case of systematic errors.
+        Returns boolean array, True at peak locations
+    """
+    if bg_thresh is None:
+        ### Decent approximation if majority of image is noise
+        bg_thresh = np.median(image<np.mean(image))
+    image[image<bg_thresh] = 0
+    peaks = np.zeros((image.shape),dtype=bool)
+    for i in range(min_space,image.shape[0]-min_space): ### avoid edges
+        for j in range(min_space,image.shape[1]-min_space):
+            if image[i,j] == np.max(image[i-min_space:i+min_space+1,j-min_space:j+min_space+1]) and image[i,j] != 0:
+                if np.sum(image[i-min_space:i+min_space+1,j-min_space:j+min_space+1]>0) > min_px:
+#                    print "peak found"
+#                    plt.imshow(image[i-3:i+3+1,j-3:j+3+1],interpolation='none')
+#                    plt.show()
+#                    plt.close()
+                    if min_amp is not None:
+                        if np.sum(image[i-min_space:i+min_space+1,j-min_space:j+min_space+1])>min_amp:
+#                            print "peak above min_amp"
+                            peaks[i-offset[1],j-offset[0]] = True
+                    else:
+                        peaks[i-offset[1],j-offset[0]] = True
+    return peaks
+    
+def array_to_dict(dictionary,array,arraynames=None):
+    """ Puts each element of 'array' into 'dictionary'.
+        Uses arraynames, if present, otherwise numbers 0:len(array)
+    """
+    if arraynames is None:
+        arraynames = np.arange(len(array))
+    if len(array) != len(arraynames):
+        print("Inputs 'array' and 'arraynames' must have same length")
+        exit(0)
+    for i in len(array):
+        dictionary[arraynames[i]] = array[i]
+    return dictionary
+    
+def array_to_Parameters(params,array,arraynames=None,minarray=None,maxarray=None,fixed=None):
+    """ Puts each element of 'array' into lmfit Parameter object
+        Uses arraynames, if present, otherwise numbers 0:len(array)
+        Uses min/maxarray if present
+        Note, if only one minimum matters, set others to -np.inf
+              if only one maximum matters, set others to np.inf
+        Uses fixed if present (1 = variable, 0 = fixed)
+    """
+    try:
+        if arraynames is None:
+            arraynames = np.arange(len(array))
+        if len(array) != len(arraynames):
+            print("Inputs 'array' and 'arraynames' must have same length")
+            exit(0)
+        for i in range(len(array)):
+            params.add(arraynames[i], value = array[i])
+            if minarray is not None:
+                params[arraynames[i]].min = minarray[i]
+            if maxarray is not None:
+                params[arraynames[i]].max = maxarray[i]
+            if fixed is not None:
+                params[arraynames[i]].vary = fixed[i]
+    ### The exception allows a single value to be added to params
+    ### Note, arraynames (str, not array) must be used, otherwise 0 is only key
+    except TypeError:
+        if arraynames is None:
+            arraynames = 0
+        params.add(arraynames, value = array)
+        if minarray is not None:
+            params[arraynames].min = minarray
+        if maxarray is not None:
+            params[arraynames].max = maxarray
+        if fixed is not None:
+            params[arraynames].vary = fixed
+    return params
+    
+def find2dcenter(image,invar,c0,method='quadratic'):
+    """ Estimates x,y position of peak in an image with initial guess c0.
+        c0 = [xc, yc]
+    """
+    if method == 'quadratic':
+        points = 5 ## may add this as an input option later...
+        xmatrix = np.tile(np.arange(points)-np.floor(points/2)+c0[0],(points,1))
+        ymatrix = np.tile(np.arange(points)-np.floor(points/2)+c0[1],(points,1)).T
+        xarray = np.reshape(xmatrix,(points**2,1))
+        yarray = np.reshape(ymatrix,(points**2,1))
+        profile = np.hstack((xarray**2,xarray,yarray**2,yarray,np.ones((points**2,1))))
+        data = np.ravel(image)
+        noise = np.diag(np.ravel(invar))
+        coeffs, chi = chi_fit(data,profile,noise)
+        return [-coeffs[1]/(2*coeffs[0]),-coeffs[3]/(2*coeffs[2])]
+    elif method == 'gaussian':
+        sigma = 1 ## may add this as an input option later
+#        print np.max(image)
+#        print(image[c0[1],c0[0]])
+#        hght = 4*(2*np.log(2))*image[c0[1],c0[0]]
+#        hght = np.sqrt(np.sum(image))
+        hght = image.shape[0]*image[c0[1],c0[0]]
+        params = lmfit.Parameters()
+        params.add('xcb0', value = c0[0], min = c0[0]-2, max = c0[0]+2)
+        params.add('ycb0', value = c0[1], min = c0[1]-2, max = c0[1]+2)
+        params.add('sigb0', value = sigma, min = 0)
+        params.add('hght0', value = hght, min = 0)
+        ### For now have to add these to be compatible with my function
+        ### Set vary = 0 since I don't want to fit them
+        params.add('qb0', value = 1, vary = 0)
+        params.add('PAb0', value = 0, vary = 0)
+        args = (image,invar)
+        def gauss2d_for_f2c(params,image,invar):
+            iargs = (np.arange(image.shape[1]),np.arange(image.shape[0]),0)
+            model = gauss2d_lmfit(params,*iargs)
+#            plt.imshow(np.hstack((image,model,image-model)),interpolation='none')
+#            plt.show()
+#            plt.close()
+            return np.ravel((image-model)**2*invar)
+        results = lmfit.minimize(gauss2d_for_f2c,params,args=args)
+        model = gauss2d_lmfit(results.params,np.arange(image.shape[1]),np.arange(invar.shape[0]),0)
+#        plt.imshow(np.hstack((image,model,image-model)),interpolation='none')
+#        plt.show()
+#        plt.close()
+        xc = results.params['xcb0']
+        yc = results.params['ycb0']
+        return [xc,yc]
+    else:
+        print("Invalid method")
+        print("Choose quadratic or gaussian")
+        exit(0)
+        
+def merge_close_peaks(peaks,min_space):
+    """ If peaks x and y are both within min_space, call them one peak, average
+        Peaks must be num_peaks x 2 array, col0 = xc, col1 = yc
+    """
+    if peaks.shape[0] <= 1:
+        return peaks
+    merge = np.zeros((peaks.shape[1]))
+    merge_val = 1
+    for i in range(peaks.shape[0]):
+        trial_peak = peaks[i]
+        delt_peaks = peaks-trial_peak
+        merge_plus = False
+        for j in range(i+1,peaks.shape[0]):
+            if abs(delt_peaks[j,0]) < min_space and abs(delt_peaks[j,1]) < min_space:
+                merge[i] = merge_val
+                merge[j] = merge_val
+                merge_plus = True
+                print("Merging!")
+        merge_val += merge_plus
+    close_peaks = int(np.max(merge))
+    unique_peaks = np.zeros((np.sum(merge==0) + close_peaks,2))
+    if close_peaks > 0:
+        for k in range(close_peaks):
+            print peaks[merge==k+1]
+            unique_peaks[k] = np.sum(peaks[merge==k+1],axis=0)/len(peaks[merge==k+1])
+        unique_peaks[k+1:,0] = peaks[:,0][merge==0]
+        unique_peaks[k+1:,1] = peaks[:,1][merge==0]
+        return unique_peaks
+    else:
+        return peaks

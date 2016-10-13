@@ -637,6 +637,8 @@ def extract_1D(ccd,t_coeffs,i_coeffs=None,s_coeffs=None,p_coeffs=None,readnoise=
         image_model = np.zeros((np.shape(ccd))) ### Used for evaluation
     ### Run once for each fiber
     for i in range(num_fibers):
+        if i > 2:
+            continue
         #slit_num = np.floor((i)/4)#args.telescopes) # Use with slit flats
         if verbose:
             print("extracting trace {}".format(i+1))
