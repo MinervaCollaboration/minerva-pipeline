@@ -125,6 +125,7 @@ def addzb(fitsname, redo=False, fau_dir=None):
             if 'daytimeSky' in fitsname: 
                 h[0].header['BARYCOR' + telescope] = ('UNKNOWN','Barycentric redshift')
                 h[0].header['BARYSRC' + telescope] = ('UNKNOWN','Source for the barycentric redshift')
+                h[0].header['FLUXMID' + telescope] = (midjd,'Flux-weighted mid exposure time (JD_UTC)')
                 continue
             
             # convert specmid to Julian date
@@ -134,6 +135,7 @@ def addzb(fitsname, redo=False, fau_dir=None):
             zb = barycorr(midjd, ra, dec, pmra=pmra, pmdec=pmdec, parallax=parallax, rv=rv)/2.99792458e8
             h[0].header['BARYCOR' + telescope] = (zb,'Barycentric redshift')
             h[0].header['BARYSRC' + telescope] = ('MIDTIME','Source for the barycentric redshift')
+            h[0].header['FLUXMID' + telescope] = (midjd,'Flux-weighted mid exposure time (JD_UTC)')
             continue
             
 
@@ -144,10 +146,12 @@ def addzb(fitsname, redo=False, fau_dir=None):
         #this assumes guider images were taken ~uniformly throughout the spectroscopic exposure!
         #****************!*!*!*!*!**!*!*!*!**!*!*!*!*
         wzb = np.sum(zb*fluxes)/np.sum(fluxes)
+        wmidjd = np.sum(times*fluxes)/np.sum(fluxes)
         
         # update the header to include aperture photometry and barycentric redshift
         h[0].header['BARYCOR' + telescope] = (wzb,'Barycentric redshift')
         h[0].header['BARYSRC' + telescope] = ('FAU Flux Weighted','Source for the barycentric redshift')
+        h[0].header['FLUXMID' + telescope] = (wmidjd,'Flux-weighted mid exposure time (JD_UTC)')
         hdu = pyfits.PrimaryHDU(zip(times,fluxes))
         hdu.header['TELESCOP'] = ('T' + telescope,'Telescope')
         h.append(hdu)
