@@ -22,6 +22,7 @@ import time
 import glob
 from photutils import aperture_photometry, CircularAperture, CircularAnnulus
 import pyfits
+import ghip
 
 def addzb(fitsname, redo=False, fau_dir=None):
     telescopes = ['1','2','3','4']
@@ -215,12 +216,8 @@ def jjgauss(x, *a):
     """ For free parameters create a Gaussian defined at x """
     return a[0] * np.exp(-0.5*((x - a[1])/a[2])**2) 
 
-def get_ip(ipdict, wmin, wmax, orderin, oversamp=4.0):
-    """
-    Search for synthetic IPs in requested wavelength range and specified order
-    Created by John Johnson, ~March 2016
-    Modified by Sharon X. Wang, July 2016: enable other oversampling options (default was 4)
-    """
+def get_ip(ipdict, wmin, wmax, orderin):
+    """ Search for synthetic IPs in requested wavelength range and specified order"""
     order = orderin+1 #Stuart's relative orders are offset from orders in Matt C.'s reduced spectra
     nel = len(ipdict)
     warr = np.zeros(nel)
@@ -237,15 +234,6 @@ def get_ip(ipdict, wmin, wmax, orderin, oversamp=4.0):
         else:
             ip += ipdict[b]['ip']
     ip /= len(barr)
-
-    # Now resample IP
-    if (oversamp != 4):
-        xip_half = np.arange(0, max(xip), 1/oversamp)
-        xip_new = np.append(-xip_half[1:][::-1], xip_half)
-        interp_ip = interp1d(xip, ip)
-        ip_new = interp_ip(xip_new)
-        return xip_new, ip_new
-
     return xip, ip
             
 def airtovac(wav):
@@ -390,7 +378,7 @@ def pdf(x):
 def cdf(x):
     return (1.0 + erf(x/np.sqrt(2.0))) / 2.0
 
-def skewnorm(x,xo=0,sigma=1,alpha=0):
+def skewnorm(x,xo=0.0,sigma=1.0,alpha=0.0):
     t = (x - xo) / sigma
     return 2.0 / sigma * pdf(t) * cdf(alpha*t)
 

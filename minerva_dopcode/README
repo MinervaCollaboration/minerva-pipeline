@@ -10,5 +10,7 @@
 *chrec10.npy - same as 6, I think (just checking we didn't introduce bugs)
 *chrec11.npy - same as 6, but with ThAr wavelength solution (more orders, but not used)
 *chrec11.npy - same as 6, but with wavelength solution from processed data file (more orders, but not used)
+*chrec15.npy - IP fit with GH polynomials (22 free parameters per trace)
+*chrec16.npy - Juliana's version with MCMC fitting of a chunk with GH polynomials
 
 

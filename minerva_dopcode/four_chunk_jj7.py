@@ -160,7 +160,7 @@ class FourChunk(object):
         npix = shape[1]
 
         self.xchunk = np.arange(npix)
-        self.oversamp = 4.0
+        self.oversamp = 4.0 # this is hard coded in IP definition, must be consistent!!!
         pad = 120
         self.xover  = np.arange(-pad,npix+pad,1./self.oversamp)
 
