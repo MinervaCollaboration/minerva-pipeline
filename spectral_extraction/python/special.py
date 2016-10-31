@@ -69,7 +69,7 @@ def poisson(x,lam):
     return np.exp(x*np.log(lam)-lam-sp.gammaln(x+1))
     
 def schechter_fct(L,L_star,Phi_star,alpha):
-    """ To match eqn. 1
+    """ To match eqn. 1 of Guo, 2015 (CANDELS)
     """
     N_L = Phi_star*(L/L_star)**alpha*np.exp(-L/L_star)
     return N_L
@@ -77,7 +77,22 @@ def schechter_fct(L,L_star,Phi_star,alpha):
 def weibull(x,k,lam):
     """ Weibull distribution
     """
-    return (k/lam)*(x/lam)**(k-1)*np.exp(-(x/lam)**k)    
+    return (k/lam)*(x/lam)**(k-1)*np.exp(-(x/lam)**k)   
+    
+def sersic1d(rarr,Ie,re,n):
+    bn = 0.868*n-0.142
+    I_r = Ie*10**(-bn*((rarr/re)**(1/n)-1))
+    return I_r
+
+def sersic2d(x,y,xc,yc,Ie,re,n,q=1,PA=0):
+    """ makes a 2D image (dimx x dimy) of a Sersic profile centered at [xc,yc]
+        and parameters Ie, re, and n.
+        Optionally can add in ellipticity with axis ratio (q) and position
+        angle (PA).
+    """
+    rarr = make_rarr(x,y,xc,yc,q=q,PA=PA)
+    image = sersic1d(rarr,Ie,re,n)
+    return image    
     
 def gauss_residual(params,xvals,zvals,invals):
     """ Residual function for gaussian with constant background, for use with
@@ -382,7 +397,7 @@ def build_psf(xcenter,ycenter,N,samp,offset=[0.5,0.5]):
 #    plt.show()
     return dl_erf
   
-def gauss2d(xaxis, yaxis, sigma_x, sigma_y, xcenter=0, ycenter=0, q=1, PA=0):
+def gauss2d(xaxis, yaxis, sigma_x, sigma_y, xcenter=0, ycenter=0, q=1, PA=0,unity_height=False):
     """Returns 2-d normalized Guassian (symmetric in x and y)
     INPUTS:
         xaxis = xvalues to be evaulated
@@ -403,7 +418,11 @@ def gauss2d(xaxis, yaxis, sigma_x, sigma_y, xcenter=0, ycenter=0, q=1, PA=0):
     sig_sq = sigma_x*sigma_y
     xygrid = make_rarr(xaxis, yaxis, xcenter, ycenter, q=q, PA=PA)
 #    xygrid = sigma_y**2*np.tile(x,(ly,1))**2 + sigma_x**2*np.tile(y.T,(1,lx))**2
-    gauss2d = 1/(2*np.pi*sig_sq)*np.exp(-(1/2)*(xygrid/(sig_sq**2)))
+    if unity_height:
+        hght = 1
+    else:
+        hght = 1/(2*np.pi*sig_sq)
+    gauss2d = hght*np.exp(-(1/2)*(xygrid/(sig_sq**2)))
 #    plt.imshow(gauss2d,interpolation='none')
 #    plt.show()
 #    plt.close()
@@ -1052,7 +1071,7 @@ def make_rarr(x,y,xc,yc,q=1,PA=0):
     y_ell = (x_matrix-xc)*cos(PA) - (y_matrix-yc)*sin(PA)
     r_matrix = np.sqrt((x_ell)**2*q + (y_ell)**2/q)
     return r_matrix
-    
+  
 def pdf_draw(pdf,n=1,args=None,int_lims=None,res=1e4):
     """ Returns n values drawn from function 'pdf'.  Optional input
         args passed to pdf (parameters, for example).
@@ -1252,3 +1271,9 @@ def merge_close_peaks(peaks,min_space):
         return unique_peaks
     else:
         return peaks
+        
+def random_quadrupole_2d(x,r,Qxx,Qyy,Qxy):
+    """ Highly specialized.  Attempt to make random draws follow a given
+        quadrupole distribution.
+    """
+    return (2*Qxy*x*np.sqrt(r**2-x**2) + Qxx*x**2 + Qyy*(r**2-x**2))/r**5

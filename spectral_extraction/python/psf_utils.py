@@ -185,8 +185,10 @@ def spline_coeff_fit(raw_img,hcenters,vcenters,invar,r_breakpoints,sigmas,powers
         varr = varr[varr<raw_img.shape[0]]
         small_img = raw_img[varr[0]:varr[-1]+1,harr[0]:harr[-1]+1]
         small_inv = invar[varr[0]:varr[-1]+1,harr[0]:harr[-1]+1]
-        hmean, hheight, hbg = sf.fit_mn_hght_bg(harr,small_img[cpad,:],small_inv[cpad,:],sigmas[k],hcenters[k],sigmas[k],powj=powers[k])
-        vmean, vheight, vbg = sf.fit_mn_hght_bg(varr+voff,small_img[:,cpad],small_inv[:,cpad],sigmas[k],vcenters[k],sigmas[k],powj=powers[k])
+        hcut = int(np.mod(np.argmax(small_img),small_img.shape[1]))
+        vcut = int(np.floor(np.argmax(small_img)/small_img.shape[1]))
+        hmean, hheight, hbg = sf.fit_mn_hght_bg(harr,small_img[vcut,:],small_inv[vcut,:],sigmas[k],hcenters[k],sigmas[k],powj=powers[k])
+        vmean, vheight, vbg = sf.fit_mn_hght_bg(varr+voff,small_img[:,hcut],small_inv[:,hcut],sigmas[k],vcenters[k],sigmas[k],powj=powers[k])
         hdec, hint = math.modf(hmean)
         vdec, vint = math.modf(vmean)
 #        small_img = recenter_img(small_img,[vmean,hmean],[varr[0]+cpad,harr[0]+cpad])
@@ -320,10 +322,10 @@ def remove_bg(image,mask=None,sigma=3):
     im_mask = np.reshape(im_mask,image.shape)
     bg = np.mean(image[im_mask])
     bg_std = np.std(image[im_mask])
-    print bg, bg_std
+#    print bg, bg_std
     bg_mask = image < (bg+2*sigma/3*bg_std)
-    plt.imshow(bg_mask,interpolation='none')
-    plt.show()
+#    plt.imshow(bg_mask,interpolation='none')
+#    plt.show()
     image[bg_mask] = 0
     return image
         
@@ -348,7 +350,6 @@ def poisson_bg(data,mask=None):
     while np.sum(mask) < mask.size:
         lam = np.mean(data)
         prob = sf.poisson(data,lam)
-        print data.size
         mask = (prob > (1.0/data.size/10))
         data = data[mask]
     return lam
@@ -384,7 +385,6 @@ def params_to_array(params):
             centers - 2D array, row1 = hc's, row2 = vc's
             ellipse - 2D array, row1 = q0/1/2, row2 = PA0/1/2
     """
-    print params
     ellipse = np.zeros((2,3))
     for i in range(3):
         ellipse[0,i] = params['q{}'.format(i)].value
@@ -399,7 +399,7 @@ def params_to_array(params):
     centers = centers[:,0:i-1] ### remove padded zeros
     return centers, ellipse
     
-def fit_spline_psf(raw_img,hcenters,vcenters,heights,sigmas,powers,readnoise,
+def fit_spline_psf(raw_img,hcenters,vcenters,sigmas,powers,readnoise,
                    gain,plot_results=False):
     """ function to fit parameters for radial bspline psf.
     """
@@ -413,13 +413,15 @@ def fit_spline_psf(raw_img,hcenters,vcenters,heights,sigmas,powers,readnoise,
     ############## All this hardcoded stuff should be flexible (TODO) ########    
     ##########################################################################
     
-    r_breakpoints = np.hstack(([0, 1.5, 2.4, 3],np.arange(3.5,7.6,1))) #For cpad=6
-    #r_breakpoints = np.hstack(([0, 1.2, 2.3, 3],np.arange(3.5,10,0.5)))
+#    r_breakpoints = np.hstack(([0, 1.5, 2.4, 3],np.arange(3.5,6.6,1))) #For cpad=5
+    r_breakpoints = np.hstack(([0, 1.5, 2.4, 3],np.arange(3.5,8.6,1))) #For cpad=6
+    #r_breakpoints = np.hstack(([0, 1.2, 2.3, 3],np.arange(3.5,10,0.5))) #For cpad=8
     theta_orders = [0]
     cpad = 6
-    bp_space = 2 #breakpoint spacing in pixels
+    bp_space = 2 #beakpoint spacing in pixels
     invar = 1/(raw_img+readnoise**2)
     ### Initial spline coeff guess
+    
     spl_coeffs, s_scale, fit_params, new_hcenters, new_vcenters = spline_coeff_fit(raw_img,hcenters,vcenters,invar,r_breakpoints,sigmas,powers,theta_orders=theta_orders,cpad=cpad,bp_space=bp_space,return_new_centers=True)
     
     #'''
@@ -453,8 +455,8 @@ def fit_spline_psf(raw_img,hcenters,vcenters,heights,sigmas,powers,readnoise,
     chi_min = 100
     coeff_matrix_min = np.zeros((3,np.shape(spl_coeffs)[1])).T
     params_min = lmfit.Parameters()
-    dlt_chi = 1e-4 #difference between successive chi_squared values to cut off
-    mx_loops = 100 #eventually must cutoff
+    dlt_chi = 1e-3 #difference between successive chi_squared values to cut off
+    mx_loops = 50 #eventually must cutoff
     loop_cnt = 0
     fit_bg = False ## True fits a constant background at each subimage
     while abs(np.sum(chi_new)-np.sum(chi_old)) > dlt_chi and loop_cnt < mx_loops:
@@ -473,7 +475,7 @@ def fit_spline_psf(raw_img,hcenters,vcenters,heights,sigmas,powers,readnoise,
         data_for_fitting = np.zeros((2*cpad+1,2*cpad+1,len(new_hscale)))
         invar_for_fitting = np.zeros((2*cpad+1,2*cpad+1,len(new_hscale)))
         d_scale = np.zeros(len(new_hscale)) # Will build from data
-        bg_data = np.zeros(len(new_hscale))
+#        bg_data = np.zeros(len(new_hscale))
         for k in range(len(new_hscale)):
             ### Slice subset of image data around each peak
             harr = np.arange(-cpad,cpad+1)+int(np.floor(new_hcenters[k]))
@@ -483,9 +485,12 @@ def fit_spline_psf(raw_img,hcenters,vcenters,heights,sigmas,powers,readnoise,
             varr = varr[varr>=0]
             varr = varr[varr<raw_img.shape[0]]
             data_for_fitting[:,:,k] = raw_img[varr[0]:varr[-1]+1,harr[0]:harr[-1]+1]#/s_scale[k]
-            invar_for_fitting[:,:,k] = invar[varr[0]:varr[-1]+1,harr[0]:harr[-1]+1]#/s_scale[k]
+#            invar_for_fitting[:,:,k] = invar[varr[0]:varr[-1]+1,harr[0]:harr[-1]+1]#/s_scale[k]
             d_scale[k] = np.sum(data_for_fitting[:,:,k])
-            bg_data[k] = poisson_bg(data_for_fitting[:,:,k])
+            invar_for_fitting[:,:,k] = s_scale[k]/(abs(data_for_fitting[:,:,k])+readnoise**2/s_scale[k])
+#            rarr = sf.make_rarr(np.arange(2*cpad+1),np.arange(2*cpad+1),cpad,cpad)
+#            bg_mask = rarr > 3
+#            bg_data[k] = poisson_bg(data_for_fitting[:,:,k],mask=bg_mask)
         ### bound s_scale to (hopefully) prevent runaway growth
     #    for k in range(len(new_hscale)):
     #        sig_factor = 1 #Constrain s_scale to be within this man stddevs
@@ -507,9 +512,9 @@ def fit_spline_psf(raw_img,hcenters,vcenters,heights,sigmas,powers,readnoise,
                 params['q'].value = params1['q0'].value + params1['q1'].value*new_hscale[k] + params1['q2'].value*new_hscale[k]**2
             params['PA'].value = params1['PA0'].value + params1['PA1'].value*new_hscale[k] + params1['PA2'].value*new_hscale[k]**2
             ### Scale data
-            data_for_fitting[:,:,k] -= bg_data[k] ### remove bg first
+#            data_for_fitting[:,:,k] -= bg_data[k] ### remove bg first
             data_for_fitting[:,:,k] /= s_scale[k]
-            invar_for_fitting[:,:,k] *= s_scale[k]
+#            invar_for_fitting[:,:,k] *= s_scale[k]
             ### Setup arrays for spline analysis
             r_arr, theta_arr, dim1, r_inds = spline.build_rarr_thetaarr(data_for_fitting[:,:,k],params)
             ### Build data, noise, and profile array
@@ -527,7 +532,7 @@ def fit_spline_psf(raw_img,hcenters,vcenters,heights,sigmas,powers,readnoise,
         next_coeffs, next_chi = sf.chi_fit(data_array,profile_matrix,np.diag(noise_array))
         if fit_bg:
             bg_array = next_coeffs[3*num_bases:]
-            print bg_array*s_scale
+#            print bg_array*s_scale
             trunc_coeffs = next_coeffs[0:3*num_bases]
         else:
             trunc_coeffs = np.copy(next_coeffs)
@@ -705,17 +710,19 @@ def fit_spline_psf(raw_img,hcenters,vcenters,heights,sigmas,powers,readnoise,
             fitted_image = spline.spline_2D_radial(img_matrix,invar_matrix,r_breakpoints,params,theta_orders,order=4,return_coeffs=False,spline_coeffs=sp_coeffs,sscale=None,fit_bg=fit_bg)
             ### Update s_scale
             chi_new[i] = np.sum(((img_matrix-fitted_image)**2)*invar_matrix)*s_scale[i]/(np.size(img_matrix)-len(sp_coeffs)-2)#*s_scale[i]**2
-    #        print chi_new[i]
+#            print chi_new[i]
+#            print s_scale[i]
+#            print np.max(invar_matrix)*3.63**2/s_scale[i]
     #        print chi_new[i]*s_scale[i]
     #        print chi_new[i]*s_scale[i]**2
             ### Set new scale - drive sum of image toward unity
             s_scale[i] = s_scale[i]*np.sum(fitted_image)
-        #    plt.imshow(np.hstack((img_matrix,fitted_image,(img_matrix-fitted_image)*invar_matrix)),interpolation='none')
-    #        plt.imshow((img_matrix-fitted_image)*invar_matrix,interpolation='none')
+#            plt.imshow(np.hstack((img_matrix,fitted_image)),interpolation='none')#,(img_matrix-fitted_image)*invar_matrix)),interpolation='none')
+#            plt.imshow(invar_matrix,interpolation='none')
     #        plt.plot(img_matrix[:,5])
     #        plt.plot(fitted_image[:,5])
-    #        plt.show()
-    #        plt.close()
+#            plt.show()
+#            plt.close()
         
         #print chi2_first
         #print chi2_second
@@ -800,10 +807,11 @@ def fit_spline_psf(raw_img,hcenters,vcenters,heights,sigmas,powers,readnoise,
         #        print chi_new[i]*s_scale[i]**2
             chi_sq_red = np.sum(((img_matrix-fitted_image))**2*invar_matrix)/(np.size(img_matrix)-len(sp_coeffs)-2)*(s_scale[i])
             print "Reduced Chi^2 on iteration ", i, " is: ", chi_sq_red
-            plt.plot(fitted_image[:,cpad]/np.max(fitted_image[:,cpad]))
-            plt.plot(np.sum(fitted_image,axis=1)/np.max(np.sum(fitted_image,axis=1)))
-            plt.show()
-            plt.imshow(np.hstack((img_matrix,fitted_image,(img_matrix-fitted_image))),interpolation='none')
+#            plt.plot(fitted_image[:,cpad]/np.max(fitted_image[:,cpad]))
+#            plt.plot(np.sum(fitted_image,axis=1)/np.max(np.sum(fitted_image,axis=1)))
+#            plt.show()
+#            plt.imshow(np.hstack((img_matrix,fitted_image,(img_matrix-fitted_image))),interpolation='none')
+            plt.imshow((img_matrix-fitted_image)*invar_matrix,interpolation='none')
         #    plt.imshow((img_matrix-fitted_image)*invar_matrix,interpolation='none')
             plt.show()
             plt.close()
