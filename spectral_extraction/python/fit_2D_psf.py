@@ -65,7 +65,7 @@ parser.add_argument("--par_index",help="Fiber index for parallel mode",
 #parser.add_argument("-T","--tscopes",help="T1, T2, T3, and/or T4 (remove later)",
 #                    type=str,default=['T1','T2','T3','T4'])
 args = parser.parse_args()
-num_fibers = args.num_fibers*args.telescopes-4
+num_fibers = (args.num_fibers-1)*args.telescopes
 
 ##############################################################################
 
@@ -340,6 +340,13 @@ else:
     if idx >= num_fibers or idx < 0:
         print("Input --par_index cannot be greater than the number of fibers or less than zero")
         exit(0)
+
+    hcenters = arc_pos[idx]
+    hscale = (hcenters-actypix/2)/actypix
+    vcenters = trace_coeffs[2,idx+1]*hscale**2+trace_coeffs[1,idx+1]*hscale+trace_coeffs[0,idx+1]
+    sigmas = trace_sig_coeffs[2,idx]*hscale**2+trace_sig_coeffs[1,idx]*hscale+trace_sig_coeffs[0,idx]
+    powers = trace_pow_coeffs[2,idx]*hscale**2+trace_pow_coeffs[1,idx]*hscale+trace_pow_coeffs[0,idx]
+    print("Running PSF Fitting on trace {}".format(idx))
     if args.psf is 'bspline':
         psf_coeffs = psf.fit_spline_psf(raw_img,hcenters,vcenters,sigmas,powers,pix_err,gain,plot_results=True)
     else:
