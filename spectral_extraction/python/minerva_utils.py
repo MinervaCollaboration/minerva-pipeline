@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 #import scipy.stats as stats
 #import scipy.special as sp
 #import scipy.interpolate as si
-#import scipy.optimize as optimize
+import scipy.optimize as opt
 #import scipy.sparse as sparse
 #import scipy.signal as signal
 #import scipy.linalg as linalg
@@ -26,143 +26,6 @@ import special as sf
 #import bsplines as spline
 #import argparse
 import lmfit
-
-#########JASON E CODE - from  minerva_dopcode/utils.py
-#import datetime
-#import glob
-#from photutils import aperture_photometry, CircularAperture, CircularAnnulus
-#
-#
-#def addzb(fitsname, redo=False, fau_dir=None):
-#    telescopes = ['1','2','3','4']
-#    night = (fitsname.split('/'))[3]
-#
-#    print 'beginning ' + fitsname
-#
-#
-#    # 2D spectrum
-#    h = pyfits.open(fitsname,mode='update')
-#
-#    if 'BARYSRC4' in h[0].header.keys() and not redo:
-#        print fitsname + " already done"
-#        h.flush()
-#        h.close()
-#        return
-#
-#    specstart = datetime.datetime.strptime(h[0].header['DATE-OBS'],"%Y-%m-%dT%H:%M:%S.%f")
-#    specmid = specstart + datetime.timedelta(seconds = h[0].header['EXPTIME']/2.0)
-#    specend = specstart + datetime.timedelta(seconds = h[0].header['EXPTIME'])
-#
-#    t0 = datetime.datetime(2000,1,1)
-#    t0jd = 2451544.5
-#
-#    aperture_radius = 3.398 # fiber radius in pixels
-#    annulus_inner = 2.0*aperture_radius
-#    annulus_outer = 3.0*aperture_radius
-#
-#    for telescope in telescopes:
-#        print 'beginning telescope ' + telescope + ' on ' + fitsname
-#
-#        # get the barycentric redshift for each time
-#        ra = h[0].header['TARGRA' + telescope]
-#        dec = h[0].header['TARGDEC' + telescope]
-#        try: pmra = h[0].header['PMRA' + telescope]
-#        except: pmra = 0.0
-#        try: pmdec = h[0].header['PMDEC' + telescope]
-#        except: pmdec = 0.0
-#        try: parallax = h[0].header['PARLAX' + telescope]
-#        except: parallax = 0.0
-#        try: rv = h[0].header['RV' + telescope]
-#        except: rv = 0.0
-#
-#        objname = h[0].header['OBJECT' + telescope]
-#        if fau_dir is None:
-#            faupath = '/Data/t' + telescope + '/' + night + '/' + night + '.T' + telescope + '.FAU.' + objname + '.????.fits'
-#        else:
-#            faupath = fau_dir + '/t' + telescope + '/' + night + '/' + night + '.T' + telescope + '.FAU.' + objname + '.????.fits'
-#        guideimages = glob.glob(faupath)
-#
-##        if telescope == '2' and "HD62613" in fitsname: ipdb.set_trace()
-#
-#        times = []
-#        fluxes = np.array([])
-#
-#        for guideimage in guideimages:
-#            try:
-#                fauimage = pyfits.open(guideimage)
-#            except:
-#                print "corrupt file for " + guideimage
-#                continue
-#
-#            # midtime of the guide image (UTC)
-#            midtime = datetime.datetime.strptime(fauimage[0].header['DATE-OBS'],"%Y-%m-%dT%H:%M:%S") +\
-#                datetime.timedelta(seconds=fauimage[0].header['EXPTIME']/2.0)
-#            
-#            # convert to Julian date
-#            midjd = t0jd + (midtime-t0).total_seconds()/86400.0
-#
-#            # only look at images during the spectrum
-#            if midtime < specstart or midtime > specend: continue
-#
-#            # find the fiber position
-#            try:
-#                fiber_x = fauimage[0].header['XFIBER' + telescope]
-#                fiber_y = fauimage[0].header['YFIBER' + telescope]
-#            except:
-#                print "keywords missing for " + guideimage
-#                continue
-#
-#            # do aperture photometry
-#            positions = [(fiber_x,fiber_y)]
-#            apertures = CircularAperture(positions,r=aperture_radius)
-#            annulus_apertures = CircularAnnulus(positions, r_in=annulus_inner, r_out=annulus_outer)
-#
-#            # calculate the background-subtracted flux at the fiber position
-#            rawflux_table = aperture_photometry(fauimage[0].data, apertures)
-#            bkgflux_table = aperture_photometry(fauimage[0].data, annulus_apertures)
-#            bkg_mean = bkgflux_table['aperture_sum'].sum() / annulus_apertures.area()
-#            bkg_sum = bkg_mean * apertures.area()
-#            flux = rawflux_table['aperture_sum'].sum() - bkg_sum
-#            
-#            # append to the time and flux arrays
-#            times.append(midjd)
-#            fluxes = np.append(fluxes,flux)
-#
-#        if len(times) == 0:
-#            print "No guider images for " + fitsname + " on Telescope " + telescope + "; assuming mid time"
-#            if 'daytimeSky' in fitsname: 
-#                h[0].header['BARYCOR' + telescope] = ('UNKNOWN','Barycentric redshift')
-#                h[0].header['BARYSRC' + telescope] = ('UNKNOWN','Source for the barycentric redshift')
-#                continue
-#            
-#            # convert specmid to Julian date
-#            midjd = t0jd + (specmid-t0).total_seconds()/86400.0
-#
-#            print midjd
-#            zb = barycorr(midjd, ra, dec, pmra=pmra, pmdec=pmdec, parallax=parallax, rv=rv)/2.99792458e8
-#            h[0].header['BARYCOR' + telescope] = (zb,'Barycentric redshift')
-#            h[0].header['BARYSRC' + telescope] = ('MIDTIME','Source for the barycentric redshift')
-#            continue
-#            
-#
-#        zb = np.asarray(barycorr(times, ra, dec, pmra=pmra, pmdec=pmdec, parallax=parallax, rv=rv))/2.99792458e8
-#
-#        # weight the barycentric correction by the flux
-#        #*******************!*!*!*!*!*!*
-#        #this assumes guider images were taken ~uniformly throughout the spectroscopic exposure!
-#        #****************!*!*!*!*!**!*!*!*!**!*!*!*!*
-#        wzb = np.sum(zb*fluxes)/np.sum(fluxes)
-#        
-#        # update the header to include aperture photometry and barycentric redshift
-#        h[0].header['BARYCOR' + telescope] = (wzb,'Barycentric redshift')
-#        h[0].header['BARYSRC' + telescope] = ('FAU Flux Weighted','Source for the barycentric redshift')
-#        hdu = pyfits.PrimaryHDU(zip(times,fluxes))
-#        hdu.header['TELESCOP'] = ('T' + telescope,'Telescope')
-#        h.append(hdu)
-#
-#    # write updates to the disk
-#    h.flush()
-#    h.close()
 
 def fit_trace(x,y,ccd,form='gaussian'):
     """quadratic fit (in x) to trace around x,y in ccd
@@ -426,6 +289,38 @@ def find_trace_coeffs(image,pord,fiber_space,num_points=None,num_fibers=None,ver
     else:
         return t_coeffs
 
+def remove_ccd_background(ccd,cut=None,plot=False):
+    """ Use to remove diffuse background (not bias).
+        Assumes a gaussian background.
+        Returns ccd without zero mean background and
+        the mean background error (1 sigma)
+    """
+    if cut is None:
+        cut = 3*np.median(ccd)
+    cut = int(cut)
+    ccd_mask = (ccd < cut)*(ccd > -cut)
+    masked_ccd = ccd[ccd_mask]
+    arr = plt.hist(masked_ccd,2*(cut-1))
+    hgt = arr[0]
+    xvl = arr[1][:-1]
+    ### Assume lower tail is a better indicator than upper tail
+    xmsk = (xvl < np.median(masked_ccd))
+    hgts = hgt[xmsk]
+    xvls = xvl[xmsk]
+    sig_est = 2/2.35*(xvls[np.argmax(hgts)] - xvls[np.argmax(hgts>np.max(hgts)/2)])
+    pguess = (sig_est,np.median(masked_ccd),np.max(hgt))
+    sigma = 1/np.sqrt(abs(hgts)+1)
+    params, errarr = opt.curve_fit(sf.gaussian,xvls,hgts,p0=pguess,sigma=sigma)
+    if plot:
+        plt.title("Number of pixels with certain count value")
+        htst = sf.gaussian(xvl, params[0], center=params[1], height=params[2],bg_mean=0,bg_slope=0,power=2)
+        plt.plot(xvl,htst)
+        plt.show()
+    plt.close()
+    ccd -= params[1] # mean
+    bg_std = params[0]
+    return ccd, bg_std
+
 def cosmic_ray_reject(D,f,P,iV,S=0,threshhold=25,verbose=False):
     """ Procedure to reject cosmic rays in optimal extraction.
         This assumes your inputs are all at a given wavelength.
@@ -506,7 +401,7 @@ def fit_mn_hght_bg(xvals,zorig,invorig,sigj,mn_new,spread,powj=2):
 #    time.sleep(5)
     return mn_new, hght,bg
     
-def extract_1D(ccd,t_coeffs,i_coeffs=None,s_coeffs=None,p_coeffs=None,readnoise=1,gain=1,return_model=False,verbose=False):
+def extract_1D(ccd, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs=None, readnoise=1, gain=1, return_model=False, verbose=False):
     """ Function to extract using optimal extraction method.
         This could benefit from a lot of cleaning up
         INPUTS:
@@ -651,7 +546,6 @@ def extract_1D(ccd,t_coeffs,i_coeffs=None,s_coeffs=None,p_coeffs=None,readnoise=
             if np.isnan(xc):
                 spec_mask[i,j] = False
             else:
-                tc = time.time() ### Start of extraction loop
                 ### Set values to use in extraction
                 xpad = 5  ### can't be too big or traces start to overlap
                 xvals = np.arange(-xpad,xpad+1)
@@ -671,10 +565,8 @@ def extract_1D(ccd,t_coeffs,i_coeffs=None,s_coeffs=None,p_coeffs=None,readnoise=
                     continue
                 else:
                     ### Do nonlinear fit for center, height, and background
-                    td = time.time() ### Time before nonlinear fit
                     mn_new, hght, bg = fit_mn_hght_bg(xvals,zorig,invorig,sigj,xc-xj-1,sigj/8,powj=powj)
 #                    mn_new, hght, bg = linear_mn_hght_bg(xvals,zorig,invorig,sigj,xc-xj-1,power=powj)
-                    te = time.time() ### Time after nonlinear fit
                     ### Use fitted values to make best fit arrays
                     fitorig = sf.gaussian(xvals,sigj,mn_new,hght,power=powj)
                     xprecise = np.linspace(xvals[0],xvals[-1],100)
@@ -692,7 +584,6 @@ def extract_1D(ccd,t_coeffs,i_coeffs=None,s_coeffs=None,p_coeffs=None,readnoise=
                     ### Now set up to do cosmic ray rejection
                     rej_min = 0
                     loop_count=0
-                    tf = time.time() ### Time before cosmic ray rejection
                     while rej_min==0:
                         pixel_reject = cosmic_ray_reject(zorig,fstd,fitnorm,invorig,S=bg,threshhold=0.3*np.mean(zorig),verbose=True)
                         rej_min = np.min(pixel_reject)
@@ -721,19 +612,7 @@ def extract_1D(ccd,t_coeffs,i_coeffs=None,s_coeffs=None,p_coeffs=None,readnoise=
                     ### Set extracted spectrum value, inverse variance
                     spec[i,j] = fstd
                     spec_invar[i,j] = sum(fitnorm**2*invorig)
-                    tg = time.time() ### Time after cosmic ray rejection
                     chi2red_array[i,j] = chi2red
-#                    if verbose:
-#                        print("Total fit time = {}s".format(tg-tc))
-#                        print("Nonlinear fit time = {}s".format(te-td))
-#                        print("First flux est time = {}s".format(tf-te))
-#                        print("Cosmic ray reject time = {}s".format(tg-tf))
-#                        print("Reduced chi^2 = {}".format(chi2red))
-#                        if j > 300:
-#                            plt.plot(xvals,zorig,xvals,fstd*fitnorm+bg,linewidth='2')
-#                            plt.show()
-#                            plt.close()
-#                        time.sleep(2)
                     if return_model and not np.isnan(fstd):
                         ### Build model, if desired
                         image_model[xj+xvals,j] += (fstd*fitnorm+bg)/gain
@@ -741,7 +620,8 @@ def extract_1D(ccd,t_coeffs,i_coeffs=None,s_coeffs=None,p_coeffs=None,readnoise=
             if np.isnan(spec[i,j]):
                 spec[i,j] = 0
                 spec_mask[i,j] = False
-    print("Average reduced chi^2 = {}".format(np.mean(chi2red)))
+    if verbose:
+        print("Average reduced chi^2 = {}".format(np.mean(chi2red)))
     if return_model:
         return spec, spec_invar, spec_mask, image_model
     else:
@@ -768,14 +648,236 @@ def params_to_array(params):
     centers = centers[:,0:i-1] ### remove padded zeros
     return centers, ellipse
         
-def arrays_to_params(centers,ellipse):
-    """ Converts centers and ellipse arrays to lmfit parameter object.
+def array_to_params(ellipse):
+    """ Converts ellipse array to lmfit parameter object.
     """
     params = lmfit.Parameters()
-    for i in range(np.shape(centers)[1]):
-        params.add('hc{}'.format(i), value=centers[0,i])
-        params.add('vc{}'.format(i), value=centers[1,i])
+#    for i in range(np.shape(centers)[1]):
+#        params.add('hc{}'.format(i), value=centers[0,i])
+#        params.add('vc{}'.format(i), value=centers[1,i])
     for j in range(np.shape(ellipse)[1]):
         params.add('q{}'.format(j), value=ellipse[0,j])
         params.add('PA{}'.format(j), value=ellipse[1,j])
     return params
+    
+def refine_trace_centers(ccd, t_coeffs, i_coeffs, s_coeffs, p_coeffs, fact=10, readnoise=3.63, verbose=False):
+    """ Uses estimated centers from fibers flats as starting point, then
+        fits from there to find traces based on science ccd frame.
+        INPUTS:
+            ccd - image on which to fit traces
+            t/i/s/p_coeffs - modified gaussian coefficients from fiberflat
+            fact - do 1/fact of the available points
+    """
+    num_fibers = t_coeffs.shape[0]
+    hpix = ccd.shape[1]
+    vpix = ccd.shape[0]
+    ### First fit vc parameters for traces
+    rough_pts = int(np.ceil(hpix/fact))
+    vc_ccd = np.zeros((num_fibers,rough_pts))
+    hc_ccd = np.zeros((num_fibers,rough_pts))
+    inv_chi = np.zeros((num_fibers,rough_pts))
+    yspec = np.arange(hpix)
+    if verbose:
+        print("Refining trace centers")
+    for i in range(num_fibers):
+        if verbose:
+            print("Running on index {}".format(i))
+    #    slit_num = np.floor((i)/args.telescopes)
+        for j in range(0,hpix,fact):
+            jadj = int(np.floor(j/fact))
+            yj = (yspec[j]-hpix/2)/hpix
+            hc_ccd[i,jadj] = yspec[j]
+            vc = t_coeffs[2,i]*yj**2+t_coeffs[1,i]*yj+t_coeffs[0,i]
+#            Ij = i_coeffs[2,i]*yj**2+i_coeffs[1,i]*yj+i_coeffs[0,i]
+            sigj = s_coeffs[2,i]*yj**2+s_coeffs[1,i]*yj+s_coeffs[0,i]
+            powj = s_coeffs[2,i]*yj**2+s_coeffs[1,i]*yj+s_coeffs[0,i]
+            if np.isnan(vc):
+                vc_ccd[i,jadj] = np.nan
+                inv_chi[i,jadj] = 0
+            else:
+                xpad = 7
+                xvals = np.arange(-xpad,xpad+1)
+                xj = int(vc)
+                xwindow = xj+xvals
+                xvals = xvals[(xwindow>=0)*(xwindow<vpix)]
+                zorig = ccd[xj+xvals,yspec[j]]
+                if len(zorig)<1:
+                    vc_ccd[i,jadj] = np.nan
+                    inv_chi[i,jadj] = 0
+                    continue
+                invorig = 1/(abs(zorig)+readnoise**2)
+                if np.max(zorig)<20:
+                    vc_ccd[i,jadj] = np.nan
+                    inv_chi[i,jadj] = 0
+                else:
+                    mn_new, hght, bg = fit_mn_hght_bg(xvals, zorig, invorig, sigj, vc-xj-1, sigj, powj=powj)
+                    fitorig = sf.gaussian(xvals,sigj,mn_new,hght,power=powj)
+                    if j == 715:
+                        print mn_new
+                        plt.plot(xvals,zorig,xvals,fitorig)
+                        plt.show()
+                        plt.close()
+                    inv_chi[i,jadj] = 1/sum((zorig-fitorig)**2*invorig)
+                    vc_ccd[i,jadj] = mn_new+xj+1
+                    
+    
+    tmp_poly_ord = 10
+    trace_coeffs_ccd = np.zeros((tmp_poly_ord+1,num_fibers))
+    for i in range(num_fibers):
+        mask = ~np.isnan(vc_ccd[i,:])
+        profile = np.ones((len(hc_ccd[i,:][mask]),tmp_poly_ord+1)) #Quadratic fit
+        for order in range(tmp_poly_ord):
+            profile[:,order+1] = ((hc_ccd[i,:][mask]-hpix/2)/hpix)**(order+1)
+        noise = np.diag(inv_chi[i,:][mask])
+        if len(vc_ccd[i,:][mask])>3:
+            tmp_coeffs, junk = sf.chi_fit(vc_ccd[i,:][mask],profile,noise)
+        else:
+            tmp_coeffs = np.nan*np.ones((tmp_poly_ord+1))
+        trace_coeffs_ccd[:,i] = tmp_coeffs 
+    return trace_coeffs_ccd
+    
+def extract_2D(ccd, psf_coeffs, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs=None, readnoise=1, gain=1, return_model=False, verbose=False):
+    """ Code to perform 2D spectroperfectionism algorithm on MINERVA data.
+    """
+    ### Set shape variables based on inputs
+    num_fibers = t_coeffs.shape[0]
+    hpix = ccd.shape[1]
+    hscale = (np.arange(hpix)-hpix/2)/hpix
+    extracted_counts = np.zeros((num_fibers,hpix))
+    ### Remove CCD diffuse background - cut value matters
+    cut = np.median(np.median(ccd[ccd<np.median(ccd)]))
+    ccd, bg_err = remove_ccd_background(ccd,cut=cut,plot=True)
+    ### Fit input trace coeffs (from fiberflat) to this ccd
+    t_coeffs = refine_trace_centers(ccd,t_coeffs,i_coeffs,s_coeffs,p_coeffs)
+    ### Parameters for extraction box size - try various values
+    ### For meaning, see documentation
+    num_sections = 16
+    len_section = 143
+    fit_pad = 4
+    v_pad = 6
+    len_edge = fit_pad*2
+    ### iterate over all fibers
+    for fib in range(num_fibers):
+        print("Running 2D Extraction on fiber {}".format(fib))
+        ### Trace parameters
+        vcents = sf.eval_polynomial_coeffs(hscale,t_coeffs[:,fib])
+        sigmas = sf.eval_polynomial_coeffs(hscale,s_coeffs[:,fib])
+        powers = sf.eval_polynomial_coeffs(hscale,p_coeffs[:,fib])   
+        ### PSF parameters
+        ellipse = psf_coeffs[fib,-7:-1]
+        ellipse = ellipse.reshape((2,3))
+        params = array_to_params(ellipse)
+        coeff_matrix = psf_coeffs[fib,:-7]
+        coeff_matrix = coeff_matrix.reshape((coeff_matrix.size/3,3))
+        for sec in range(num_sections):
+            ### Get a small section of ccd to extract
+            hsec = np.arange(sec*(len_section-2*len_edge), len_section+sec*(len_section-2*len_edge))
+            vcent = np.mean(vcents[hsec])
+            ccd_sec = ccd[vcent-v_pad:vcent+v_pad,hsec]
+            ccd_sec_invar = 1/(ccd_sec + bg_err**2)
+            ### set coordinates for opposite corners of box (for profile matrix)
+            vtl = vcent-v_pad
+            htl = hsec[0]
+            vbr = vcent+v_pad
+            hbr = hsec[-1]
+            ### Optional - test removing background again
+            ccd_sec, sec_bg_err = remove_ccd_background(ccd_sec,cut=3*bg_err)
+            ### numbe of wavelength points to extract, default 1/pixel
+            wls = len_section
+            hcents = np.linspace(0,hsec[-1],wls)
+            A = np.zeros((wls,2*v_pad+1,len(hsec)))
+            for jj in range(wls):
+                ### Commented lines are if wl_pad is used
+#                if jj < 0:
+#                    hcent = hcents[0]+jj*dlth
+#                    vcent = sf.eval_polynomial_coeffs((hcent-hpix/2)/hpix, trace_coeffs_ccd[:,idx])[0]
+#                elif jj >= wls:
+#                    hcent = hcents[-1]+(jj-wls+1)*dlth
+#                    vcent = sf.eval_polynomial_coeffs((hcent-hpix/2)/hpix, trace_coeffs_ccd[:,idx])[0]
+#                else:
+#                    hcent = hcents[jj]
+#                    vcent = vcents[jj]
+                hcent = hcents[jj]
+                vcent = vcents[jj]
+                vcent -= 1  ### Something is wrong above - shouldn't need this...
+                center = [np.mod(hcent,1),np.mod(vcent,1)]
+                hpoint = (hcent-hpix/2)/hpix
+                ### Now build PSF model around center point
+                psf_type = 'bspline'
+                if psf_type == 'bspline':
+                    ### TODO - revamp this to pull from input
+                    r_breakpoints = np.hstack(([0, 1.5, 2.4, 3],np.arange(3.5,8.6,1)))         
+                    theta_orders = [0]
+                    psf_jj = spline.make_spline_model(params, coeff_matrix, center, hpoint, [2*fit_pad+1,2*fit_pad+1], r_breakpoints, theta_orders, fit_bg=False)
+                    bg_lvl = np.median(psf_jj[psf_jj<np.mean(psf_jj)])
+                    psf_jj -= bg_lvl  
+                    psf_jj /= np.sum(psf_jj) # Normalize to 1
+                sp_l = max(0,fit_pad+(htl-int(hcent))) #left edge
+                sp_r = min(2*fit_pad+1,fit_pad+(hbr-int(hcent))) #right edge
+                sp_t = max(0,fit_pad+(vtl-int(vcent))) #top edge
+                sp_b = min(2*fit_pad+1,fit_pad+(vbr-int(vcent))) #bottom edge
+                ### indices of A slice to use
+                a_l = max(0,int(hcent)-htl-fit_pad) # left edge
+                a_r = min(A.shape[2],int(hcent)-htl+fit_pad+1) # right edge
+                a_t = max(0,int(vcent)-vtl-fit_pad) # top edge
+                a_b = min(A.shape[1],int(vcent)-vtl+fit_pad+1) # bottom edge    
+                A[jj+wl_pad,a_t:a_b,a_l:a_r] = psf_jj[sp_t:sp_b,sp_l:sp_r]  
+            ##Now using the full available data
+            B = np.matrix(np.resize(A.T,(d0*d1,wls)))
+            B = np.hstack((B,np.ones((d0*d1,1)))) ### add background term
+            p = np.matrix(np.resize(ccd_sec.T,(d0*d1,1)))
+            n = np.diag(np.resize(ccd_sec_invar.T,(d0*d1,)))
+            #print np.shape(B), np.shape(p), np.shape(n)
+            text_sp_st = time.time()
+            fluxtilde2 = sf.extract_2D_sparse(p,B,n)
+            t_betw_ext = time.time()
+            #fluxtilde3 = sf.extract_2D(p,B,n)
+            tfinish = time.time()
+    print "Total Time = ", tfinish-tstart
+    print("PSF modeling took {}s".format(text_sp_st-tstart))
+    print("Sparse extraction took {}s".format(t_betw_ext-text_sp_st))
+    #print("Regular extraction took {}s".format(tfinish-t_betw_ext))
+    flux2 = sf.extract_2D_sparse(p,B,n,return_no_conv=True)
+    #Ninv = np.matrix(np.diag(np.resize(ccd_small_invar.T,(d0*d1,))))
+    #Cinv = B.transpose()*Ninv*B
+    #U, s, Vt = linalg.svd(Cinv)
+    #Cpsuedo = Vt.transpose()*np.matrix(np.diag(1/s))*U.transpose();
+    #flux2 = Cpsuedo*(B.transpose()*Ninv*p)
+    #
+    #d, Wt = linalg.eig(Cinv)
+    #D = np.matrix(np.diag(np.asarray(d)))
+    #WtDhW = Wt*np.sqrt(D)*Wt.transpose()
+    #
+    #WtDhW = np.asarray(WtDhW)
+    #s = np.sum(WtDhW,axis=1)
+    #S = np.matrix(np.diag(s))
+    #Sinv = linalg.inv(S)
+    #WtDhW = np.matrix(WtDhW)
+    #R = Sinv*WtDhW
+    #fluxtilde2 = R*flux2
+    #fluxtilde2 = np.asarray(fluxtilde2)
+    #flux2 = np.asarray(flux2)
+    
+    img_est = np.dot(B,flux2)
+    img_estrc = np.dot(B,fluxtilde2)
+    img_recon = np.real(np.resize(img_estrc,(d1,d0)).T)
+    plt.figure("Residuals of 2D fit")
+    plt.imshow(np.vstack((ccd_small,img_recon,ccd_small-img_recon)),interpolation='none')
+    chi_red = np.sum((ccd_small-img_recon)[:,fit_pad:-fit_pad]**2*ccd_small_invar[:,fit_pad:-fit_pad])/(np.size(ccd_small[:,fit_pad:-fit_pad])-jj+1)
+    print("Reduced chi2 = {}".format(chi_red))
+    #plt.figure()
+    #plt.imshow(ccd_small,interpolation='none')
+    plt.show()
+    #img_raw = np.resize(np.dot(B,np.ones(len(fluxtilde2))),(d1,d0)).T
+    #plt.imshow(img_raw,interpolation='none')
+    #plt.show()
+    plt.figure("Cross section of fit, residuals")
+    for i in range(20,26):
+    #    plt.plot(ccd_small[:,i])
+        plt.plot(img_recon[:,i])
+    #    plt.plot(final_centers[i,1],np.max(ccd_small[:,i]),'kd')
+        plt.plot((ccd_small-img_recon)[:,i])#/np.sqrt(abs(ccd_small[:,i])))
+    #    plt.show()
+    #    plt.close()
+    plt.show()
+    plt.close()
