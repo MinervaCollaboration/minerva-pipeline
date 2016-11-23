@@ -340,7 +340,6 @@ else:
     hdu1.header.append(('PSFTYPE',args.psf,'Model used for finding PSF'))
     if args.psf is 'bspline':   
         hdu1.header.comments['NAXIS1'] = 'Coefficients (see key - not yet made)'
-        hdu1.header.comments['NAXIS2'] = 'Fiber (of those actually used)'
         hdu1.header.append(('FIBERNUM',idx,'Fiber number (starting with 0)'))
                 
     hdulist = pyfits.HDUList([hdu1])
