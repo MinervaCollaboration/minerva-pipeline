@@ -257,31 +257,9 @@ bias = bias[:,0:actypix] #Remove overscan
 raw_img -= 4*bias #Note, if ccd is 16bit array, this operation can cause problems
 #raw_img /= 10
 #raw_img[raw_img<0] = 0 #Enforce positivity
-### More robust 
-cut = int(3*np.median(raw_img))
-raw_mask = (raw_img < cut)*(raw_img > -cut)
-masked_img = raw_img[raw_mask]
-arr = plt.hist(masked_img,2*(cut-1))
-hgt = arr[0]
-xvl = arr[1][:-1]
-xmsk = (xvl < np.median(masked_img))
-hgts = hgt[xmsk]
-xvls = xvl[xmsk]
-pguess = (7,np.median(masked_img),np.max(hgt))
-sigma = 1/np.sqrt(abs(hgts)+1)
-params, errarr = opt.curve_fit(sf.gaussian,xvls,hgts,p0=pguess,sigma=sigma)
-#plt.title("Number of pixels with certain count value")
-#plt.ion()
-#plt.show()
-#print params
-#htst = sf.gaussian(xvl, params[0], center=params[1], height=params[2],bg_mean=0,bg_slope=0,power=2)
-#plt.plot(xvl,htst)
-#plt.figure("Residual Distribution")
-#plt.plot(xvl,hgt-htst)
-#exit(0)
-plt.close()
-raw_img -= params[1] # mean
-pix_err = params[0] # standard deviation - use in lieu of readnoise
+### More robust
+raw_img, pix_err = utils.remove_ccd_background(raw_img)
+# pix_err, bg standard deviation - use in lieu of readnoise
 
 #########################################################
 ################## PSF fitting ##########################
@@ -302,7 +280,7 @@ if not args.parallel:
         if args.psf is 'bspline':
             if idx == 0:
                 tmp_psf_coeffs = psf.fit_spline_psf(raw_img,hcenters,
-                             vcenters,sigmas,powers,pix_err,gain,plot_results=True)
+                             vcenters,sigmas,powers,pix_err,gain)
                 num_coeffs = len(tmp_psf_coeffs)
                 fitted_psf_coeffs = np.zeros((num_fibers,num_coeffs))
                 fitted_psf_coeffs[idx,:] = tmp_psf_coeffs
@@ -348,7 +326,7 @@ else:
     powers = trace_pow_coeffs[2,idx]*hscale**2+trace_pow_coeffs[1,idx]*hscale+trace_pow_coeffs[0,idx]
     print("Running PSF Fitting on trace {}".format(idx))
     if args.psf is 'bspline':
-        psf_coeffs = psf.fit_spline_psf(raw_img,hcenters,vcenters,sigmas,powers,pix_err,gain,plot_results=True)
+        psf_coeffs = psf.fit_spline_psf(raw_img,hcenters,vcenters,sigmas,powers,pix_err,gain)
     else:
         print("Invalid PSF selection")
         print("Choose from the following:")
