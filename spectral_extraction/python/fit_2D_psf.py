@@ -33,7 +33,7 @@ import bsplines as spline
 import argparse
 import lmfit
 import psf_utils as psf
-import minerva_utils as utils
+import minerva_utils as m_utils
 
 data_dir = os.environ['MINERVA_DATA_DIR']
 redux_dir = os.environ['MINERVA_REDUX_DIR']
@@ -60,6 +60,8 @@ parser.add_argument("-p","--psf",help="Type of model to be used for PSF fitting.
 parser.add_argument("-par","--parallel",help="Run in parallel mode",action='store_true')
 parser.add_argument("--par_index",help="Fiber index for parallel mode",
                     type=int)
+parser.add_argument("-v","--verbose",help="Prints messages to standard output",
+                    action='store_true')
 #parser.add_argument("-ns","--nosave",help="Don't save results",
 #                    action='store_true')
 #parser.add_argument("-T","--tscopes",help="T1, T2, T3, and/or T4 (remove later)",
@@ -223,7 +225,7 @@ raw_img = arc_ccd
 #i2 = False
 
 
-trace_coeffs, trace_intense_coeffs, trace_sig_coeffs, trace_pow_coeffs = utils.find_trace_coeffs(trace_ccd,2,args.fiber_space,num_points=args.num_points,num_fibers=28*args.telescopes,skip_peaks=1)
+trace_coeffs, trace_intense_coeffs, trace_sig_coeffs, trace_pow_coeffs = m_utils.find_trace_coeffs(trace_ccd,2,args.fiber_space,num_points=args.num_points,num_fibers=28*args.telescopes,skip_peaks=1)
 
 ###Plot to visualize traces      
 #fig,ax = plt.subplots()
@@ -258,7 +260,7 @@ raw_img -= 4*bias #Note, if ccd is 16bit array, this operation can cause problem
 #raw_img /= 10
 #raw_img[raw_img<0] = 0 #Enforce positivity
 ### More robust
-raw_img, pix_err = utils.remove_ccd_background(raw_img)
+raw_img, pix_err = m_utils.remove_ccd_background(raw_img)
 # pix_err, bg standard deviation - use in lieu of readnoise
 
 #########################################################
@@ -274,19 +276,19 @@ if not args.parallel:
         vcenters = trace_coeffs[2,idx+1]*hscale**2+trace_coeffs[1,idx+1]*hscale+trace_coeffs[0,idx+1]
         sigmas = trace_sig_coeffs[2,idx]*hscale**2+trace_sig_coeffs[1,idx]*hscale+trace_sig_coeffs[0,idx]
         powers = trace_pow_coeffs[2,idx]*hscale**2+trace_pow_coeffs[1,idx]*hscale+trace_pow_coeffs[0,idx]
-        
-        print("Running PSF Fitting on trace {}".format(idx))
+        if args.verbose:
+            print("Running PSF Fitting on trace {}".format(idx))
         
         if args.psf is 'bspline':
             if idx == 0:
                 tmp_psf_coeffs = psf.fit_spline_psf(raw_img,hcenters,
-                             vcenters,sigmas,powers,pix_err,gain)
+                             vcenters,sigmas,powers,pix_err,gain,verbose=args.verbose)
                 num_coeffs = len(tmp_psf_coeffs)
                 fitted_psf_coeffs = np.zeros((num_fibers,num_coeffs))
                 fitted_psf_coeffs[idx,:] = tmp_psf_coeffs
             else:
                 fitted_psf_coeffs[idx,:] = psf.fit_spline_psf(raw_img,hcenters,
-                             vcenters,sigmas,powers,pix_err,gain)
+                             vcenters,sigmas,powers,pix_err,gain,verbose=args.verbose)
         else:
             print("Invalid PSF selection")
             print("Choose from the following:")
@@ -324,9 +326,10 @@ else:
     vcenters = trace_coeffs[2,idx+1]*hscale**2+trace_coeffs[1,idx+1]*hscale+trace_coeffs[0,idx+1]
     sigmas = trace_sig_coeffs[2,idx]*hscale**2+trace_sig_coeffs[1,idx]*hscale+trace_sig_coeffs[0,idx]
     powers = trace_pow_coeffs[2,idx]*hscale**2+trace_pow_coeffs[1,idx]*hscale+trace_pow_coeffs[0,idx]
-    print("Running PSF Fitting on trace {}".format(idx))
+    if args.verbose:
+        print("Running PSF Fitting on trace {}".format(idx))
     if args.psf is 'bspline':
-        psf_coeffs = psf.fit_spline_psf(raw_img,hcenters,vcenters,sigmas,powers,pix_err,gain)
+        psf_coeffs = psf.fit_spline_psf(raw_img,hcenters,vcenters,sigmas,powers,pix_err,gain,verbose=args.verbose)
     else:
         print("Invalid PSF selection")
         print("Choose from the following:")

@@ -400,7 +400,7 @@ def params_to_array(params):
     return centers, ellipse
     
 def fit_spline_psf(raw_img,hcenters,vcenters,sigmas,powers,readnoise,
-                   gain,plot_results=False):
+                   gain,plot_results=False,verbose=False):
     """ function to fit parameters for radial bspline psf.
     """
     ### 1. Estimate spline amplitudes, centers, w/ circular model
@@ -460,10 +460,11 @@ def fit_spline_psf(raw_img,hcenters,vcenters,sigmas,powers,readnoise,
     loop_cnt = 0
     fit_bg = False ## True fits a constant background at each subimage
     while abs(np.sum(chi_new)-np.sum(chi_old)) > dlt_chi and loop_cnt < mx_loops:
-        print("starting loop {}".format(loop_cnt))
-        print("  chi_old mean = {}".format(np.mean(chi_old)))
-        print("  chi_new mean = {}".format(np.mean(chi_new)))
-        print("  delta_chi = {}".format((np.sum(chi_new)-np.sum(chi_old))))
+        if verbose:
+            print("starting loop {}".format(loop_cnt))
+            print("  chi_old mean = {}".format(np.mean(chi_old)))
+            print("  chi_new mean = {}".format(np.mean(chi_new)))
+            print("  delta_chi = {}".format((np.sum(chi_new)-np.sum(chi_old))))
         chi_old = np.copy(chi_new)
     ### 3. Build profile, data, and noise matrices at each pixel point and sum
         dim_s = (2*cpad+1)**2
@@ -742,7 +743,8 @@ def fit_spline_psf(raw_img,hcenters,vcenters,sigmas,powers,readnoise,
         lp_idx = 0
         for j in range(cnts):
             if not peak_mask[j]:
-                print "skipping point {}".format(j)
+                if verbose:
+                    print "skipping point {}".format(j)
                 continue
             else:
                 harr = np.arange(-cpad,cpad+1)+int(np.floor(new_hcenters[j]))
@@ -757,14 +759,16 @@ def fit_spline_psf(raw_img,hcenters,vcenters,sigmas,powers,readnoise,
             coeff_matrix_min = np.copy(coeff_matrix)
             params_min = lmfit.Parameters(params1)
         if np.sum(chi_new) < chi_min:
-            print "Better fit on loop ", loop_cnt
+            if verbose:
+                print "Better fit on loop ", loop_cnt
             chi_min = np.sum(chi_new)
             coeff_matrix_min = np.copy(coeff_matrix)
             params_min = lmfit.Parameters(params1)
         loop_cnt += 1
     
     ### End of loop
-    print("End of Loop")
+    if verbose:
+        print("End of Loop")
     ### Check that q, PA, aren't driving toward unphysical answers
 #    test_hscale = np.arange(-1,1,0.01)
     #q = params_min['q0'].value + params_min['q1'].value*test_hscale + params_min['q2'].value*test_hscale**2
