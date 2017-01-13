@@ -8,6 +8,7 @@ import pyfits
 import os
 import math
 import time
+import glob
 import numpy as np
 from numpy import pi, sin, cos, random, zeros, ones, ediff1d
 #from numpy import *
@@ -23,9 +24,45 @@ import scipy.optimize as opt
 #import scipy.linalg as linalg
 #import solar
 import special as sf
-#import bsplines as spline
+import bsplines as spline
 #import argparse
 import lmfit
+
+def open_minerva_fits(fits, ext=0, return_hdr=False):
+    """ Converts from kiwispec format (raveled array of 2 8bit images) to
+        analysis format (2D array of 16bit int, converted to float)
+    """
+    spectrum = pyfits.open(fits,uint=True)
+    hdr = spectrum[ext].header
+    ccd = spectrum[ext].data
+    #Dimensions
+    ypix = hdr['NAXIS1']
+    xpix = hdr['NAXIS2']
+    
+    actypix = 2048 ### Hardcoded to remove overscan, fix later if needed
+    
+    if np.shape(ccd)[0] > ypix:
+        ccd_new = np.resize(ccd,[xpix,ypix,2])
+            
+        #Data is split into two 8 bit sections (totalling 16 bit).  Need to join
+        #these together to get 16bit number.  Probably a faster way than this.
+        ccd_16bit = np.zeros((xpix,ypix))
+        for row in range(xpix):
+            for col in range(ypix):
+                #Join binary strings
+                binstr = "{:08d}{:08d}".format(int(bin(ccd_new[row,col,0])[2:]),
+                          int(bin(ccd_new[row,col,1])[2:]))
+                ccd_16bit[row,col] = int(binstr,base=2)
+#                ccd_16bit[row,col] = int(''.join(ccd_tmp[row,col]),base=2)
+    
+        ccd = ccd_16bit[::-1,0:actypix] #Remove overscan region
+    else:
+        ccd = ccd[::-1,0:actypix] #Remove overscan region
+        ccd = ccd.astype(np.float)
+    if return_hdr:
+        return ccd, hdr
+    else:
+        return ccd
 
 def fit_trace(x,y,ccd,form='gaussian'):
     """quadratic fit (in x) to trace around x,y in ccd
@@ -668,7 +705,7 @@ def refine_trace_centers(ccd, t_coeffs, i_coeffs, s_coeffs, p_coeffs, fact=10, r
             t/i/s/p_coeffs - modified gaussian coefficients from fiberflat
             fact - do 1/fact of the available points
     """
-    num_fibers = t_coeffs.shape[0]
+    num_fibers = t_coeffs.shape[1]
     hpix = ccd.shape[1]
     vpix = ccd.shape[0]
     ### First fit vc parameters for traces
@@ -680,6 +717,8 @@ def refine_trace_centers(ccd, t_coeffs, i_coeffs, s_coeffs, p_coeffs, fact=10, r
     if verbose:
         print("Refining trace centers")
     for i in range(num_fibers):
+        if i != 63:
+            continue
         if verbose:
             print("Running on index {}".format(i))
     #    slit_num = np.floor((i)/args.telescopes)
@@ -736,19 +775,23 @@ def refine_trace_centers(ccd, t_coeffs, i_coeffs, s_coeffs, p_coeffs, fact=10, r
         trace_coeffs_ccd[:,i] = tmp_coeffs 
     return trace_coeffs_ccd
     
-def extract_2D(ccd, psf_coeffs, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs=None, readnoise=1, gain=1, return_model=False, verbose=False):
+def extract_2D(ccd, psf_coeffs, t_coeffs, readnoise=1, gain=1, return_model=False, verbose=False):
     """ Code to perform 2D spectroperfectionism algorithm on MINERVA data.
     """
+    if psf_coeffs.ndim == 1: 
+        psf_coeffs = psf_coeffs.reshape((1,len(psf_coeffs)))
+    elif psf_coeffs.ndim != 2:
+        print("Invalid shape for psf_coeffs with ndim = {}".format(psf_coeffs.ndim))
+        exit(0)
     ### Set shape variables based on inputs
-    num_fibers = t_coeffs.shape[0]
+    num_fibers = t_coeffs.shape[1]
+    num_fibers = 1 ### Manual override for testing
     hpix = ccd.shape[1]
     hscale = (np.arange(hpix)-hpix/2)/hpix
     extracted_counts = np.zeros((num_fibers,hpix))
     ### Remove CCD diffuse background - cut value matters
     cut = np.median(np.median(ccd[ccd<np.median(ccd)]))
-    ccd, bg_err = remove_ccd_background(ccd,cut=cut,plot=True)
-    ### Fit input trace coeffs (from fiberflat) to this ccd
-    t_coeffs = refine_trace_centers(ccd,t_coeffs,i_coeffs,s_coeffs,p_coeffs)
+    ccd, bg_err = remove_ccd_background(ccd,cut=cut)
     ### Parameters for extraction box size - try various values
     ### For meaning, see documentation
     num_sections = 16
@@ -758,34 +801,35 @@ def extract_2D(ccd, psf_coeffs, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs
     len_edge = fit_pad*2
     ### iterate over all fibers
     for fib in range(num_fibers):
-        print("Running 2D Extraction on fiber {}".format(fib))
+        if verbose:
+            print("Running 2D Extraction on fiber {}".format(fib))
         ### Trace parameters
-        vcents = sf.eval_polynomial_coeffs(hscale,t_coeffs[:,fib])
-        sigmas = sf.eval_polynomial_coeffs(hscale,s_coeffs[:,fib])
-        powers = sf.eval_polynomial_coeffs(hscale,p_coeffs[:,fib])   
+        vcenters = sf.eval_polynomial_coeffs(hscale,t_coeffs[:,fib+63])### Manual override  
         ### PSF parameters
-        ellipse = psf_coeffs[fib,-7:-1]
+        ellipse = psf_coeffs[fib,-6:]
         ellipse = ellipse.reshape((2,3))
         params = array_to_params(ellipse)
-        coeff_matrix = psf_coeffs[fib,:-7]
-        coeff_matrix = coeff_matrix.reshape((coeff_matrix.size/3,3))
+        coeff_matrix = psf_coeffs[fib,:-6]
+        coeff_matrix = coeff_matrix.reshape((int(coeff_matrix.size/3),3))
         for sec in range(num_sections):
+            tstart = time.time()
             ### Get a small section of ccd to extract
             hsec = np.arange(sec*(len_section-2*len_edge), len_section+sec*(len_section-2*len_edge))
-            vcent = np.mean(vcents[hsec])
-            ccd_sec = ccd[vcent-v_pad:vcent+v_pad,hsec]
+            hmin = hsec[0]
+            vcentmn = np.mean(vcenters[hsec])
+            vmin = max(int(vcentmn-v_pad),0)
+            vmax = min(int(vcentmn+v_pad+1),ccd.shape[0])
+            ccd_sec = ccd[vmin:vmax,hsec]
             ccd_sec_invar = 1/(ccd_sec + bg_err**2)
-            ### set coordinates for opposite corners of box (for profile matrix)
-            vtl = vcent-v_pad
-            htl = hsec[0]
-            vbr = vcent+v_pad
-            hbr = hsec[-1]
+            d0 = ccd_sec.shape[0]
+            d1 = ccd_sec.shape[1]
             ### Optional - test removing background again
             ccd_sec, sec_bg_err = remove_ccd_background(ccd_sec,cut=3*bg_err)
-            ### numbe of wavelength points to extract, default 1/pixel
+            ### number of wavelength points to extract, default 1/pixel
             wls = len_section
-            hcents = np.linspace(0,hsec[-1],wls)
-            A = np.zeros((wls,2*v_pad+1,len(hsec)))
+            hcents = np.linspace(hsec[0],hsec[-1],wls)
+            vcents = vcenters[hsec]
+            A = np.zeros((wls,d0,d1))
             for jj in range(wls):
                 ### Commented lines are if wl_pad is used
 #                if jj < 0:
@@ -812,52 +856,54 @@ def extract_2D(ccd, psf_coeffs, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs
                     bg_lvl = np.median(psf_jj[psf_jj<np.mean(psf_jj)])
                     psf_jj -= bg_lvl  
                     psf_jj /= np.sum(psf_jj) # Normalize to 1
-                sp_l = max(0,fit_pad+(htl-int(hcent))) #left edge
-                sp_r = min(2*fit_pad+1,fit_pad+(hbr-int(hcent))) #right edge
-                sp_t = max(0,fit_pad+(vtl-int(vcent))) #top edge
-                sp_b = min(2*fit_pad+1,fit_pad+(vbr-int(vcent))) #bottom edge
+#                    if jj == 1:
+#                        plt.imshow(psf_jj)
+#                        plt.show()
+#                        plt.close()
+                ### set coordinates for opposite corners of box (for profile matrix)
+                vtl = max(0,int(vcent)-fit_pad-vmin)
+                htl = max(0,int(hcent)-fit_pad-hmin)
+                vbr = min(A.shape[1],int(vcent)+fit_pad+1-vmin)
+                hbr = min(A.shape[2],int(hcent)+fit_pad+1-hmin)
+#                print("Top left = ({},{}), Bottom right = ({},{})".format(htl,vtl,hbr,vbr))
+                ### Use to slice psf_jj
+                sp_l = max(0,fit_pad+(htl-int(hcent-hmin))) #left edge
+                sp_r = min(2*fit_pad+1,fit_pad+(hbr-int(hcent-hmin))) #right edge
+                sp_t = max(0,fit_pad+(vtl-int(vcent-vmin))) #top edge
+                sp_b = min(2*fit_pad+1,fit_pad+(vbr-int(vcent-vmin))) #bottom edge
                 ### indices of A slice to use
-                a_l = max(0,int(hcent)-htl-fit_pad) # left edge
-                a_r = min(A.shape[2],int(hcent)-htl+fit_pad+1) # right edge
-                a_t = max(0,int(vcent)-vtl-fit_pad) # top edge
-                a_b = min(A.shape[1],int(vcent)-vtl+fit_pad+1) # bottom edge    
-                A[jj+wl_pad,a_t:a_b,a_l:a_r] = psf_jj[sp_t:sp_b,sp_l:sp_r]  
+                a_l = max(0,htl) # left edge
+                a_r = min(A.shape[2],hbr) # right edge
+                a_t = max(0,vtl) # top edge
+                a_b = min(A.shape[1],vbr) # bottom edge    
+                A[jj,a_t:a_b,a_l:a_r] = psf_jj[sp_t:sp_b,sp_l:sp_r]  
             ##Now using the full available data
+            im = np.sum(A,axis=0)
+#            plt.imshow(im)
+#            plt.show()
             B = np.matrix(np.resize(A.T,(d0*d1,wls)))
-            B = np.hstack((B,np.ones((d0*d1,1)))) ### add background term
+#            B = np.hstack((B,np.ones((d0*d1,1)))) ### add background term
             p = np.matrix(np.resize(ccd_sec.T,(d0*d1,1)))
             n = np.diag(np.resize(ccd_sec_invar.T,(d0*d1,)))
             #print np.shape(B), np.shape(p), np.shape(n)
             text_sp_st = time.time()
-            fluxtilde2 = sf.extract_2D_sparse(p,B,n)
+            fluxtilde = sf.extract_2D_sparse(p,B,n)
             t_betw_ext = time.time()
-            #fluxtilde3 = sf.extract_2D(p,B,n)
+            if sec == 0:
+                extracted_counts[fib,0:len_section] = fluxtilde
+            else:
+                sec_inds = np.arange(len_edge,len_section,dtype=int)
+                extracted_counts[fib,sec_inds+int(sec*(len_section-2*len_edge))] = fluxtilde[sec_inds]
             tfinish = time.time()
-    print "Total Time = ", tfinish-tstart
-    print("PSF modeling took {}s".format(text_sp_st-tstart))
-    print("Sparse extraction took {}s".format(t_betw_ext-text_sp_st))
-    #print("Regular extraction took {}s".format(tfinish-t_betw_ext))
-    flux2 = sf.extract_2D_sparse(p,B,n,return_no_conv=True)
-    #Ninv = np.matrix(np.diag(np.resize(ccd_small_invar.T,(d0*d1,))))
-    #Cinv = B.transpose()*Ninv*B
-    #U, s, Vt = linalg.svd(Cinv)
-    #Cpsuedo = Vt.transpose()*np.matrix(np.diag(1/s))*U.transpose();
-    #flux2 = Cpsuedo*(B.transpose()*Ninv*p)
-    #
-    #d, Wt = linalg.eig(Cinv)
-    #D = np.matrix(np.diag(np.asarray(d)))
-    #WtDhW = Wt*np.sqrt(D)*Wt.transpose()
-    #
-    #WtDhW = np.asarray(WtDhW)
-    #s = np.sum(WtDhW,axis=1)
-    #S = np.matrix(np.diag(s))
-    #Sinv = linalg.inv(S)
-    #WtDhW = np.matrix(WtDhW)
-    #R = Sinv*WtDhW
-    #fluxtilde2 = R*flux2
-    #fluxtilde2 = np.asarray(fluxtilde2)
-    #flux2 = np.asarray(flux2)
-    
+            if verbose:
+                print("Section {} Time = {}".format(sec,tfinish-tstart))
+                print("  PSF modeling took {}s".format(text_sp_st-tstart))
+                print("  Sparse extraction took {}s".format(t_betw_ext-text_sp_st))
+    return extracted_counts
+#    flux2 = sf.extract_2D_sparse(p,B,n,return_no_conv=True)
+
+'''
+    ### Figure out way to include diagnositic plots in a sensible place
     img_est = np.dot(B,flux2)
     img_estrc = np.dot(B,fluxtilde2)
     img_recon = np.real(np.resize(img_estrc,(d1,d0)).T)
@@ -881,3 +927,90 @@ def extract_2D(ccd, psf_coeffs, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs
     #    plt.close()
     plt.show()
     plt.close()
+#'''
+    
+def find_most_recent_arc_date(data_dir,return_filenames=False,date_format='nYYYYMMDD', before_date=None):
+    """ Finds the date of most recent arc exposures.
+        If desired, can return list of arc exposures on that date.
+        date_format should show all positions of Y, M, and D (plus any /, -, etc)
+    """
+    ### Find files
+    filenames = glob.glob(os.path.join(data_dir,'*','*[tT][hH][aA][rR]*'))
+    filenames.sort()
+    ### Set up dates, formatting
+    roots = [os.path.split(f)[0] for f in filenames]
+    dates = np.array(([os.path.split(r)[1] for r in roots]))
+    dates = np.unique(dates)
+    date_format = date_format.upper()
+    def most_recent(D,dates,date_format,before_date=None):
+        """ Intended to have D = 'Y', 'M', or 'D'
+            Returns string of dates that have the most recent Y, M, or D.
+        """
+        D = D.upper()
+        digits = date_format.count(D,0)
+        st = date_format.find(D,0)
+        ret = np.array(([dates[i][st:st+digits] for i in range(len(dates))]),dtype=int)
+        recent = str(np.max(ret))
+        return recent
+#        dates_recent = np.array(([dates[i]]))
+    ### Loop through, cull out
+    for D in ['Y','M','D']:
+        recent = most_recent(D,dates,date_format,before_date=before_date)
+        date_inds = np.array(([i for i in range(len(dates)) if recent in dates[i]]),dtype=int)
+        dates = dates[date_inds]
+    date = dates[0]
+    if return_filenames:
+        return [f for f in filenames if date in f]
+    else:
+        return date
+    
+def fits_to_arrays(fits_files,ext=0,i2_in=False):
+    """ Opens fits files from a list, stacks into an array.
+        Build specifically for arc/flat frames with i2_in False
+    """
+    if type(fits_files) is str:
+        fits_files = [fits_files,]
+    idx = 0
+    didx = 0
+    for flnm in fits_files:
+        img, hdr = open_minerva_fits(flnm, ext=ext, return_hdr=True)
+        if idx == 0 and didx == 0:
+            imgs = np.zeros((len(fits_files),img.shape[0],img.shape[1]))
+        try:
+            if hdr['I2POSAS']=='out':
+                i2 = False
+            else:
+                i2 = True
+        except KeyError:
+            i2 = False
+        if i2 == i2_in:
+            imgs[idx] = img
+            idx += 1
+        else:
+            imgs = np.delete(imgs,idx,axis=0)
+            didx += 1
+    return imgs
+    
+def stack_bias(redux_dir, data_dir, date, fname='bias_avg.fits'):
+    """ Stacks bias frames from the day (median combined), saves result to
+        disk.  Will load directly instead of re-doing if available.
+        Returns the median bias
+    """
+    if os.path.isfile(os.path.join(redux_dir,date,fname)):
+        bias_hdu = pyfits.open(os.path.join(redux_dir,date,fname),uint=True)
+        bias = bias_hdu[0].data 
+        return bias
+    else:
+        filenames = glob.glob(os.path.join(data_dir,date,'*[Bb]ias*.fits'))
+        shape = np.shape(pyfits.open(filenames[0])[0].data)
+        biases = np.zeros((len(filenames),shape[0],shape[1]))
+        for i in range(len(filenames)):
+            biases[i] = pyfits.open(filenames[i])[0].data
+        bias = sf.combine(biases)
+        hdu = pyfits.PrimaryHDU(bias)
+        hdulist = pyfits.HDUList([hdu])
+        if not os.path.isdir(os.path.join(redux_dir,date)):
+            os.mkdir(os.path.join(redux_dir,date))
+        hdulist.writeto(os.path.join(redux_dir,date,fname),clobber=True)
+        return bias
+    

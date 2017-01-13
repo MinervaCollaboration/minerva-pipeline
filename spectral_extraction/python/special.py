@@ -17,6 +17,8 @@ import numpy as np
 from numpy import *
 import matplotlib.pyplot as plt
 from matplotlib import cm
+plt.rcParams['image.cmap'] = 'gray'
+from matplotlib.colors import LinearSegmentedColormap
 #import scipy
 #import scipy.stats as stats
 import scipy.special as sp
@@ -39,6 +41,10 @@ def gaussian(axis, sigma, center=0, height=1,bg_mean=0,bg_slope=0,power=2):
 #    print sigma, center, height, bg_mean,bg_slope,power
 #    print gaussian
     return gaussian
+    
+def trunc_gaussian(x, sig, xc=0, low=0, high=np.inf):
+    err = 0.5*(sp.erf((high-xc)/(np.sqrt(2)*sig))-sp.erf((low-xc)/(np.sqrt(2)*sig)))
+    return gaussian(x, sig, center=xc, height = 1/(np.sqrt(2*pi)*sig))/err
     
 def gaussian_int(axis, sigma, center=0, height=1,bg_mean=0,bg_slope=0,power=2,pts_per_px=100):
     """Returns gaussian output values for a given input array, sigma, center,
@@ -74,17 +80,130 @@ def schechter_fct(L,L_star,Phi_star,alpha):
     N_L = Phi_star*(L/L_star)**alpha*np.exp(-L/L_star)
     return N_L
     
+def inv_power(x,xc,n):
+    """ y = 1/(x-xc)**n
+        Normalized by default on the interval [x0, xn]
+    """
+    if n == 1:
+        A = 1/(np.log((x[-1]-xc)/(x[0]-xc)))
+    elif n == 0:
+        A = (x[-1]-x[0])/len(x)
+    else:
+        A = 1/(-(1/(n-1))*(1/(x[-1]-xc)**(n-1) - 1/(x[0]-xc)**(n-1)))
+    return A/(x-xc)**n
+    
+def inv_power_int(xc,n,low,high,low0,high0):
+    """ Integral, low0 and high0 set bounds for pdf, low, high within pdf.
+        Must have low0<low<high<high0 (reverse l/h signs technically okay)
+    """
+    if n == 1:
+        A = 1/(np.log((high0-xc)/(low0-xc)))
+        return A*(np.log((high-xc)/(low-xc)))
+    elif n == 0:
+        return (high0-low0)/(high-low)
+    else:
+        A = -(1/(n-1))*(1/(high0-xc)**(n-1) - 1/(low0-xc)**(n-1))
+        return -(A/(n-1))*(1/(high-xc)**(n-1) - 1/(low-xc)**(n-1))
+    
+def cauchy(x,xc,a,low=0,high=np.inf):
+    """ Truncated Cauchy Distribution
+        Normalized by construction on interval [low, high]
+    """
+    denom = 0.5 + 1/np.pi*np.arctan(xc/a)
+    num = 1/(np.pi*a*(1+((x-xc)/a)**2))
+    return num/denom
+#    A = 1/(a*(np.arctan((high-xc)/a)-np.arctan((low-xc)/a)))
+#    return A*(1/(1+((x-xc)/a)**2))
+    
+def cauchy_2d(x,y,xc,yc,a1,a2,gam,low=0,high=np.inf):
+    """ Not normalized...
+    """
+    return 1/(1+((x-xc)/a1)**2+((y-yc)/a2)**2)**(gam/2)
+
+def multi_mod_cauchy(params,X,low=0,high=np.inf):
+    ''' Multi dimensional modified cauchy pdf.
+        Form is P(x) = A/(1+((x-xc1)/a1)**2+((x-xc2)/a2)**2+...)**(n/2)
+        A is determined numerically based upon provided upper and lower bounds
+        params must be of form [xc1, a1, xc2, a2, ..., n]
+        if len(params) is even, n is assumed to be 2.
+        X is a 2d array, # rows = num components
+        Order is arbitrary, but X row must be paired with correct params
+    '''
+    if len(params)%2 == 1:
+        n = params[-1]
+    else:
+        n = 2
+    components = int(np.floor(len(params)/2))
+    denom = np.ones((X[0].shape))
+    for i in range(components):
+        denom += ((X[i] - params[2*i])/params[2*i+1])**2
+    denom = denom**(n/2)
+    pdf = 1/denom
+    ### simple, less accurate integral
+    pdf /= np.sum(pdf)
+    return pdf
+    
+def cauchy_int(xc, a, low, high, low0=0, high0=np.inf):
+    """ Integral of inv_xsq_power of given parameters (and limits)
+        optional inputs low0 and high0 set the range of the pdf.
+    """
+    A = 1/(a*(np.arctan((high0-xc)/a)-np.arctan((low0-xc)/a)))
+    return A*(a*(np.arctan((high-xc)/a)-np.arctan((low-xc)/a)))
+    
+def cauchy_residual(params,x,y,inv):
+    """ For use with lmfit
+    """
+    xc = params['xc'].value
+    a = params['a'].value
+    try:
+        h = params['h'].value
+    except:
+        h = 1
+    return (h*cauchy(x,xc,a)-y)*np.sqrt(inv)
+    
 def weibull(x,k,lam):
     """ Weibull distribution
     """
-    return (k/lam)*(x/lam)**(k-1)*np.exp(-(x/lam)**k)   
+    return (k/lam)*(x/lam)**(k-1)*np.exp(-(x/lam)**k)  
     
-def sersic1d(rarr,Ie,re,n):
+def weibull_residual(params,x,y,inv):
+    """ For use with lmfit
+    """
+    k = params['k'].value
+    lam = params['lam'].value
+    try:
+        h = params['h'].value
+    except:
+        h = 1
+    return (h*weibull(x,k,lam)-y)*np.sqrt(inv)
+    
+def exponential_residual(params,x,y,inv):
+    """ For use with lmfit
+    """
+    tau = params['tau'].value
+    try:
+        h = params['h'].value
+    except:
+        h = 1
+    try:
+        xc = params['xc'].value
+    except:
+        xc = 0
+    return (h*np.exp(-(x-xc)/tau)-y)*np.sqrt(inv)
+    
+def sersic1d_old(rarr,Ie,re,n):
     bn = 0.868*n-0.142
     I_r = Ie*10**(-bn*((rarr/re)**(1/n)-1))
     return I_r
+    
+def sersic1d(rarr,A,sig,n):
+    	if n >= 0.36: # from Ciotti & Bertin 1999, truncated to n^-3
+		k=2.0*n-1./3+4./(405.*n)+46./(25515.*n**2.)+131./(1148175.*n**3.)
+	else: # from MacArthur et al. 2003
+		k=0.01945-0.8902*n+10.95*n**2.-19.67*n**3.+13.43*n**4.
+	return A*np.exp(-k*(rarr/sig)**(1./n))
 
-def sersic2d(x,y,xc,yc,Ie,re,n,q=1,PA=0):
+def sersic2d_old(x,y,xc,yc,Ie,re,n,q=1,PA=0):
     """ makes a 2D image (dimx x dimy) of a Sersic profile centered at [xc,yc]
         and parameters Ie, re, and n.
         Optionally can add in ellipticity with axis ratio (q) and position
@@ -92,7 +211,26 @@ def sersic2d(x,y,xc,yc,Ie,re,n,q=1,PA=0):
     """
     rarr = make_rarr(x,y,xc,yc,q=q,PA=PA)
     image = sersic1d(rarr,Ie,re,n)
-    return image    
+    return image
+    
+def sersic2d(x,y,xc,yc,A,sig,n,q=1,PA=0):
+    rarr = make_rarr(x,y,xc,yc,q=q,PA=PA)
+    return sersic1dy(rarr,A,sig,n)
+    
+def sersic2d_lmfit(params,x,y,i):
+    """ makes a 2D image (dimx x dimy) of a Sersic profile with parameters
+        in lmfit object params (xc, yc, Ie, re, n, q, PA)
+    """
+    xc = params['xcb{}'.format(i)].value
+    yc = params['ycb{}'.format(i)].value
+    q = params['qb{}'.format(i)].value
+    PA = params['PAb{}'.format(i)].value
+    Ie = params['Ieb{}'.format(i)].value
+    re = params['reb{}'.format(i)].value
+    n = params['nb{}'.format(i)].value
+    rarr = make_rarr(x,y,xc,yc,q=q,PA=PA)
+    image = sersic1d(rarr,Ie,re,n)
+    return image
     
 def gauss_residual(params,xvals,zvals,invals):
     """ Residual function for gaussian with constant background, for use with
@@ -100,9 +238,18 @@ def gauss_residual(params,xvals,zvals,invals):
     """
     sigma = params['sigma'].value
     mn = params['mean'].value
-    hght = params['hght'].value
-    bg = params['bg'].value
-    power = params['power'].value
+    try:
+        hght = params['hght'].value
+    except:
+        hght = 1
+    try:
+        bg = params['bg'].value
+    except:
+        bg = 0
+    try:
+        power = params['power'].value
+    except:
+        power = 2
     gauss = gaussian(xvals,sigma,center=mn,height=hght,bg_mean=bg,power=power)
     residuals = (gauss-zvals)*np.sqrt(invals)
     return residuals
@@ -222,14 +369,7 @@ def eval_polynomial_coeffs(xarr,poly_coeffs):
     order = len(poly_coeffs)-1 #assumes a nonzero array is entered
     profile = np.power(np.tile(xarr,(order+1,1)).T,np.arange(order+1))
     ypoly = np.dot(profile,poly_coeffs)
-#    print ypoly    
-#    print poly_coeffs
-#    plt.plot(xarr,ypoly)
-#    plt.show()
-#    plt.close()
     return ypoly
-    
-    
 
 def best_linear_gauss(axis,sig,mn,data,invar,power=2):
     """ Use linear chi^2 fitting to find height and background estimates
@@ -1153,7 +1293,7 @@ def array_to_dict(dictionary,array,arraynames=None):
         dictionary[arraynames[i]] = array[i]
     return dictionary
     
-def array_to_Parameters(params,array,arraynames=None,minarray=None,maxarray=None,fixed=None):
+def array_to_Parameters(params , array, arraynames=None, minarray=None, maxarray=None, fixed=None):
     """ Puts each element of 'array' into lmfit Parameter object
         Uses arraynames, if present, otherwise numbers 0:len(array)
         Uses min/maxarray if present
@@ -1189,6 +1329,18 @@ def array_to_Parameters(params,array,arraynames=None,minarray=None,maxarray=None
             params[arraynames].vary = fixed
     return params
     
+def Parameters_to_array(params,arraynames=None):
+    """ Converts lmfit.Parameters object to an array.
+    """
+    if arraynames is None:
+        arraynames = params.keys()
+    out_array = np.empty((len(arraynames)))
+    idx = 0
+    for nm in arraynames:
+        out_array[idx] = params[nm].value
+        idx += 1
+    return out_array
+
 def find2dcenter(image,invar,c0,method='quadratic'):
     """ Estimates x,y position of peak in an image with initial guess c0.
         c0 = [xc, yc]
@@ -1277,3 +1429,125 @@ def random_quadrupole_2d(x,r,Qxx,Qyy,Qxy):
         quadrupole distribution.
     """
     return (2*Qxy*x*np.sqrt(r**2-x**2) + Qxx*x**2 + Qyy*(r**2-x**2))/r**5
+    
+def centroid(image,view_plot=False):
+    """ calculates the pixel value weighted x and y centroid.
+        returns xc, yc
+    """ 
+    A = np.sum(image)
+    Mx = np.sum(np.arange(image.shape[1])*np.sum(image,axis=0))
+    My = np.sum(np.arange(image.shape[0])*np.sum(image,axis=1))
+    if view_plot:
+        plt.figure("Evaluation of Centroid")
+        plt.imshow(image,interpolation='none')
+        plt.plot(Mx/A,My/A,'bo')
+        plt.show()
+        plt.close()
+    return [Mx/A, My/A]
+    
+def kolmogorov(y1,y2):
+    """ Runs a KS test on the two data sets (must be equal length).
+        Pretty sure I'm not quite doing this right and will eventually try
+        using R or something.
+    """
+    if len(y1) == len(y2):
+        return np.max(abs(y1-y2))
+    else:
+        print("input arrays must be same length")
+        exit(0)
+        
+def plot_circle(center,radius,q=1,PA=0):
+    """ Plots a circle with defined center and radius (option to turn into
+        an ellipse).  Center format is [xc,yc]
+    """
+    xc = center[0]
+    yc = center[1]
+    xvals = np.linspace(xc-radius,xc+radius,300)
+    arc = np.sqrt(radius**2-(xvals-xc)**2)
+    plt.plot(xvals,yc+arc,'r',linewidth=2)
+    plt.plot(xvals,yc-arc,'r',linewidth=2)
+    return
+    
+def plot_3D(image,x=None,y=None):
+    """ Uses matplotlib plot_surface function.  Always generates its own figure.
+        Option to include custom x, y axes, otherwise goes 0, 1, ..., xmax-1
+    """
+    fig = plt.figure()
+    ax = fig.gca(projection='3d')
+    if x is None:
+        x = np.arange(image.shape[1])
+    if y is None:
+        y = np.arange(image.shape[0])
+        y = y[::-1]
+    X, Y = np.meshgrid(x,y)
+    ### Try custom colormap, grayscale, but never goes fully white
+    colors = [(0, 0, 0), (0.8, 0.8, 0.8)]
+    graymap = LinearSegmentedColormap.from_list('graymap', colors, N=100)
+    surf = ax.plot_surface(X,Y,image,rstride=1,cstride=1,cmap=graymap,linewidth=0)
+    ax.set_zlim(np.min(image)-0.1*abs(np.min(image)),np.max(image)+0.1*abs(np.max(image)))
+    return
+    
+def comoving_dist(z, z0=0, Om=0.3, Ol=0.7, Or=0, h=0.7, k=0):  
+    """ Cosmological comovig distance.  Units are in pc
+    """
+    za = np.linspace(z0,z,1000)
+    E = np.sqrt(Om*(1+za)**3 + Or*(1+za)**4 + Ol)
+    Dh = (3*10**9)*h**(-1) #pc
+    Dc = Dh * np.sum(1/E)*(za[1]-za[0])
+    return Dc
+    
+    
+def angular_dia_dist(z, z0=0, Om=0.3, Ol=0.7, h=0.7, k=0):
+    """ Calculates angular diameter distance for a given cosmology.
+        Units are in pc
+    """
+    Da = comoving_dist(z, z0=z0, Om=Om, Ol=Ol, h=h)*(1+z0)/(1+z)
+    return Da
+    
+def luminosity_dist(z, z0=0, Om=0.3, Ol=0.7, h=0.7, k=0):
+    """ Calculates Luminosity Distance for a given cosmology (in pc)
+    """
+    Dl = angular_dia_dist(z, z0=z0, Om=Om, Ol=Ol, h=h)*(1+z)**2/(1+z0)**2
+    return Dl
+    
+def combine(images,method='median'):
+    """ Input is an array or list of 2D images to median combine.
+        All images must be the same size...
+        Methods can be:
+            - median
+            - average
+            - sum
+    """
+    if type(images) is list:
+        images_tmp = np.array((len(images),images.shape[0],images.shape[1]))
+        try:
+            for i in range(len(images)):
+                images_tmp[i] = images[i]
+        except:
+            print("All images must be the same dimension")
+            exit(0)
+        images = images_tmp
+    if method == 'median':
+        comb_image = np.median(images,axis=0)
+    elif method == 'average':
+        comb_image = np.mean(images,axis=0)
+    elif method == 'sum':
+        comb_image = np.sum(images,axis=0)
+    else:
+        print("Invalid input method.  Must be one of:")
+        print(" median\n mean\n sum")
+        exit(0)
+    return comb_image
+    
+def correlation_coeff(x,y):
+    """ Calculates the sample Pearson correlation coefficient, as described
+        on Wikipedia and similar references.
+    """
+    try:
+        n = x.size
+    except:
+        print("x, y must be arrays with at least 2 data points")
+    num = n*np.sum(x*y) - np.sum(x)*np.sum(y)
+    denom = np.sqrt(n*np.sum(x*x)-(np.sum(x))**2) * np.sqrt(n*np.sum(y*y)-(np.sum(y)**2))
+    return num/denom
+    
