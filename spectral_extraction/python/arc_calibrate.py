@@ -85,23 +85,10 @@ for ts in telescopes:
         print("Starting on telescope {}".format(ts))
     method = 'median'
     for frm in ['arc', 'flat']:
-        if os.path.isfile(os.path.join(redux_dir,date,'combined_{}_{}.fits'.format(frm,ts))) and no_overwrite:
-            continue
-        else:
-            if verbose:
-                print("Combining most recent {}s".format(frm))
-            if frm == 'arc':
-                frames = [f for f in arc_files if ts in f.upper()]
-            elif frm == 'flat':
-                frames = [f for f in fiber_flat_files if ts in f.upper()]
-            frame_imgs = m_utils.fits_to_arrays(frames)
-            comb_img = sf.combine(frame_imgs, method=method)
-            if not os.path.isdir(os.path.join(redux_dir,date)):
-                os.makedirs(os.path.join(redux_dir,date))
-            hdu = pyfits.PrimaryHDU(comb_img)
-            hdu.header.append(('COMBMTHD',method,'Method used to combine frames'))
-            hdulist = pyfits.HDUList([hdu])
-            hdulist.writeto(os.path.join(redux_dir,date,'combined_{}_{}.fits'.format(frm,ts)),clobber=True)
+        if frm == 'arc':
+            m_utils.save_comb_arc_flat(arc_files, frm, ts, redux_dir, date, no_overwrite=no_overwrite, verbose=verbose, method=method)
+        elif frm == 'flat':
+            m_utils.save_comb_arc_flat(fiber_flat_files, frm, ts, redux_dir, date, no_overwrite=no_overwrite, verbose=verbose, method=method)
     flat = pyfits.open(os.path.join(redux_dir,date,'combined_flat_{}.fits'.format(ts)))[0].data
     arc = pyfits.open(os.path.join(redux_dir,date,'combined_arc_{}.fits'.format(ts)))[0].data
     

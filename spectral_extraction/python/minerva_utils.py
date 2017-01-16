@@ -8,6 +8,7 @@ import pyfits
 import os
 import math
 import time
+import sys
 import glob
 import numpy as np
 from numpy import pi, sin, cos, random, zeros, ones, ediff1d
@@ -253,8 +254,7 @@ def find_trace_coeffs(image,pord,fiber_space,num_points=None,num_fibers=None,ver
         if not np.isnan(xtrace[i,0]):
             xtrace[i,0], Itrace[i,0], sigtrace[i,0], powtrace[i,0], chi_vals[i,0] = fit_trace(xtrace[i,0],y,image)
         else:
-            Itrace[i,0], sigtrace[i,0], powtrace[i,0], chi_vals[i,0] = np.nan, np.nan, np.nan, np.nan
-    
+            Itrace[i,0], sigtrace[i,0], powtrace[i,0], chi_vals[i,0] = np.nan, np.nan, np.nan, np.nan    
     
     for i in range(1,len(yvals)):
         y = yvals[i]
@@ -277,15 +277,19 @@ def find_trace_coeffs(image,pord,fiber_space,num_points=None,num_fibers=None,ver
                     #estimate of trace position based on tallest peak
                     xtrace[j,i] = np.argmax(xregion)+lb
                     #quadratic fit for sub-pixel precision
-#                    print xtrace[j,i]
-                    xtrace[j,i], Itrace[j,i], sigtrace[j,i], powtrace[j,i], chi_vals[j,i] = fit_trace(xtrace[j,i],y,image)
+                    try:
+                        xtrace[j,i], Itrace[j,i], sigtrace[j,i], powtrace[j,i], chi_vals[j,i] = fit_trace(xtrace[j,i],y,image)
+                        if xtrace[j, i] < xtrace[j, i-1]:
+                            xtrace[j,i], Itrace[j,i], sigtrace[j,i], sigtrace[j,i], chi_vals[j,i] = np.nan, np.nan, np.nan, np.nan, np.nan
+                    except RuntimeError:
+                        xtrace[j,i], Itrace[j,i], sigtrace[j,i], sigtrace[j,i], chi_vals[j,i] = np.nan, np.nan, np.nan, np.nan, np.nan
                 else:
                     xtrace[j,i], Itrace[j,i], sigtrace[j,i], sigtrace[j,i], chi_vals[j,i] = np.nan, np.nan, np.nan, np.nan, np.nan
             else:
                 xtrace[j,i], Itrace[j,i], sigtrace[j,i], sigtrace[j,i], chi_vals[j,i] = np.nan, np.nan, np.nan, np.nan, np.nan
                 
     Itrace /= np.median(Itrace) #Rescale intensities
-    
+        
     #Finally fit x vs. y on traces.  Start with quadratic for simple + close enough
     t_coeffs = np.zeros((3,num_fibers))
     i_coeffs = np.zeros((3,num_fibers))
@@ -308,18 +312,18 @@ def find_trace_coeffs(image,pord,fiber_space,num_points=None,num_fibers=None,ver
             tmp_coeffs2 = np.nan*np.ones((3))
             tmp_coeffs3 = np.nan*np.ones((3))
             tmp_coeffs4 = np.nan*np.ones((3))
-        t_coeffs[0,i] = tmp_coeffs[0]
+        t_coeffs[0,i] = tmp_coeffs[2]
         t_coeffs[1,i] = tmp_coeffs[1]
-        t_coeffs[2,i] = tmp_coeffs[2]
-        i_coeffs[0,i] = tmp_coeffs2[0]
+        t_coeffs[2,i] = tmp_coeffs[0]
+        i_coeffs[0,i] = tmp_coeffs2[2]
         i_coeffs[1,i] = tmp_coeffs2[1]
-        i_coeffs[2,i] = tmp_coeffs2[2]
-        s_coeffs[0,i] = tmp_coeffs3[0]
+        i_coeffs[2,i] = tmp_coeffs2[0]
+        s_coeffs[0,i] = tmp_coeffs3[2]
         s_coeffs[1,i] = tmp_coeffs3[1]
-        s_coeffs[2,i] = tmp_coeffs3[2]      
-        p_coeffs[0,i] = tmp_coeffs4[0]
+        s_coeffs[2,i] = tmp_coeffs3[0]      
+        p_coeffs[0,i] = tmp_coeffs4[2]
         p_coeffs[1,i] = tmp_coeffs4[1]
-        p_coeffs[2,i] = tmp_coeffs4[2]
+        p_coeffs[2,i] = tmp_coeffs4[0]
         
     if return_all_coeffs:
         return t_coeffs, i_coeffs, s_coeffs, p_coeffs
@@ -482,15 +486,20 @@ def extract_1D(ccd, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs=None, readn
     if verbose:
         print("Refining trace centers")
     for i in range(num_fibers):
+#        plt.show()
+#        plt.close()
         for j in range(0,hpix,fact):
             ### set coordinates, gaussian parameters from coeffs
             jadj = int(np.floor(j/fact))
             yj = (j-hpix/2)/hpix
             yc_ccd[i,jadj] = j
-            xc = t_coeffs[2,i]*yj**2+t_coeffs[1,i]*yj+t_coeffs[0,i]
+            xc = np.poly1d(t_coeffs[:,i])(yj)
+#            plt.plot(j, xc, 'b.')
 #            Ij = i_coeffs[2,i]*yj**2+i_coeffs[1,i]*yj+i_coeffs[0,i] #May use later for normalization
-            sigj = s_coeffs[2,i]*yj**2+s_coeffs[1,i]*yj+s_coeffs[0,i]
-            powj = p_coeffs[2,i]*yj**2+p_coeffs[1,i]*yj+p_coeffs[0,i]
+            sigj = np.poly1d(s_coeffs[:,i])(yj)
+            powj = np.poly1d(p_coeffs[:,i])(yj)
+#            sigj = s_coeffs[2,i]*yj**2+s_coeffs[1,i]*yj+s_coeffs[0,i]
+#            powj = p_coeffs[2,i]*yj**2+p_coeffs[1,i]*yj+p_coeffs[0,i]
             ### Don't try to fit any bad trace sections
             if np.isnan(xc):
                 xc_ccd[i,jadj] = np.nan
@@ -521,7 +530,7 @@ def extract_1D(ccd, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs=None, readn
                     inv_chi[i,jadj] = 1/sum((zorig-fitorig)**2*invorig)
                     ### Shift from relative to absolute center
                     xc_ccd[i,jadj] = mn_new+xj+1
-                   
+              
     #####################################################
     #### Now with new centers, refit trace coefficients #
     #####################################################
@@ -534,6 +543,7 @@ def extract_1D(ccd, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs=None, readn
         profile = np.ones((len(yc_ccd[i,:][mask]),tmp_poly_ord+1))
         for order in range(tmp_poly_ord):
             profile[:,order+1] = ((yc_ccd[i,:][mask]-hpix/2)/hpix)**(order+1)
+        profile = profile[:,::-1]
         noise = np.diag(inv_chi[i,:][mask])
         if len(xc_ccd[i,:][mask])>(tmp_poly_ord+1):
             ### Chi^2 fit
@@ -542,17 +552,20 @@ def extract_1D(ccd, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs=None, readn
             ### if not enough points to fit, call entire trace bad
             tmp_coeffs = np.nan*np.ones((tmp_poly_ord+1))
         t_coeffs_ccd[:,i] = tmp_coeffs
+#    t_coeffs_ccd[:,0] = np.pad(t_coeffs[:,0], ((tmp_poly_ord-2,0)), mode='constant')
 
     tb = time.time() ### Start time of extraction/end of trace refinement
     if verbose:
         print("Trace refinement time = {}s".format(tb-ta))
        
     ### Uncomment below to see plot of traces
+#    plt.figure('inside extract 1d')
+#    plt.imshow(ccd,interpolation='none')
 #    for i in range(num_fibers):
 #        ys = (np.arange(hpix)-hpix/2)/hpix
-#        xs = t_coeffs_ccd[2,i]*ys**2+t_coeffs_ccd[1,i]*ys+t_coeffs_ccd[0,i]
+#        xs = np.poly1d(t_coeffs[:,i])(ys)
 #        yp = np.arange(hpix)
-#        plt.plot(yp,xs)
+#        plt.plot(yp,xs-1, 'b', linewidth=2)
 #    plt.show()
 #    plt.close()
     
@@ -569,16 +582,24 @@ def extract_1D(ccd, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs=None, readn
         image_model = np.zeros((np.shape(ccd))) ### Used for evaluation
     ### Run once for each fiber
     for i in range(num_fibers):
+        if i == 0:
+            #First fiber in n20161123 set is not available
+            continue
         #slit_num = np.floor((i)/4)#args.telescopes) # Use with slit flats
         if verbose:
             print("extracting trace {}".format(i+1))
         ### in each fiber loop run through each trace
         for j in range(hpix):
+#            if verbose:
+#                sys.stdout.write("\r  " + str(int(np.round(100*j/hpix))) + "% done" + " " * 11)
+#                sys.stdout.flush()
             yj = (j-hpix/2)/hpix
-            xc = np.poly1d(t_coeffs_ccd[::-1,i])(yj)
+            xc = np.poly1d(t_coeffs_ccd[:,i])(yj)
 #            Ij = i_coeffs[2,i]*yj**2+i_coeffs[1,i]*yj+i_coeffs[0,i]
-            sigj = s_coeffs[2,i]*yj**2+s_coeffs[1,i]*yj+s_coeffs[0,i]
-            powj = p_coeffs[2,i]*yj**2+p_coeffs[1,i]*yj+p_coeffs[0,i]
+            sigj = np.poly1d(s_coeffs[:,i])(yj)
+            powj = np.poly1d(p_coeffs[:,i])(yj)
+#            sigj = s_coeffs[2,i]*yj**2+s_coeffs[1,i]*yj+s_coeffs[0,i]
+#            powj = p_coeffs[2,i]*yj**2+p_coeffs[1,i]*yj+p_coeffs[0,i]
             ### If trace center is undefined mask the point
             if np.isnan(xc):
                 spec_mask[i,j] = False
@@ -586,10 +607,10 @@ def extract_1D(ccd, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs=None, readn
                 ### Set values to use in extraction
                 xpad = 5  ### can't be too big or traces start to overlap
                 xvals = np.arange(-xpad,xpad+1)
-                xj = int(xc)
+                xj = int(xc) - 1
                 xwindow = xj+xvals
                 xvals = xvals[(xwindow>=0)*(xwindow<vpix)]
-                zorig = gain*ccd[xj+xvals,j]
+                zorig = gain*ccd[xj+xvals, j]
                 fitorig = sf.gaussian(xvals,sigj,xc-xj-1,hght,power=powj)
                 ### If too short, don't fit, mask point
                 if len(zorig)<1:
@@ -657,7 +678,10 @@ def extract_1D(ccd, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs=None, readn
             if np.isnan(spec[i,j]):
                 spec[i,j] = 0
                 spec_mask[i,j] = False
+#        if verbose:
+#            print(" ")
     if verbose:
+        chi2red = np.mean(chi2red_array[i])
         print("Average reduced chi^2 = {}".format(np.mean(chi2red)))
     if return_model:
         return spec, spec_invar, spec_mask, image_model
@@ -1014,3 +1038,24 @@ def stack_bias(redux_dir, data_dir, date, fname='bias_avg.fits'):
         hdulist.writeto(os.path.join(redux_dir,date,fname),clobber=True)
         return bias
     
+def save_comb_arc_flat(filelist,frm,ts,redux_dir,date,no_overwrite=True, verbose=False, method='median'):
+    """ frm must be 'arc' or 'flat'
+    """
+    if os.path.isfile(os.path.join(redux_dir,date,'combined_{}_{}.fits'.format(frm,ts))) and no_overwrite:
+        return
+    else:
+        if verbose:
+            print("Combining most recent {}s".format(frm))
+        if frm == 'arc':
+            frames = [f for f in filelist if ts in f.upper()]
+        elif frm == 'flat':
+            frames = [f for f in filelist if ts in f.upper()]
+        frame_imgs = fits_to_arrays(frames)
+        comb_img = sf.combine(frame_imgs, method=method)
+        if not os.path.isdir(os.path.join(redux_dir,date)):
+            os.makedirs(os.path.join(redux_dir,date))
+        hdu = pyfits.PrimaryHDU(comb_img)
+        hdu.header.append(('COMBMTHD',method,'Method used to combine frames'))
+        hdulist = pyfits.HDUList([hdu])
+        hdulist.writeto(os.path.join(redux_dir,date,'combined_{}_{}.fits'.format(frm,ts)),clobber=True)
+        return

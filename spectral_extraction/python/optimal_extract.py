@@ -7,6 +7,7 @@ from __future__ import division
 import pyfits
 import os
 import sys
+import glob
 #import math
 import time
 import numpy as np
@@ -29,6 +30,10 @@ import minerva_utils as m_utils
 t0 = time.time()
 
 ######## Import environmental variables #################
+os.environ['MINERVA_DATA_DIR'] = "/uufs/chpc.utah.edu/common/home/bolton_data0/minerva/data"
+os.environ['MINERVA_REDUX_DIR'] = "/uufs/chpc.utah.edu/common/home/bolton_data0/minerva/redux"
+os.environ['MINERVA_SIM_DIR'] = "/uufs/chpc.utah.edu/common/home/bolton_data0/minerva/sim"
+
 try:
     data_dir = os.environ['MINERVA_DATA_DIR']
 except KeyError:
@@ -66,6 +71,7 @@ parser.add_argument("-np","--num_points",help="Number of trace points to fit on 
                     type=int,default=20)
 parser.add_argument("-ns","--nosave",help="Don't save results",
                     action='store_true')
+parser.add_argument("-d","--date",help="Date of arc exposure, format nYYYYMMDD",default=None)
 #parser.add_argument("-T","--tscopes",help="T1, T2, T3, and/or T4 (remove later)",
 #                    type=str,default=['T1','T2','T3','T4'])
 args = parser.parse_args()
@@ -73,9 +79,9 @@ num_fibers = args.num_fibers*args.telescopes
 num_points = args.num_points
 fiber_space = args.fiber_space
 
-bias = m_utils.stack_bias(redux_dir,data_dir,'n20161204')
-print np.mean(bias), np.std(bias)
-exit(0)
+#bias = m_utils.stack_bias(redux_dir,data_dir,'n20161204')
+#print np.mean(bias), np.std(bias)
+#exit(0)
 
 #########################################################
 ########### Load Background Requirments #################
@@ -83,13 +89,13 @@ exit(0)
 
 #hardcode in n20160115 directory
 filename = args.filename#os.path.join(data_dir,'n20160115',args.filename)
-software_vers = 'v0.3.1' #Later grab this from somewhere else
+software_vers = 'v0.4.1' #Later grab this from somewhere else
 
 gain = 1.3
 readnoise = 3.63
 
 ccd, spec_hdr = m_utils.open_minerva_fits(filename,return_hdr=True)
-actypix = ccd.shape[0]
+actypix = ccd.shape[1]
 
 ### Next part checks if iodine cell is in, assumes keyword I2POSAS exists
 try:
@@ -120,8 +126,17 @@ ccd[ccd<0] = 0 #Enforce positivity
 ### Find or load trace information ###
 ######################################
 
-if os.path.isfile(os.path.join(sim_dir,'trace.fits')):
-    trace_fits = pyfits.open(os.path.join(sim_dir,'trace.fits'))
+### Dynamically search for most recent arc frames (unless a date is supplied)
+if args.date is None:
+    date = m_utils.find_most_recent_arc_date(data_dir)
+else:
+    date = args.date
+
+### Assumes fiber flats are taken on same date as arcs
+fiber_flat_files = glob.glob(os.path.join(data_dir,'*'+date,'*[fF]iber*[fF]lat*'))
+
+if os.path.isfile(os.path.join(sim_dir,'trace_{}.fits'.format(date))):
+    trace_fits = pyfits.open(os.path.join(sim_dir,'trace_{}.fits'.format(date)))
     trace_coeffs = trace_fits[0].data
     trace_intense_coeffs = trace_fits[1].data
     trace_sig_coeffs = trace_fits[2].data
@@ -130,23 +145,11 @@ else:
     ### Combine four fiber flats into one image
     trace_ccd = np.zeros((np.shape(ccd)))
     for ts in ['T1','T2','T3','T4']:
+        flat = pyfits.open(os.path.join(redux_dir, date, 'combined_flat_{}.fits'.format(ts)))[0].data
         #Choose fiberflats with iodine cell in
-        if ts=='T1':
-            flnmflat = 'n20160130.fiberflat_T1.0023.fits'
-        elif ts=='T2':
-            flnmflat = 'n20160130.fiberflat_T2.0022.fits'
-        elif ts=='T3':
-            flnmflat = 'n20160130.fiberflat_T3.0014.fits'
-        elif ts=='T4':
-            flnmflat = 'n20160130.fiberflat_T4.0015.fits'
-        else:
-            print("{} is not a valid telescope".format(ts))
-            continue
-        #Import tungsten fiberflat
-        fileflat = os.path.join(data_dir,'n20160130',flnmflat)
-        ff = pyfits.open(fileflat,ignore_missing_end=True,uint=True)
-        ccd_tmp = ff[0].data
-        trace_ccd += ccd_tmp[::-1,0:actypix]
+        norm = 1000 #Arbitrary norm to match flats
+        tmmx = np.median(np.sort(np.ravel(flat))[-100:])
+        trace_ccd += flat[:,0:actypix].astype(float)*norm/tmmx
     ### Find traces and label for the rest of the code
     print("Searching for Traces")
     multi_coeffs = m_utils.find_trace_coeffs(trace_ccd,2,fiber_space,num_points=num_points,num_fibers=num_fibers,skip_peaks=1)
@@ -163,7 +166,7 @@ else:
     hdulist.append(hdu2)
     hdulist.append(hdu3)
     hdulist.append(hdu4)
-    hdulist.writeto(os.path.join(sim_dir,'trace.fits'))#,clobber=True)
+    hdulist.writeto(os.path.join(sim_dir,'trace_{}.fits'.format(date)),clobber=True)
     
 
 ##############################
