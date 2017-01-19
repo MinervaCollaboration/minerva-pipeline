@@ -30,9 +30,9 @@ import minerva_utils as m_utils
 t0 = time.time()
 
 ######## Import environmental variables #################
-os.environ['MINERVA_DATA_DIR'] = "/uufs/chpc.utah.edu/common/home/bolton_data0/minerva/data"
-os.environ['MINERVA_REDUX_DIR'] = "/uufs/chpc.utah.edu/common/home/bolton_data0/minerva/redux"
-os.environ['MINERVA_SIM_DIR'] = "/uufs/chpc.utah.edu/common/home/bolton_data0/minerva/sim"
+#os.environ['MINERVA_DATA_DIR'] = "/uufs/chpc.utah.edu/common/home/bolton_data0/minerva/data"
+#os.environ['MINERVA_REDUX_DIR'] = "/uufs/chpc.utah.edu/common/home/bolton_data0/minerva/redux"
+#os.environ['MINERVA_SIM_DIR'] = "/uufs/chpc.utah.edu/common/home/bolton_data0/minerva/sim"
 
 try:
     data_dir = os.environ['MINERVA_DATA_DIR']

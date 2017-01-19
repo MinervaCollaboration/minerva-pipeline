@@ -476,6 +476,7 @@ def extract_1D(ccd, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs=None, readn
     #####   traces from data ccd using fiber flat  #####
     #####   as initial estimate)                   #####
     ####################################################
+#    t_coeffs_ccd = refine_trace_centers(ccd, t_coeffs, i_coeffs, s_coeffs, p_coeffs, fact=10, readnoise=readnoise, verbose=True)
     ta = time.time()  ### Start time of trace refinement
     fact = 20 #do 1/fact * available points
     ### Empty arrays
@@ -535,6 +536,7 @@ def extract_1D(ccd, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs=None, readn
     #### Now with new centers, refit trace coefficients #
     #####################################################
     tmp_poly_ord = 6  ### Use a higher order for a closer fit over entire trace
+    hscl = (np.arange(hpix)-hpix/2)/hpix
     t_coeffs_ccd = np.zeros((tmp_poly_ord+1,num_fibers))
     for i in range(num_fibers):
         #Given orientation makes more sense to swap x/y
@@ -549,10 +551,18 @@ def extract_1D(ccd, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs=None, readn
             ### Chi^2 fit
             tmp_coeffs, junk = sf.chi_fit(xc_ccd[i,:][mask],profile,noise)
         else:
-            ### if not enough points to fit, call entire trace bad
-            tmp_coeffs = np.nan*np.ones((tmp_poly_ord+1))
+            ### if not enough points to fit, use original trace
+#            tmp_coeffs = np.nan*np.ones((tmp_poly_ord+1))
+            tmp_coeffs = np.pad(t_coeffs[:,i], ((tmp_poly_ord-2,0)), mode='constant')
+        ### Add quality check to prevent wild solutions:
+        err_max = 2 #pixels
+        ff_trace = np.poly1d(t_coeffs[:,i])(hscl)
+        ccd_trace = np.poly1d(tmp_coeffs)(hscl)
+        if np.max(abs(ff_trace-ccd_trace)) > err_max:
+            tmp_coeffs = np.pad(t_coeffs[:,i], ((tmp_poly_ord-2,0)), mode='constant')
+#            if verbose:
+#                print("Ignoring bad fit for fiber {}".format(i))
         t_coeffs_ccd[:,i] = tmp_coeffs
-#    t_coeffs_ccd[:,0] = np.pad(t_coeffs[:,0], ((tmp_poly_ord-2,0)), mode='constant')
 
     tb = time.time() ### Start time of extraction/end of trace refinement
     if verbose:
@@ -560,12 +570,12 @@ def extract_1D(ccd, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs=None, readn
        
     ### Uncomment below to see plot of traces
 #    plt.figure('inside extract 1d')
-#    plt.imshow(ccd,interpolation='none')
+#    plt.imshow(np.log(ccd),interpolation='none')
 #    for i in range(num_fibers):
-#        ys = (np.arange(hpix)-hpix/2)/hpix
-#        xs = np.poly1d(t_coeffs[:,i])(ys)
-#        yp = np.arange(hpix)
-#        plt.plot(yp,xs-1, 'b', linewidth=2)
+#            ys = (np.arange(hpix)-hpix/2)/hpix
+#            xs = np.poly1d(t_coeffs_ccd[:,i])(ys)
+#            yp = np.arange(hpix)
+#            plt.plot(yp,xs-1, 'b', linewidth=2)
 #    plt.show()
 #    plt.close()
     
@@ -582,8 +592,9 @@ def extract_1D(ccd, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs=None, readn
         image_model = np.zeros((np.shape(ccd))) ### Used for evaluation
     ### Run once for each fiber
     for i in range(num_fibers):
-        if i == 0:
+        if i == 0 or i == 112:
             #First fiber in n20161123 set is not available
+            #Fiber 112 isn't entirely on frame and trace isn't reliable
             continue
         #slit_num = np.floor((i)/4)#args.telescopes) # Use with slit flats
         if verbose:
@@ -598,6 +609,8 @@ def extract_1D(ccd, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs=None, readn
 #            Ij = i_coeffs[2,i]*yj**2+i_coeffs[1,i]*yj+i_coeffs[0,i]
             sigj = np.poly1d(s_coeffs[:,i])(yj)
             powj = np.poly1d(p_coeffs[:,i])(yj)
+            sigj = 1.3
+            powj = 2.3
 #            sigj = s_coeffs[2,i]*yj**2+s_coeffs[1,i]*yj+s_coeffs[0,i]
 #            powj = p_coeffs[2,i]*yj**2+p_coeffs[1,i]*yj+p_coeffs[0,i]
             ### If trace center is undefined mask the point
@@ -611,9 +624,8 @@ def extract_1D(ccd, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs=None, readn
                 xwindow = xj+xvals
                 xvals = xvals[(xwindow>=0)*(xwindow<vpix)]
                 zorig = gain*ccd[xj+xvals, j]
-                fitorig = sf.gaussian(xvals,sigj,xc-xj-1,hght,power=powj)
                 ### If too short, don't fit, mask point
-                if len(zorig)<1:
+                if len(zorig)<(xpad-1):
                     spec[i,j] = 0
                     spec_mask[i,j] = False
                     continue
@@ -729,6 +741,7 @@ def refine_trace_centers(ccd, t_coeffs, i_coeffs, s_coeffs, p_coeffs, fact=10, r
             t/i/s/p_coeffs - modified gaussian coefficients from fiberflat
             fact - do 1/fact of the available points
     """
+    t0 = time.time()
     num_fibers = t_coeffs.shape[1]
     hpix = ccd.shape[1]
     vpix = ccd.shape[0]
@@ -741,8 +754,6 @@ def refine_trace_centers(ccd, t_coeffs, i_coeffs, s_coeffs, p_coeffs, fact=10, r
     if verbose:
         print("Refining trace centers")
     for i in range(num_fibers):
-        if i != 63:
-            continue
         if verbose:
             print("Running on index {}".format(i))
     #    slit_num = np.floor((i)/args.telescopes)
@@ -750,10 +761,13 @@ def refine_trace_centers(ccd, t_coeffs, i_coeffs, s_coeffs, p_coeffs, fact=10, r
             jadj = int(np.floor(j/fact))
             yj = (yspec[j]-hpix/2)/hpix
             hc_ccd[i,jadj] = yspec[j]
-            vc = t_coeffs[2,i]*yj**2+t_coeffs[1,i]*yj+t_coeffs[0,i]
+            vc = np.poly1d(t_coeffs[::-1,i])(yj)
+            sigj = np.poly1d(s_coeffs[::-1,i])(yj)
+            powj = np.poly1d(p_coeffs[::-1,i])(yj)
+#            vc = t_coeffs[2,i]*yj**2+t_coeffs[1,i]*yj+t_coeffs[0,i]
 #            Ij = i_coeffs[2,i]*yj**2+i_coeffs[1,i]*yj+i_coeffs[0,i]
-            sigj = s_coeffs[2,i]*yj**2+s_coeffs[1,i]*yj+s_coeffs[0,i]
-            powj = s_coeffs[2,i]*yj**2+s_coeffs[1,i]*yj+s_coeffs[0,i]
+#            sigj = s_coeffs[2,i]*yj**2+s_coeffs[1,i]*yj+s_coeffs[0,i]
+#            powj = p_coeffs[2,i]*yj**2+p_coeffs[1,i]*yj+p_coeffs[0,i]
             if np.isnan(vc):
                 vc_ccd[i,jadj] = np.nan
                 inv_chi[i,jadj] = 0
@@ -796,7 +810,10 @@ def refine_trace_centers(ccd, t_coeffs, i_coeffs, s_coeffs, p_coeffs, fact=10, r
             tmp_coeffs, junk = sf.chi_fit(vc_ccd[i,:][mask],profile,noise)
         else:
             tmp_coeffs = np.nan*np.ones((tmp_poly_ord+1))
-        trace_coeffs_ccd[:,i] = tmp_coeffs 
+        trace_coeffs_ccd[:,i] = tmp_coeffs
+    tf = time.time()
+    if verbose:
+        print("Trace refinement time = {:.6}s".format(tf-t0))
     return trace_coeffs_ccd
     
 def extract_2D(ccd, psf_coeffs, t_coeffs, readnoise=1, gain=1, return_model=False, verbose=False):
