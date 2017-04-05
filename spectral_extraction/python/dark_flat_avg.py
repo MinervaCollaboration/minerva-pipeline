@@ -26,7 +26,8 @@ import matplotlib.pyplot as plt
 import modify_fits as mf #For MINERVA DATA ONLY
 
 ### files to reference, plus environmental variables
-date = 'n20160115'
+#date = 'n20160115'
+date = 'n20161123'
 date2 = 'n20160216'
 data_dir = os.environ['MINERVA_DATA_DIR']
 redux_dir = os.environ['MINERVA_REDUX_DIR']

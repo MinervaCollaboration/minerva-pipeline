@@ -42,7 +42,7 @@ def open_minerva_fits(fits, ext=0, return_hdr=False):
     
     actypix = 2048 ### Hardcoded to remove overscan, fix later if needed
     
-    if np.shape(ccd)[0] > ypix:
+    if np.shape(ccd)[0] > xpix:
         ccd_new = np.resize(ccd,[xpix,ypix,2])
             
         #Data is split into two 8 bit sections (totalling 16 bit).  Need to join
@@ -56,14 +56,16 @@ def open_minerva_fits(fits, ext=0, return_hdr=False):
                 ccd_16bit[row,col] = int(binstr,base=2)
 #                ccd_16bit[row,col] = int(''.join(ccd_tmp[row,col]),base=2)
     
+        overscan = ccd_16bit[::-1,actypix:]
         ccd = ccd_16bit[::-1,0:actypix] #Remove overscan region
     else:
+        overscan = ccd[::-1,actypix:]
         ccd = ccd[::-1,0:actypix] #Remove overscan region
         ccd = ccd.astype(np.float)
     if return_hdr:
-        return ccd, hdr
+        return ccd, overscan, hdr
     else:
-        return ccd
+        return ccd, overscan
 
 def fit_trace(x,y,ccd,form='gaussian'):
     """quadratic fit (in x) to trace around x,y in ccd
@@ -198,6 +200,11 @@ def find_trace_coeffs(image,pord,fiber_space,num_points=None,num_fibers=None,ver
             else:
                 px+=1
         peaks = peaks[0:pcnt]
+#        plt.plot(array)
+#        plt.plot(peaks,array[peaks.astype(int)],'ro')
+#        plt.plot(bg_cutoff*np.ones((array.shape)),'k')
+#        plt.show()
+#        plt.close()
         return peaks
     
     def find_fibers(image):  
@@ -225,9 +232,10 @@ def find_trace_coeffs(image,pord,fiber_space,num_points=None,num_fibers=None,ver
     if vertical:
         image = image.T
     ### Find number of fibers and direction (upper left to lower right or opposite)
-    tmp_num_fibers, fiber_dir = find_fibers(image)
+#    tmp_num_fibers, fiber_dir = find_fibers(image)
     if num_fibers is None:
-        num_fibers=tmp_num_fibers
+        print "Please specify number of fibers"
+#        num_fibers=tmp_num_fibers
     ### Select number of points to use in tracing
     if num_points is None:
         num_points = max(2*pord,int(np.shape(image)[1]/20))
@@ -242,20 +250,21 @@ def find_trace_coeffs(image,pord,fiber_space,num_points=None,num_fibers=None,ver
     powtrace = np.zeros((num_fibers,num_points)) #pseudo-gaussian power along trace
     Itrace = np.zeros((num_fibers,num_points)) #relative intensity of flat at trace
     chi_vals = np.zeros((num_fibers,num_points)) #returned from fit_trace
-    bg_cutoff = 1.05*np.median(image) #won't fit values below this intensity
-    
+#    bg_cutoff = 1.05*np.median(image) #won't fit values below this intensity
+    bg_cutoff = 0.2*np.mean(image[0:300]) #won't fit values below this intensity
     ### Put in initial peak guesses
     peaks = find_peaks(image[:,yvals[0]],bg_cutoff=bg_cutoff,mx_peaks=num_fibers,skip_peaks=skip_peaks)
     xtrace[:len(peaks)-1,0] = peaks[:-1] ### have to cut off last point - trace wanders off ccd
-    ytrace[:,0] = yvals[0]*np.ones(len(ytrace[:,0]))   
+    ytrace[:,0] = yvals[0]*np.ones(len(ytrace[:,0]))
     ###From initial peak guesses fit for more precise location
+#    plt.imshow(np.log(image))
     for i in range(num_fibers):
         y = yvals[0]
         if not np.isnan(xtrace[i,0]):
             xtrace[i,0], Itrace[i,0], sigtrace[i,0], powtrace[i,0], chi_vals[i,0] = fit_trace(xtrace[i,0],y,image)
         else:
             Itrace[i,0], sigtrace[i,0], powtrace[i,0], chi_vals[i,0] = np.nan, np.nan, np.nan, np.nan    
-    
+#    plt.plot(ytrace[0,:],xtrace[0,:])
     for i in range(1,len(yvals)):
         y = yvals[i]
         crsxn = image[:,y]
@@ -287,14 +296,24 @@ def find_trace_coeffs(image,pord,fiber_space,num_points=None,num_fibers=None,ver
                     xtrace[j,i], Itrace[j,i], sigtrace[j,i], sigtrace[j,i], chi_vals[j,i] = np.nan, np.nan, np.nan, np.nan, np.nan
             else:
                 xtrace[j,i], Itrace[j,i], sigtrace[j,i], sigtrace[j,i], chi_vals[j,i] = np.nan, np.nan, np.nan, np.nan, np.nan
+#            plt.plot(ytrace[j,:],xtrace[j,:])
                 
+#    plt.show()
+#    plt.close()
     Itrace /= np.median(Itrace) #Rescale intensities
-        
     #Finally fit x vs. y on traces.  Start with quadratic for simple + close enough
     t_coeffs = np.zeros((3,num_fibers))
     i_coeffs = np.zeros((3,num_fibers))
     s_coeffs = np.zeros((3,num_fibers))
     p_coeffs = np.zeros((3,num_fibers))
+    xtrace -= 2
+#    i2 = True ### TODO - find this dynamically from input
+#    if i2:
+#        ### Shift pixels to iodine cell location
+#        i2coeffs = [3.48097e-4,2.11689] #shift in pixels due to iodine cell
+#        i2shift = np.poly1d(i2coeffs)(ytrace[0,:])
+#    else:
+#        i2shift = np.zeros(ytrace[0,:].shape) ### no shift if iodine cell already in...
     for i in range(num_fibers):
         #Given orientation makes more sense to swap x/y
         mask = ~np.isnan(xtrace[i,:])
@@ -302,28 +321,52 @@ def find_trace_coeffs(image,pord,fiber_space,num_points=None,num_fibers=None,ver
         profile[:,1] = (ytrace[i,:][mask]-ypix/2)/ypix #scale data to get better fit
         profile[:,2] = ((ytrace[i,:][mask]-ypix/2)/ypix)**2
         noise = np.diag(chi_vals[i,:][mask])
+        yf = (ytrace[i,:]-ypix/2)/ypix
         if len(xtrace[i,:][mask])>3:
-            tmp_coeffs, junk = sf.chi_fit(xtrace[i,:][mask],profile,noise)
-            tmp_coeffs2, junk = sf.chi_fit(Itrace[i,:][mask],profile,noise)
-            tmp_coeffs3, junk = sf.chi_fit(sigtrace[i,:][mask],profile,noise)
-            tmp_coeffs4, junk = sf.chi_fit(powtrace[i,:][mask],profile,noise)
+#            tmp_coeffs, junk = sf.chi_fit(xtrace[i,:][mask],profile,noise)
+#            tmp_coeffs2, junk = sf.chi_fit(Itrace[i,:][mask],profile,noise)
+#            tmp_coeffs3, junk = sf.chi_fit(sigtrace[i,:][mask],profile,noise)
+#            tmp_coeffs4, junk = sf.chi_fit(powtrace[i,:][mask],profile,noise)
+            t_coeffs[:,i] = np.polyfit(yf, xtrace[i,:], 2)
+            i_coeffs[:,i] = np.polyfit(yf, Itrace[i,:], 2)
+            s_coeffs[:,i] = np.polyfit(yf, sigtrace[i,:], 2)
+            p_coeffs[:,i] = np.polyfit(yf, powtrace[i,:], 2)
         else:
-            tmp_coeffs = np.nan*np.ones((3))
-            tmp_coeffs2 = np.nan*np.ones((3))
-            tmp_coeffs3 = np.nan*np.ones((3))
-            tmp_coeffs4 = np.nan*np.ones((3))
-        t_coeffs[0,i] = tmp_coeffs[2]
-        t_coeffs[1,i] = tmp_coeffs[1]
-        t_coeffs[2,i] = tmp_coeffs[0]
-        i_coeffs[0,i] = tmp_coeffs2[2]
-        i_coeffs[1,i] = tmp_coeffs2[1]
-        i_coeffs[2,i] = tmp_coeffs2[0]
-        s_coeffs[0,i] = tmp_coeffs3[2]
-        s_coeffs[1,i] = tmp_coeffs3[1]
-        s_coeffs[2,i] = tmp_coeffs3[0]      
-        p_coeffs[0,i] = tmp_coeffs4[2]
-        p_coeffs[1,i] = tmp_coeffs4[1]
-        p_coeffs[2,i] = tmp_coeffs4[0]
+            t_coeffs[:,i] = np.nan*np.ones((3))
+            i_coeffs[:,i] = np.nan*np.ones((3))
+            s_coeffs[:,i] = np.nan*np.ones((3))
+            p_coeffs[:,i] = np.nan*np.ones((3))
+#        t_coeffs[0,i] = tmp_coeffs[2]
+#        t_coeffs[1,i] = tmp_coeffs[1]
+#        t_coeffs[2,i] = tmp_coeffs[0]
+#        i_coeffs[0,i] = tmp_coeffs2[2]
+#        i_coeffs[1,i] = tmp_coeffs2[1]
+#        i_coeffs[2,i] = tmp_coeffs2[0]
+#        s_coeffs[0,i] = tmp_coeffs3[2]
+#        s_coeffs[1,i] = tmp_coeffs3[1]
+#        s_coeffs[2,i] = tmp_coeffs3[0]      
+#        p_coeffs[0,i] = tmp_coeffs4[2]
+#        p_coeffs[1,i] = tmp_coeffs4[1]
+#        p_coeffs[2,i] = tmp_coeffs4[0]
+#        ys = (np.arange(ypix)-ypix/2)/ypix
+#        xs = np.poly1d(t_coeffs[:,i])(ys)
+#        yp = np.arange(ypix)
+#        plt.imshow(np.log(image))
+#        plt.plot(ytrace[i,:][mask],xtrace[i,:][mask], 'g')
+#        plt.plot(yp,xs, 'b', linewidth=2)
+#        plt.show()
+#        plt.close()
+        
+    ### Uncomment below to see plot of traces
+#    plt.figure('inside find_trace_coeffs')
+#    plt.imshow(np.log(image),interpolation='none')
+#    for i in range(num_fibers):
+#            ys = (np.arange(ypix)-ypix/2)/ypix
+#            xs = np.poly1d(t_coeffs[:,i])(ys)
+#            yp = np.arange(ypix)
+#            plt.plot(yp,xs, 'b', linewidth=2)
+#    plt.show()
+#    plt.close()        
         
     if return_all_coeffs:
         return t_coeffs, i_coeffs, s_coeffs, p_coeffs
@@ -338,7 +381,6 @@ def remove_ccd_background(ccd,cut=None,plot=False):
     """
     if cut is None:
         cut = 3*np.median(ccd)
-    cut = int(cut)
     ccd_mask = (ccd < cut)*(ccd > -cut)
     masked_ccd = ccd[ccd_mask]
     arr = plt.hist(masked_ccd,2*(cut-1))
@@ -358,9 +400,9 @@ def remove_ccd_background(ccd,cut=None,plot=False):
         plt.plot(xvl,htst)
         plt.show()
     plt.close()
-    ccd -= params[1] # mean
+    ccd_new = ccd - params[1] # mean
     bg_std = params[0]
-    return ccd, bg_std
+    return ccd_new, bg_std
 
 def cosmic_ray_reject(D,f,P,iV,S=0,threshhold=25,verbose=False):
     """ Procedure to reject cosmic rays in optimal extraction.
@@ -394,22 +436,26 @@ def linear_mn_hght_bg(xvals,yvals,invals,sigma,mn_est,power=2):
         dx = dh/h * sigma/2 * exp(1/2) where dh = max - min residual
         Once mean is found, determines best fit hght and bg
     """
-    gauss_model = sf.gaussian(xvals,sigma,center=mn_est,height=np.max(yvals),power=power)
+#    gauss_model = sf.gaussian(xvals,sigma,center=mn_est,height=np.max(yvals),power=power)
     mn_est_err = 100
     mn_est_err_old = 0
     loop_ct = 0
+    hght = np.max(yvals)
+    mn_std = sigma#/3
+    bg = np.min(yvals)
     while abs(mn_est_err-mn_est_err_old)>0.01 and loop_ct < 1:
         mn_est_err_old = np.copy(mn_est_err)
         mn_est_old = np.copy(mn_est)
-        residuals = yvals-gauss_model
-        dh = (np.max(residuals)-np.min(residuals))/np.max(yvals)
-        sign = 1
-        if np.argmax(residuals) < np.argmin(residuals):
-            sign = -1
-        dx = sign*sigma*dh*np.exp(1/2)/2
-        mn_est += dx
+#        residuals = yvals-gauss_model
+#        dh = (np.max(residuals)-np.min(residuals))/np.max(yvals)
+#        sign = 1
+#        if np.argmax(residuals) < np.argmin(residuals):
+#            sign = -1
+#        dx = sign*sigma*dh*np.exp(1/2)/2
+#        mn_est += dx
+        mn_est, mn_std = sf.best_mean(xvals,sigma,mn_est,hght,bg,yvals,invals,mn_std,power=power)
         hght, bg = sf.best_linear_gauss(xvals,sigma,mn_est,yvals,invals,power=power)
-        gauss_model = sf.gaussian(xvals,sigma,center=mn_est,height=hght,bg_mean=bg,power=power)
+#        gauss_model = sf.gaussian(xvals,sigma,center=mn_est,height=hght,bg_mean=bg,power=power)
         mn_est_err = abs(mn_est_old - mn_est)
         loop_ct += 1
 #    hght, bg = sf.best_linear_gauss(xvals,sigma,mn_est,yvals,invals,power=power)
@@ -442,7 +488,7 @@ def fit_mn_hght_bg(xvals,zorig,invorig,sigj,mn_new,spread,powj=2):
 #    time.sleep(5)
     return mn_new, hght,bg
     
-def extract_1D(ccd, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs=None, readnoise=1, gain=1, return_model=False, verbose=False):
+def extract_1D(ccd, invar, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs=None, readnoise=1, gain=1, return_model=False, verbose=False):
     """ Function to extract using optimal extraction method.
         This could benefit from a lot of cleaning up
         INPUTS:
@@ -512,13 +558,14 @@ def extract_1D(ccd, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs=None, readn
                 xj = int(xc)
                 xwindow = xj+xvals
                 xvals = xvals[(xwindow>=0)*(xwindow<vpix)]
-                zorig = gain*ccd[xj+xvals,j]
+                zorig = ccd[xj+xvals,j]
                 ### If empty slice, don't try to fit
                 if len(zorig)<1:
                     xc_ccd[i,jadj] = np.nan
                     inv_chi[i,jadj] = 0
                     continue
-                invorig = 1/(abs(zorig)+readnoise**2) ### inverse variance
+                invorig = 1/(abs(zorig) + readnoise**2)              
+#                invorig = invar[xj+xvals,j] ### inverse variance
                 ### Don't try to fit profile for very low SNR peaks
                 if np.max(zorig)<20:
                     xc_ccd[i,jadj] = np.nan
@@ -575,7 +622,7 @@ def extract_1D(ccd, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs=None, readn
 #            ys = (np.arange(hpix)-hpix/2)/hpix
 #            xs = np.poly1d(t_coeffs_ccd[:,i])(ys)
 #            yp = np.arange(hpix)
-#            plt.plot(yp,xs-1, 'b', linewidth=2)
+#            plt.plot(yp,xs, 'b', linewidth=2)
 #    plt.show()
 #    plt.close()
     
@@ -609,8 +656,6 @@ def extract_1D(ccd, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs=None, readn
 #            Ij = i_coeffs[2,i]*yj**2+i_coeffs[1,i]*yj+i_coeffs[0,i]
             sigj = np.poly1d(s_coeffs[:,i])(yj)
             powj = np.poly1d(p_coeffs[:,i])(yj)
-            sigj = 1.3
-            powj = 2.3
 #            sigj = s_coeffs[2,i]*yj**2+s_coeffs[1,i]*yj+s_coeffs[0,i]
 #            powj = p_coeffs[2,i]*yj**2+p_coeffs[1,i]*yj+p_coeffs[0,i]
             ### If trace center is undefined mask the point
@@ -620,16 +665,19 @@ def extract_1D(ccd, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs=None, readn
                 ### Set values to use in extraction
                 xpad = 5  ### can't be too big or traces start to overlap
                 xvals = np.arange(-xpad,xpad+1)
-                xj = int(xc) - 1
+                xj = int(xc)
                 xwindow = xj+xvals
                 xvals = xvals[(xwindow>=0)*(xwindow<vpix)]
-                zorig = gain*ccd[xj+xvals, j]
+                zorig = ccd[xj+xvals, j]
                 ### If too short, don't fit, mask point
                 if len(zorig)<(xpad-1):
                     spec[i,j] = 0
                     spec_mask[i,j] = False
                     continue
-                invorig = 1/(abs(zorig)+readnoise**2)
+                invorig = 1/(abs(zorig) + readnoise**2)
+#                invorig = invar[xj+xvals,j]
+#                print zorig
+#                print 1/invorig
                 ### don't try to extract for very low signal
                 if np.max(zorig)<20:
                     continue
@@ -649,13 +697,14 @@ def extract_1D(ccd, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs=None, readn
                         fitnorm = fitorig/ftmp
                     ### Get extracted flux and error
                     fstd = sum(fitnorm*zorig*invorig)/sum(fitnorm**2*invorig)
+#                    invorig = 1/(1/invorig - abs(zorig) + abs(fstd*fitnorm))
                     invorig = 1/(readnoise**2 + abs(fstd*fitnorm))
                     chi2red = np.sum((fstd*fitnorm+bg-zorig)**2*invorig)/(len(zorig)-3)
                     ### Now set up to do cosmic ray rejection
-                    rej_min = 0
+                    rej_min = 1
                     loop_count=0
                     while rej_min==0:
-                        pixel_reject = cosmic_ray_reject(zorig,fstd,fitnorm,invorig,S=bg,threshhold=0.3*np.mean(zorig),verbose=True)
+                        pixel_reject = cosmic_ray_reject(zorig,fstd,fitnorm,invorig,S=bg,threshhold=0.25*np.mean(zorig),verbose=True)
                         rej_min = np.min(pixel_reject)
                         ### Once no pixels are rejected, re-find extracted flux
                         if rej_min==0:
@@ -672,6 +721,7 @@ def extract_1D(ccd, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs=None, readn
                             ftmp = sum(fitprecise)*np.mean(np.ediff1d(xprecise))
                             fitnorm = fitorig/ftmp
                             fstd = sum(fitnorm*zorig*invorig)/sum(fitnorm**2*invorig)
+#                            invorig = 1/(1/invorig - abs(zorig) + abs(fstd*fitnorm))
                             invorig = 1/(readnoise**2 + abs(fstd*fitnorm))
                             chi2red = np.sum((fstd*fitnorm+bg-zorig)**2*invorig)/(len(zorig)-3)
                         ### if more than 3 points are rejected, mask the extracted flux
@@ -683,13 +733,25 @@ def extract_1D(ccd, t_coeffs, i_coeffs=None, s_coeffs=None, p_coeffs=None, readn
                     spec[i,j] = fstd
                     spec_invar[i,j] = sum(fitnorm**2*invorig)
                     chi2red_array[i,j] = chi2red
+#                    print zorig
+#                    print 1/invorig
+#                    print chi2red
+#                    plt.plot(xvals,zorig, xprecise, fitprecise+bg)
+#                    plt.show()
+#                    plt.close()
+#                    plt.plot(xvals,(fstd*fitnorm+bg-zorig)**2*invorig)
+#                    plt.show()
+#                    plt.close()
                     if return_model and not np.isnan(fstd):
                         ### Build model, if desired
-                        image_model[xj+xvals,j] += (fstd*fitnorm+bg)/gain
+                        image_model[xj+xvals,j] += (fstd*fitnorm+bg)#/gain
             ### If a nan came out of the above routine, zero it and mask
-            if np.isnan(spec[i,j]):
+            if np.isnan(spec[i,j][spec_mask[i,j]]):
                 spec[i,j] = 0
                 spec_mask[i,j] = False
+#        plt.plot(spec[i,:])
+#        plt.show()
+#        plt.close()
 #        if verbose:
 #            print(" ")
     if verbose:
@@ -789,11 +851,6 @@ def refine_trace_centers(ccd, t_coeffs, i_coeffs, s_coeffs, p_coeffs, fact=10, r
                 else:
                     mn_new, hght, bg = fit_mn_hght_bg(xvals, zorig, invorig, sigj, vc-xj-1, sigj, powj=powj)
                     fitorig = sf.gaussian(xvals,sigj,mn_new,hght,power=powj)
-                    if j == 715:
-                        print mn_new
-                        plt.plot(xvals,zorig,xvals,fitorig)
-                        plt.show()
-                        plt.close()
                     inv_chi[i,jadj] = 1/sum((zorig-fitorig)**2*invorig)
                     vc_ccd[i,jadj] = mn_new+xj+1
                     
@@ -970,13 +1027,27 @@ def extract_2D(ccd, psf_coeffs, t_coeffs, readnoise=1, gain=1, return_model=Fals
     plt.close()
 #'''
     
-def find_most_recent_arc_date(data_dir,return_filenames=False,date_format='nYYYYMMDD', before_date=None):
+def find_most_recent_frame_date(ftype,data_dir,return_filenames=False,date_format='nYYYYMMDD', before_date=None):
     """ Finds the date of most recent arc exposures.
         If desired, can return list of arc exposures on that date.
         date_format should show all positions of Y, M, and D (plus any /, -, etc)
+        TODO - make before_date option work
     """
     ### Find files
-    filenames = glob.glob(os.path.join(data_dir,'*','*[tT][hH][aA][rR]*'))
+    if ftype == 'arc':
+        filenames = glob.glob(os.path.join(data_dir,'*','*[tT][hH][aA][rR]*'))
+    elif ftype == 'fiberflat':
+        filenames = glob.glob(os.path.join(data_dir,'*','*[fF]iber[fF]lat*'))
+    elif ftype == 'dark':
+        filenames = glob.glob(os.path.join(data_dir,'*','*[dD]ark*'))
+    elif ftype == 'bias':
+        filenames = glob.glob(os.path.join(data_dir,'*','*[bB]ias*'))
+    elif ftype == 'slitflat':
+        filenames = glob.glob(os.path.join(data_dir,'*','*[sS]lit[fF]lat*'))
+    else:
+        print("'ftype' must be one of the following:")
+        print("'arc'\n'fiberflat'\n'dark'\n'bias'\'slitflat'")
+        exit(0)
     filenames.sort()
     ### Set up dates, formatting
     roots = [os.path.split(f)[0] for f in filenames]
@@ -997,7 +1068,12 @@ def find_most_recent_arc_date(data_dir,return_filenames=False,date_format='nYYYY
     ### Loop through, cull out
     for D in ['Y','M','D']:
         recent = most_recent(D,dates,date_format,before_date=before_date)
-        date_inds = np.array(([i for i in range(len(dates)) if recent in dates[i]]),dtype=int)
+        st_inds = -1*np.ones(len(date_format),dtype=int)
+        for i in range(len(date_format)):
+            if date_format[i] == D:
+                st_inds[i] = i
+        st_inds = st_inds[st_inds != -1].astype(int)
+        date_inds = np.array(([i for i in range(len(dates)) if recent in dates[i][st_inds[0]:st_inds[-1]+1]]),dtype=int)
         dates = dates[date_inds]
     date = dates[0]
     if return_filenames:
@@ -1032,28 +1108,361 @@ def fits_to_arrays(fits_files,ext=0,i2_in=False):
             didx += 1
     return imgs
     
-def stack_bias(redux_dir, data_dir, date, fname='bias_avg.fits'):
+def overscan_fit(overscan,pord=5,plot_fit=False):
+    """ Assumes we are fitting along the vertical direction
+    """
+    overscan_avg = np.median(overscan, axis=1)
+    vgrph = np.arange(len(overscan_avg))
+    vfit = (vgrph-len(overscan_avg)/2)/len(overscan_avg)
+    os_cff = np.polyfit(vfit, overscan_avg, pord)
+    overscan_fit = np.poly1d(os_cff)(vfit)
+    if plot_fit:
+        plt.plot(vfit,overscan_fit)
+        plt.show()
+        plt.close()
+    return overscan_fit
+    
+def bias_fit(bias, overscan_fit, plot_fit=False):
+    bias_mean = np.mean(bias,axis=0)
+    bm0 = np.mean(bias_mean)
+    bias_fit = np.zeros((bias.shape))
+    for i in range(len(overscan_fit)):
+        bias_fit[i] = bias_mean + overscan_fit[i] - bm0
+    if plot_fit:
+        plt.imshow(bias_fit, interpolation='none')
+        plt.show()
+    return bias_fit
+    
+def stack_calib(redux_dir, data_dir, date, method='median', frame='bias'):
     """ Stacks bias frames from the day (median combined), saves result to
         disk.  Will load directly instead of re-doing if available.
         Returns the median bias
+        Can do the same for dark frames
     """
-    if os.path.isfile(os.path.join(redux_dir,date,fname)):
-        bias_hdu = pyfits.open(os.path.join(redux_dir,date,fname),uint=True)
-        bias = bias_hdu[0].data 
-        return bias
+    if frame == 'bias':
+        fname='bias_avg.fits'
+    elif frame == 'dark':
+        fname = 'scalable_dark_avg.fits'
     else:
-        filenames = glob.glob(os.path.join(data_dir,date,'*[Bb]ias*.fits'))
-        shape = np.shape(pyfits.open(filenames[0])[0].data)
-        biases = np.zeros((len(filenames),shape[0],shape[1]))
-        for i in range(len(filenames)):
-            biases[i] = pyfits.open(filenames[i])[0].data
-        bias = sf.combine(biases)
-        hdu = pyfits.PrimaryHDU(bias)
+        print("Can only accommodate dark and bias frames right now")
+        exit(0)
+    fname = date + '.' + fname
+    if os.path.isfile(os.path.join(redux_dir,date,fname)):
+        calib, oscan, hdr = open_minerva_fits(os.path.join(redux_dir,date,fname), return_hdr=True)
+#        calib_hdu = pyfits.open(os.path.join(redux_dir,date,fname),uint=True)
+#        calib = calib_hdu[0].data
+        if frame == 'dark':
+            return calib, hdr
+        else:
+            return calib
+    else:
+        if frame == 'bias':
+            filenamesb = glob.glob(os.path.join(data_dir,date,'*[Bb]ias*.fits'))
+            if len(filenamesb) == 0:
+                filenamesb = find_most_recent_frame_date('bias', data_dir, return_filenames=True)
+#                print("ERROR: No bias frames available on date {}".format(date))
+#                exit(0)
+            
+            b0, oscan = open_minerva_fits(filenamesb[0])
+            biases = np.zeros((len(filenamesb),b0.shape[0],b0.shape[1]))
+            for i in range(len(filenamesb)):
+                biases[i], oscan = open_minerva_fits(filenamesb[i])
+            bias = sf.combine(biases, method=method)
+            hdu = pyfits.PrimaryHDU(bias)
+        if frame == 'dark':
+            bias = stack_calib(redux_dir, data_dir, date, frame='bias')
+            filenamesd = glob.glob(os.path.join(data_dir,date,'*[Dd]ark*.fits'))
+            if len(filenamesd) == 0:
+                filenamesd = find_most_recent_frame_date('dark', data_dir, return_filenames=True)
+#                print("ERROR: No dark frames available on date {}".format(date))
+#                exit(0)
+            d0, oscan = open_minerva_fits(filenamesd[0])
+            darks = np.zeros((len(filenamesd),d0.shape[0],d0.shape[1]))
+            exptimes = np.zeros((len(filenamesd)))
+            for i in range(len(filenamesd)):
+                darks[i], oscan, hdr = open_minerva_fits(filenamesd[i], return_hdr=True)
+                oscan_fit = overscan_fit(oscan)
+                bias_fiti = bias_fit(bias, oscan_fit)
+                darks[i] -= bias_fiti
+                exptimes[i] = hdr['EXPTIME']
+            mean_exptime = np.mean(exptimes)
+            dark = sf.combine(darks, method=method)
+            hdu = pyfits.PrimaryHDU(dark)
+            hdu.header.append(('EXPTIME', mean_exptime, 'Average exposure time'))
         hdulist = pyfits.HDUList([hdu])
-        if not os.path.isdir(os.path.join(redux_dir,date)):
-            os.mkdir(os.path.join(redux_dir,date))
-        hdulist.writeto(os.path.join(redux_dir,date,fname),clobber=True)
-        return bias
+        try:
+            if not os.path.isdir(os.path.join(redux_dir,date)):
+                os.mkdir(os.path.join(redux_dir,date))
+            hdulist.writeto(os.path.join(redux_dir,date,fname),clobber=True)
+        except:
+            print("Directory/File already exists")
+        if frame == 'dark':
+            return dark, hdr
+        elif frame == 'bias':
+            return bias
+            
+def stack_flat(redux_dir, data_dir, date, method='median'):
+    """ makes a master slit flat - stacks all and bias subtracts + dark corrects
+    """
+    fname = 'slit_flat_avg.fits'
+    fname = date + '.' + fname
+    if os.path.isfile(os.path.join(redux_dir,date,fname)):
+        sflat, oscan = open_minerva_fits(os.path.join(redux_dir,date,fname))
+        return sflat
+    else:
+        ### load bias and dark
+        bias = stack_calib(redux_dir, data_dir, date, frame='bias')
+        dark, dhdr = stack_calib(redux_dir, data_dir, date, frame='dark')
+        filenames = glob.glob(os.path.join(data_dir,date,'*[Ss]lit[Ff]lat*.fits'))
+        if len(filenames) == 0:
+                print("Warning: No slit flats available on date {}".format(date))
+                print("         CCD will not be flat fielded...")
+#                exit(0)
+                return np.ones(bias.shape)
+        s0, oscan = open_minerva_fits(filenames[0])
+        sflats = np.zeros((len(filenames),s0.shape[0],s0.shape[1]))
+        for i in range(len(filenames)):
+            sflats[i], oscan, hdr = open_minerva_fits(filenames[i], return_hdr=True)
+            oscan_fit = overscan_fit(oscan)
+            bias_fiti = bias_fit(bias, oscan_fit)
+            ## Subtract overscan corrected bias
+            sflats[i] -= bias_fiti
+            ## subtract scaled dark exposure
+            sflats[i] -= dark*(hdr['EXPTIME']/dhdr['EXPTIME'])
+        sflat = sf.combine(sflats, method=method)
+        ### Reverse orientation to match ccd, etc.
+        sflat = sflat[::-1,:]
+        hdu = pyfits.PrimaryHDU(sflat)
+        hdulist = pyfits.HDUList([hdu])
+        try:
+            if not os.path.isdir(os.path.join(redux_dir,date)):
+                os.mkdir(os.path.join(redux_dir,date))
+            hdulist.writeto(os.path.join(redux_dir,date,fname),clobber=True)
+        except:
+            print("Directory/File already exists")
+        return sflat
+    
+def make_norm_sflat(sflat, redux_dir, date, spline_smooth=True, plot_results=False):
+    """ Long function, originally fit_slit.py.  May rearrange later, but 
+        not necessary.
+    """
+    ##########################################################
+    ### open slit flat file, subtract bias, scale by median ##
+    ##########################################################
+    if os.path.isfile(os.path.join(redux_dir, date, '{}.slit_flat_smooth.fits'.format(date))):
+        slit_norm = pyfits.open(os.path.join(redux_dir, date, '{}.slit_flat_smooth.fits'.format(date)))[0].data
+        return slit_norm
+    #spline_smooth = True
+    #redux_dir = os.environ['MINERVA_REDUX_DIR']
+    #date = 'n20160115'
+    #date2 = 'n20160216'
+    #date = 'n20161204'
+    #bias_fits = pyfits.open(os.path.join(redux_dir,date,'{}.bias_avg.fits'.format(date)),uint=True)
+    #bias = bias_fits[0].data
+    #sflat_fits = pyfits.open(os.path.join(redux_dir,date,'{}.slit_flat_avg.fits'.format(date)))
+    #sflat = sflat_fits[0].data
+    #sflat-=bias
+#    readnoise = 3.63
+    sflat /= np.max(sflat)
+    #sflat/=np.median(sflat[sflat>5*readnoise]) #Probably a better way to normalize
+#    shdr = sflat_fits[0].header
+    
+    ###clip overscan and weird edge effects
+    #sflat = sflat[1:2049,0:2048]
+    hpix = sflat.shape[1]
+    vpix = sflat.shape[0]
+#    sflat = sflat[::-1,0:hpix]
+    #plt.plot(sflat[:,1000])
+    #plt.show()
+    
+    #xpix = shdr['NAXIS2']
+    #hpix = shdr['NAXIS1']
+    
+    ##########################################################
+    ################# fit to profile #########################
+    ##########################################################
+    
+    def get_new_inds(sss, idx1, idx2, fib, pad = 2, noise = 0.04):
+        ssub = sss[idx1:idx2]
+        ### primitive sigma clip
+        smsk = (ssub > (np.median(ssub) - (3 - 2.3*fib/29)*noise))
+        if len(smsk>0) == 0:
+            print "Indices:", idx1, idx2
+#            print smsk
+            exit(0)
+        idx1n = idx1 + np.nonzero(smsk)[0][0]
+        idx2n = idx1 + np.nonzero(smsk)[0][-1]
+        il = max(0, idx1-pad)
+        ih = min(sflat.shape[0],idx2+pad)
+        if (idx1n == idx1 or idx2n == idx2) and il !=0 and ih !=sflat.shape[0]:
+            idx1n, idx2n = get_new_inds(sss, il, ih, fib)
+        return idx1n, idx2n
+    
+    num_fibers = 29 #change to user input?
+    pord = 4 #change to user input?
+    line_fits = np.zeros((num_fibers,hpix,pord+1))
+    idxones = np.zeros((num_fibers, hpix))
+    idxtwos = np.zeros((num_fibers, hpix))
+    spds = np.zeros((num_fibers, hpix))
+    slit_norm = np.ones(sflat.shape)
+    for col in range(hpix):
+    #    if col %100 == 0:
+    #        print "column", col
+    #    sss = ediff1d(sflat[:,col])
+        sss = sflat[:,col]
+        if col < 600:
+            idx1 = int(40 - col/15.0)
+        else:
+            idx1 = 0
+    #    idx2 = 0
+        pad = 5
+        slit_width = 67-15 #change this later too
+        dip_width = 58-22
+        for i in range(num_fibers):
+    #        if i > 1:
+    #            continue
+    #        print "Iteration", i
+            ### for first slit need to do some special treatment because we can
+            ### start partway into slit, or into dip
+            if i == 0:
+                ssub = sss[idx1:idx1+slit_width+dip_width+2*pad]
+                smsk = ssub > 0.5*np.mean(ssub) ## should robustly cut low vals
+                ### first nonzero value is temp new idx1
+                idx1t = idx1 + np.nonzero(smsk)[0][0]
+                idx2t = idx1t + np.nonzero(ediff1d(smsk[np.nonzero(smsk)[0][0]:]))[0][0]
+                ### Now run through to cut
+                idx1, idx2 = get_new_inds(sss, idx1t, idx2t, i)
+    #            slit_width = idx2 - idx1
+            else:
+                idx2o = idx2
+                if dip_width > 6:
+                    idx1, idx2 = get_new_inds(sss, idx2+dip_width, idx2+dip_width+slit_width, i)
+                    dip_width = idx1-idx2o
+                    slit_width = idx2-idx1
+                else:
+                    idx1, idx2 = idx2+dip_width, idx2+dip_width+slit_width
+                    dip_width -= 1
+                    slit_width -= 1
+            idx2mx = 2050 ### Some pathological behavior on edge...
+            idx2 = min(idx2,idx2mx)
+            ### Once indices of edges are identified, fit to those within
+            ### use spd to come in from the edges a little, helps prevent bad fits
+            spd = 1 if i < 27 else 3  ### Extra pad on last due to overlap
+            ### additional override from some of the lower signal values
+            if i > 24 and i <27 and col < 100:
+                spd = 2
+            ### save inds, spd for spline fitting later...
+            idxones[i, col] = idx1
+            idxtwos[i, col] = idx2
+            spds[i, col] = spd
+            slit_inds = np.arange(idx1+spd,idx2-spd)
+            slit_inds = slit_inds[slit_inds < sflat.shape[0]]
+            ### range of columns to take median over for empirical fits
+            cpd = 3
+            crange = np.arange(max(0,col-cpd),min(sflat.shape[1],col+cpd+1))
+            ### if we don't have enough points to fit polynomial, just go empirical
+            if len(slit_inds) == 0:
+                pass
+            elif len(slit_inds)<=pord+1:
+                if len(slit_inds) == 1:
+                    meds = np.median(sflat[slit_inds, crange[0]:crange[-1]])
+                else:
+                    meds = np.median(sflat[slit_inds, crange[0]:crange[-1]], axis=1)
+                slit_norm[slit_inds,col] = meds
+            else:
+                ### Change scale to [-1, 1] then fit
+                n_inds = 2*(slit_inds - vpix/2)/vpix
+                line_fits[i,col] = np.polyfit(n_inds,sss[slit_inds],pord)
+                fitted = np.poly1d(line_fits[i,col,:])(n_inds)
+                slit_norm[slit_inds,col] = fitted
+            ### include nearest points on each edge...
+            pd = min(1,dip_width)
+            slit_norm[idx1-pd:idx1+spd,col] = np.median(sflat[idx1-pd:idx1+spd,crange], axis=1)
+            if idx2 < 2048:
+                slit_norm[idx2-spd:idx2+pd,col] = np.median(sflat[idx2-spd:idx2+pd,crange], axis=1)
+    
+    ### Fit splines to polynomial coefficients...
+    if spline_smooth:
+        #plt.plot(slit_norm[1000,:])
+        spc = 5 ## try evenly spaced breakpoints
+        breakpoints = np.arange(0,hpix,spc)
+        ### Fit splines, no weighting
+        ### This is actually pretty slow...look at speeding up spline_1D
+        smooth_line_fits = np.zeros(line_fits.shape)
+        for val in range(pord+1):
+            print "val:", val
+            for fib in range(num_fibers):
+                spl = spline.spline_1D(np.arange(hpix),line_fits[fib,:,val],breakpoints, window = 1024, pad = 50)
+                smooth_line_fits[fib,:,val] = spl
+        
+        ### Now go back and put modified values into slit_norm
+        for col in range(hpix):
+    #        if col %100 == 0:
+    #            print "column", col
+            for fib in range(num_fibers):
+                idx1 = idxones[fib, col]
+                idx2 = idxtwos[fib, col]
+                spd = spds[fib, col]
+                slit_inds = np.arange(idx1+spd,idx2-spd)
+                slit_inds = slit_inds[slit_inds < sflat.shape[0]].astype(int)
+                if len(slit_inds) > pord+1:
+                    n_inds = 2*(slit_inds - vpix/2)/vpix
+                    fitted = np.poly1d(smooth_line_fits[fib,col,:])(n_inds)
+                    slit_norm[slit_inds,col] = fitted
+    
+    
+    ### visually evaluate quality of slit_norm
+    if plot_results:
+        smooth = sflat/slit_norm
+        plt.imshow(smooth, interpolation='none')
+        plt.show()
+        for j in [0, 1000, 2000]:
+            plt.plot(smooth[:,j], linewidth=2)
+            plt.plot(sflat[:,j], linewidth=2)
+            plt.plot(slit_norm[:,j], linewidth=2)
+            plt.show()
+    
+    ### Save file
+    slit_norm = slit_norm[::-1,:]
+    #redux_dir = os.environ['MINERVA_REDUX_DIR']    
+    hdu = pyfits.PrimaryHDU(slit_norm)
+    hdu.header.append(('POLYORD',pord,'Polynomial order used for fitting'))
+    hdulist = pyfits.HDUList([hdu])
+    hdulist.writeto(os.path.join(redux_dir,date,'{}.slit_flat_smooth.fits'.format(date)),clobber=True)  
+    return slit_norm
+    
+def cal_fiberflat(flat, data_dir, redux_dir, arc_date):
+    """ calibrates fiber flat, right now omit dark (no exptime available)
+        and overscan (miniscule correction anyway)
+        Use only bias subtraction and slit flat correction
+    """
+    bdate = find_most_recent_frame_date('bias', data_dir)
+#    ddate = find_most_recent_frame_date('dark', data_dir)
+    sfdate = find_most_recent_frame_date('slitflat', data_dir)
+    bias = stack_calib(redux_dir, data_dir, bdate)
+    bias = bias[:,0:2048] #Remove overscan
+    ### Load Dark
+#    dark, dhdr = stack_calib(redux_dir, data_dir, ddate, frame='dark')
+#    dark = dark[:,0:2048]
+#    dark *= exptime/dhdr['EXPTIME'] ### Scales linearly with exposure time
+    ### Analyze overscan (essentially flat, very minimal correction)
+#    overscan_fit = m_utils.overscan_fit(overscan)
+    
+    #bias -= np.median(bias) ### give zero mean overall - readjust by overscan
+    ### Making up this method, so not sure if it's good, but if it works it should reduce ccd noise
+#    bias = bias_fit(bias, overscan_fit)
+    
+    
+    ### Make master slitFlats
+    sflat = stack_flat(redux_dir, data_dir, sfdate)
+    norm_sflat = make_norm_sflat(sflat, redux_dir, sfdate)
+    
+    
+    ### Calibrate ccd
+    flat -= bias #Note, if ccd is 16bit array, this operation can cause problems
+#    flat -= dark
+    flat /= norm_sflat
+    return flat
     
 def save_comb_arc_flat(filelist,frm,ts,redux_dir,date,no_overwrite=True, verbose=False, method='median'):
     """ frm must be 'arc' or 'flat'

@@ -20,7 +20,7 @@ from matplotlib import cm
 plt.rcParams['image.cmap'] = 'gray'
 from matplotlib.colors import LinearSegmentedColormap
 #import scipy
-#import scipy.stats as stats
+import scipy.stats as stats
 import scipy.special as sp
 import scipy.interpolate as si
 import scipy.optimize as opt
@@ -31,16 +31,77 @@ import scipy.sparse as sparse
 #import scipy.linalg as linalg
 #import astropy.stats as stats
 
-def gaussian(axis, sigma, center=0, height=1,bg_mean=0,bg_slope=0,power=2):
+#######################################################################
+######################## START OF PDFS ################################
+#######################################################################
+
+def gaussian(axis, sigma, center=0, height=None,bg_mean=0,bg_slope=0,power=2):
     """Returns gaussian output values for a given input array, sigma, center,
        and height.  Center defaults to zero and height to 1.  Can also
        tweak the exponent parameter if desired."""
     #Height scale factor*(1/(sqrt(2*pi*sigma**2)))
 #    print sigma, center, height
+    if height is None:
+        height = 1/(np.sqrt(2*np.pi*sigma))
     gaussian = height*exp(-abs(axis-center)**power/(2*(abs(sigma)**power)))+bg_mean+bg_slope*(axis-center)
 #    print sigma, center, height, bg_mean,bg_slope,power
 #    print gaussian
     return gaussian
+    
+def gaussian_2d(axisx,axisy,meanx,meany,sigmax,sigmay,height=1):
+    norm = (1/(sigmax*sigmay*2*pi))
+    xexp = -(1/2)*(((axisx-meanx)/sigmax)**2)
+    xgrid = np.tile(xexp,[len(axisy),1])
+    yexp = np.reshape(-(1/2)*(((axisy-meany)/sigmay)**2),[len(axisy),1])
+    ygrid = np.tile(yexp,[1,len(axisx)])
+    gauss2d = norm*exp(xgrid+ygrid)
+    return gauss2d
+    
+def gaussian_lmfit(params, x, idx=0):
+    """ normalized gaussian for lmfit
+    """
+    if type(params) == np.ndarray:
+        mn = params[0]
+        sigma = params[1]
+    else:
+        mn = params['mn{}'.format(idx)].value
+        sigma = params['sig{}'.format(idx)].value
+    return (1/(np.sqrt(2*np.pi*sigma**2)))*np.exp(-((x-mn)**2)/(2*sigma**2))
+    
+def gaussian_lmfit_trunc(params, x, idx=0):
+    """ normalized gaussian for lmfit
+    """
+    if type(params) == np.ndarray:
+        mn = params[0]
+        sigma = params[1]
+    else:
+        mn = params['mn{}'.format(idx)].value
+        sigma = params['sig{}'.format(idx)].value
+    return trunc_gaussian(x, sigma, xc=mn, low=np.min(x), high = np.max(x)) 
+    
+def gaussian_2d_lmfit(params, x, y, idx=0):
+    """ normalized gaussian for lmfit
+    """
+    sigmax = params['sigx{}'.format(idx)].value
+    mnx = params['mnx{}'.format(idx)].value
+    sigmay = params['sigy{}'.format(idx)].value
+    mny = params['mny{}'.format(idx)].value
+    norm = (1/(sigmax*sigmay*2*pi))
+    return norm*np.exp(-((x-mnx)**2)/(2*sigmax**2))*np.exp(-((y-mny)**2)/(2*sigmay**2))
+    
+def gaussian_4d_lmfit(params, x, y, z, a, idx=0):
+    """ normalized gaussian for lmfit
+    """
+    sigmax = params['sigx{}'.format(idx)].value
+    mnx = params['mnx{}'.format(idx)].value
+    sigmay = params['sigy{}'.format(idx)].value
+    mny = params['mny{}'.format(idx)].value
+    sigmaz = params['sigz{}'.format(idx)].value
+    mnz = params['mnz{}'.format(idx)].value
+    sigmaa = params['siga{}'.format(idx)].value
+    mna = params['mna{}'.format(idx)].value
+    norm = (1/(sigmax*sigmay*2*pi))*(1/(sigmaz*sigmaa*2*pi))
+    return norm*np.exp(-((x-mnx)**2)/(2*sigmax**2))*np.exp(-((y-mny)**2)/(2*sigmay**2))*np.exp(-((z-mnz)**2)/(2*sigmaz**2))*np.exp(-((a-mna)**2)/(2*sigmaa**2))
     
 def trunc_gaussian(x, sig, xc=0, low=0, high=np.inf):
     err = 0.5*(sp.erf((high-xc)/(np.sqrt(2)*sig))-sp.erf((low-xc)/(np.sqrt(2)*sig)))
@@ -73,12 +134,14 @@ def poisson(x,lam):
     """ Poisson function, written for numerical stability
     """
     return np.exp(x*np.log(lam)-lam-sp.gammaln(x+1))
+        
     
-def schechter_fct(L,L_star,Phi_star,alpha):
-    """ To match eqn. 1 of Guo, 2015 (CANDELS)
-    """
-    N_L = Phi_star*(L/L_star)**alpha*np.exp(-L/L_star)
-    return N_L
+def sine(theta):
+    ### sine pdf
+    rtn = np.sin(theta)
+    rtn[theta<0] = 0
+    rtn[theta>np.pi/2] = 0
+    return rtn    
     
 def inv_power(x,xc,n):
     """ y = 1/(x-xc)**n
@@ -91,6 +154,18 @@ def inv_power(x,xc,n):
     else:
         A = 1/(-(1/(n-1))*(1/(x[-1]-xc)**(n-1) - 1/(x[0]-xc)**(n-1)))
     return A/(x-xc)**n
+    
+def inv_power_lmfit(params, x, idx=0):
+    """ Simple inverse power law (x-cp)**(-pwr), not normalized
+        allow offset of zero/inf point
+    """
+    pwr = params['pwr{}'.format(idx)].value
+    cp = params['cp{}'.format(idx)].value
+    x -= cp
+    x[x==0] = 0.0001 # To remove inf behavior
+#    print "Params:", pwr, cp
+    x = abs(x) ### make always positive...
+    return x**(-pwr)
     
 def inv_power_int(xc,n,low,high,low0,high0):
     """ Integral, low0 and high0 set bounds for pdf, low, high within pdf.
@@ -105,20 +180,98 @@ def inv_power_int(xc,n,low,high,low0,high0):
         A = -(1/(n-1))*(1/(high0-xc)**(n-1) - 1/(low0-xc)**(n-1))
         return -(A/(n-1))*(1/(high-xc)**(n-1) - 1/(low-xc)**(n-1))
     
-def cauchy(x,xc,a,low=0,high=np.inf):
+def cauchy(x,xc,a,lims=None):
     """ Truncated Cauchy Distribution
         Normalized by construction on interval [low, high]
     """
-    denom = 0.5 + 1/np.pi*np.arctan(xc/a)
+    if lims is None:
+        denom = 1
+    else:
+        denom = (1/np.pi)*(np.arctan((lims[1]-xc)/a) - np.arctan((lims[0]-xc)/a))
     num = 1/(np.pi*a*(1+((x-xc)/a)**2))
     return num/denom
 #    A = 1/(a*(np.arctan((high-xc)/a)-np.arctan((low-xc)/a)))
 #    return A*(1/(1+((x-xc)/a)**2))
     
+def cauchy_lmfit(params, x, idx=0):
+    """ For use with lmfit params
+        This function is not normalized!
+    """
+    if type(params) == np.ndarray:
+        xc = params[0]
+        a = params[1]
+    else:
+        xc = params['c{}'.format(idx)].value
+        a = params['s{}'.format(idx)].value
+    return 1/(np.pi*a*(1+((x-xc)/a)**2))
+    
+def cauchy_lmfit_trunc(params, x, idx=0):
+    """ For use with lmfit params
+        This function is not normalized!
+    """
+    if type(params) == np.ndarray:
+        xc = params[0]
+        a = params[1]
+    else:
+        xc = params['c{}'.format(idx)].value
+        a = params['s{}'.format(idx)].value
+    return cauchy(x, xc, a, lims=[np.min(x), np.max(x)])
+    
 def cauchy_2d(x,y,xc,yc,a1,a2,gam,low=0,high=np.inf):
     """ Not normalized...
     """
     return 1/(1+((x-xc)/a1)**2+((y-yc)/a2)**2)**(gam/2)
+    
+def cauchy_nd(X, c0, s0, c1, s1, c2, s2, gam0):
+    if X.dtype == tuple:
+        X = np.asarray(X)
+    ndim = X.shape[0]
+    ndim = 3
+    denom = (1+((X[0]-c0)/s0)**2+((X[1]-c1)/s1)**2+((X[2]-c2)/s2)**2)*gam
+##    print X[0].shape
+#    denom = np.ones(X[0].shape)
+##    print denom.shape
+#    idx = range(ndim)
+##    if idx is None:
+##        idx = range(ndim)
+##    else:
+##        idx = idx*np.ones((ndim),dtype=int)
+#    for i in range(ndim):
+#        denom += ((X[i]-params['c{}'.format(idx[i])].value) / params['s{}'.format(idx[i])].value)**2
+#    denom *= params['gam0'].value
+    if np.sum(denom==0) > 0:
+        print("Cannot divide by zero")
+        exit(0)
+    return 1/denom    
+    
+def cauchy_nd_lmfit(params, X, idx=None):
+    """ For use in PDF fitting.
+        params is an lmfit object (lables must match below)
+        c#, s# (center, scale for each parameter)
+        X in an n by m array (or tuple of arrays)
+        This is not normalized - do analytically by integrating
+        Added an envelope scale factor
+    """
+    if X.dtype == tuple:
+        X = np.asarray(X)
+    ndim = X.shape[0]
+    ndim = 3
+#    print X[0].shape
+    denom = np.ones(X[0].shape)
+#    print denom.shape
+    idx = range(ndim)
+#    if idx is None:
+#        idx = range(ndim)
+#    else:
+#        idx = idx*np.ones((ndim),dtype=int)
+    for i in range(ndim):
+        denom += ((X[i]-params['c{}'.format(idx[i])].value) / params['s{}'.format(idx[i])].value)**2
+    denom == denom**params['gam0'].value
+    if np.sum(denom==0) > 0:
+        print("Cannot divide by zero")
+        exit(0)
+    return 1/denom
+    
 
 def multi_mod_cauchy(params,X,low=0,high=np.inf):
     ''' Multi dimensional modified cauchy pdf.
@@ -164,7 +317,27 @@ def cauchy_residual(params,x,y,inv):
 def weibull(x,k,lam):
     """ Weibull distribution
     """
-    return (k/lam)*(x/lam)**(k-1)*np.exp(-(x/lam)**k)  
+    x[x==0] = 0.0001 #Hack to prevent infinity at zero...
+    factor = (x/lam)**(k-1)
+    return (k/lam)*factor*np.exp(-(x/lam)**k)
+    
+def weibull_lmfit(params, x, idx=0):
+    """ Weibull distribution with lmfit.Parameters() object as input
+    """
+    if type(x) == np.ndarray:
+        x[x<=0] == 0.0001
+    else:
+        if x <= 0:
+            x = 0.0001
+    if type(params) == np.ndarray:
+        k = params[0]
+        lam = params[1]
+    else:
+        print "using lmfit!"
+        exit(0)
+        k = params['k{}'.format(idx)].value
+        lam = params['lam{}'.format(idx)].value
+    return weibull(x, k, lam)
     
 def weibull_residual(params,x,y,inv):
     """ For use with lmfit
@@ -176,6 +349,12 @@ def weibull_residual(params,x,y,inv):
     except:
         h = 1
     return (h*weibull(x,k,lam)-y)*np.sqrt(inv)
+    
+def exponential_lmfit(params, x, idx=0):
+    """ with lmfit...
+    """
+    tau = params['tau{}'.format(idx)].value
+    return tau*np.exp(-x/tau)
     
 def exponential_residual(params,x,y,inv):
     """ For use with lmfit
@@ -190,7 +369,222 @@ def exponential_residual(params,x,y,inv):
     except:
         xc = 0
     return (h*np.exp(-(x-xc)/tau)-y)*np.sqrt(inv)
+
+def sine_draw(n=1):
+    """ Draws n variables from sin(x), returns on interval [0, 1]
+    """
+    return np.arccos(np.random.rand(n))/(np.pi)
     
+def cos_draw(n=1):
+    """ Draws n variables from cos(x), returns on interval [-1, 1]
+    """
+    return np.arcsin(2*np.random.rand(n)-1)/(np.pi/2)
+
+### Super specific PDFs for fitting joint parameter distributions in
+### LAE source determination (master.py, source_utils.py)
+
+def exponential_ie_lmfit(params, X, idx=0):
+    if X.shape[0] != 3:
+        print "You're not giving this function the right input!"
+        exit(0)
+#    re = X[0]
+    ie = X[1]
+    nsers = X[2]
+    taui = params['taui'].value
+    tausn = params['tausn'].value
+    tau = taui + tausn*nsers
+#    plt.plot(nsers,tau,'k.')
+#    plt.show()
+#    plt.close()
+    return tau*np.exp(-ie/tau)
+#    return 0.2*np.exp(-ie/0.2)
+    
+def gaussian_re_lmfit(params, X, idx=0):
+    if X.shape[0] != 3:
+        print "You're not giving this function the right input!"
+        exit(0)
+    re = X[0]
+#    ie = X[1]
+#    nsers = X[2]
+    mnr = params['mnr'].value
+    sigr = params['sigr'].value
+    return (1/np.sqrt(2*np.pi*sigr**2))*np.exp(-(re-mnr)**2/(2*sigr**2))
+    
+def cauchy_re_lmfit(params, X, idx=0):
+    if X.shape[0] != 3:
+        print "You're not giving this function the right input!"
+        exit(0)
+    re = X[0]
+#    ie = X[1]
+#    nsers = X[2]
+    xc = params['mnr'].value
+    a = params['sigr'].value
+    return 1/(np.pi*a*(1+((re-xc)/a)**2))
+    
+def gaussian_nsers_lmfit(params, X, idx=0):
+    if X.shape[0] != 3:
+        print "You're not giving this function the right input!"
+        exit(0)
+    re = X[0]
+#    ie = X[1]
+    nsers = X[2]
+    mnn = params['mnn'].value
+    mnsr = params['mnsr'].value
+    sign = params['sign'].value
+    sigsr = params['sigsr'].value
+    mn = mnn + mnsr*re
+    sig = sign + sigsr*re
+    return (1/np.sqrt(2*np.pi*sig**2))*np.exp(-(nsers-mn)**2/(2*sig**2))
+    
+def weibull_nsers_lmfit(params, X, idx=0):
+    if X.shape[0] != 3:
+        print "You're not giving this function the right input!"
+        exit(0)
+    re = X[0]
+#    ie = X[1]
+    nsers = X[2]
+    lamn = params['lamn'] .value
+    lamsr = params['lamsr'] .value
+    kn = params['kn'] .value
+    ksr = params['ksr'] .value
+    lam = lamn + lamsr*re
+    k = kn + ksr*re
+    return weibull(nsers, k, lam)
+    
+def gauss3_irn(params, X, idx=0):
+    if X.shape[0] != 3:
+        print "You're not giving this function the right input!"
+        exit(0)
+    re0 = X[0]
+    ie0 = X[1]
+    nsers0 = X[2]
+    if type(params) == np.ndarray:
+        mnr = params[0]
+        mni = params[1]
+        mnn = params[2]
+        scr = params[3]
+        sci = params[4]
+        scn = params[5]
+        th1 = params[6]
+        th2 = params[7]
+        th3 = params[8]
+    else:
+        mnr = params['mnr'].value
+        mni = params['mni'].value
+        mnn = params['mnn'].value
+        scr = params['scr'].value
+        sci = params['sci'].value
+        scn = params['scn'].value
+        th1 = params['th1'].value
+        th2 = params['th2'].value
+        th3 = params['th3'].value
+        #gam = params['gam'].value
+    ### my best guess at 3d rotations...
+    ### Zero-mean everything
+    re = re0 - mnr
+    ie = ie0 - mni
+    nsers = nsers0 - mnn
+    ### two rotations
+#    re_pr = re*np.cos(th2) + ie*np.sin(th1)*np.sin(th2) + nsers*np.cos(th1)*np.sin(th2)
+#    ie_pr = ie*np.cos(th1) - nsers*np.sin(th1)
+#    ns_pr = -re*np.sin(th2) + ie*np.cos(th2)*np.sin(th1) + nsers*np.cos(th1)*np.cos(th2)
+    ### Three rotations    
+    re_pr = re*np.cos(th2)*np.cos(th3) + ie*(np.cos(th3)*np.sin(th1)*np.sin(th2) - np.cos(th1)*np.sin(th3)) + nsers*(np.cos(th3)*np.cos(th1)*np.sin(th2) + np.sin(th3)*np.sin(th1))
+    ie_pr = re*np.sin(th3)*np.cos(th2) + ie*(np.cos(th1)*np.cos(th3) + np.sin(th1)*np.sin(th2)*np.sin(th3)) + nsers*(np.cos(th1)*np.sin(th2)*np.sin(th3)-np.cos(th3)*np.sin(th1))
+    ns_pr = -re*np.sin(th2) + ie*np.cos(th2)*np.sin(th1) + nsers*np.cos(th1)*np.cos(th2)
+#    re_pr = Xn[0]
+#    ie_pr = Xn[0]
+#    ns_pr = Xn[0]
+#    Nr = gaussian(re_pr, scr, center=mnr)
+#    Ni = gaussian(ie_pr, sci, center=mni)
+#    Nn = gaussian(ns_pr, scn, center=mnn)
+    Nr = cauchy(re_pr, 0, scr, lims=[np.min(re_pr), np.max(re_pr)])
+    Ni = cauchy(ie_pr, 0, sci, lims=[np.min(ie_pr), np.max(ie_pr)])
+    Nn = cauchy(ns_pr, 0, scn, lims=[np.min(ns_pr), np.max(ns_pr)])
+    return (Nr*Ni*Nn)
+    
+def cauchy3_irq(params, X, idx=0, lims=None, normalized=True):
+    if X.shape[0] != 3:
+        print "You're not giving this function the right input!"
+        exit(0)
+    re0 = X[0]
+    ie0 = X[1]
+    q0 = X[2]
+    if type(params) == np.ndarray:
+        mnr = params[0]
+        mni = params[1]
+        mnq = params[2]
+        scr = params[3]
+        sci = params[4]
+        scq = params[5]
+        th1 = params[6]
+        th2 = params[7]
+        th3 = params[8]
+    else:
+        mnr = params['mnr'].value
+        mni = params['mni'].value
+        mnq = params['mnq'].value
+        scr = params['scr'].value
+        sci = params['sci'].value
+        scq = params['scq'].value
+        th1 = params['th1'].value
+        th2 = params['th2'].value
+        th3 = params['th3'].value
+        #gam = params['gam'].value
+    ### my best guess at 3d rotations...
+    ### Zero-mean everything
+    re = re0 - mnr
+    ie = ie0 - mni
+    qs = q0 - mnq
+    ### two rotations
+#    re_pr = re*np.cos(th2) + ie*np.sin(th1)*np.sin(th2) + nsers*np.cos(th1)*np.sin(th2)
+#    ie_pr = ie*np.cos(th1) - nsers*np.sin(th1)
+#    ns_pr = -re*np.sin(th2) + ie*np.cos(th2)*np.sin(th1) + nsers*np.cos(th1)*np.cos(th2)
+    ### Three rotations    
+    re_pr = re*np.cos(th2)*np.cos(th3) + ie*(np.cos(th3)*np.sin(th1)*np.sin(th2) - np.cos(th1)*np.sin(th3)) + qs*(np.cos(th3)*np.cos(th1)*np.sin(th2) + np.sin(th3)*np.sin(th1))
+    ie_pr = re*np.sin(th3)*np.cos(th2) + ie*(np.cos(th1)*np.cos(th3) + np.sin(th1)*np.sin(th2)*np.sin(th3)) + qs*(np.cos(th1)*np.sin(th2)*np.sin(th3)-np.cos(th3)*np.sin(th1))
+    qs_pr = -re*np.sin(th2) + ie*np.cos(th2)*np.sin(th1) + qs*np.cos(th1)*np.cos(th2)
+#    re_pr = Xn[0]
+#    ie_pr = Xn[0]
+#    ns_pr = Xn[0]
+#    Nr = gaussian(re_pr, scr, center=mnr)
+#    Ni = gaussian(ie_pr, sci, center=mni)
+#    Nn = gaussian(ns_pr, scn, center=mnn)
+    if lims is None:
+        limsr = [np.min(re_pr), np.max(re_pr)]
+        limsi = [np.min(ie_pr), np.max(ie_pr)]
+        limsq = [np.min(qs_pr), np.max(qs_pr)]
+    else:
+        limsr = lims[0]
+        limsi = lims[1]
+        limsq = lims[2]
+    if normalized:
+#        Nr = trunc_gaussian(re_pr, scr, xc=0, low=limsr[0], high=limsr[1])
+        Nr = cauchy(re_pr, 0, scr, lims=limsr)
+        Ni = cauchy(ie_pr, 0, sci, lims=limsi)
+        Nq = cauchy(qs_pr, 0, scq, lims=limsq)
+    else:
+#        Nr = gaussian(re_pr, scr)
+        Nr = cauchy(re_pr, 0, scr)
+        Ni = cauchy(ie_pr, 0, sci)
+        Nq = cauchy(qs_pr, 0, scq)
+    return (Nr*Ni*Nq)
+    
+#######################################################################
+######################### END OF PDFS #################################
+#######################################################################
+
+
+#######################################################################
+################# Special (mostly astro) functions ####################
+#######################################################################
+    
+def schechter_fct(L,L_star,Phi_star,alpha):
+    """ To match eqn. 1 of Guo, 2015 (CANDELS)
+    """
+    N_L = Phi_star*(L/L_star)**alpha*np.exp(-L/L_star)
+    return N_L   
+   
 def sersic1d_old(rarr,Ie,re,n):
     bn = 0.868*n-0.142
     I_r = Ie*10**(-bn*((rarr/re)**(1/n)-1))
@@ -215,23 +609,67 @@ def sersic2d_old(x,y,xc,yc,Ie,re,n,q=1,PA=0):
     
 def sersic2d(x,y,xc,yc,A,sig,n,q=1,PA=0):
     rarr = make_rarr(x,y,xc,yc,q=q,PA=PA)
-    return sersic1dy(rarr,A,sig,n)
+    return sersic1d(rarr,A,sig,n)
     
-def sersic2d_lmfit(params,x,y,i):
+def sersic2d_lmfit(params,x,y,i,ab=False):
     """ makes a 2D image (dimx x dimy) of a Sersic profile with parameters
         in lmfit object params (xc, yc, Ie, re, n, q, PA)
     """
     xc = params['xcb{}'.format(i)].value
     yc = params['ycb{}'.format(i)].value
-    q = params['qb{}'.format(i)].value
     PA = params['PAb{}'.format(i)].value
     Ie = params['Ieb{}'.format(i)].value
-    re = params['reb{}'.format(i)].value
     n = params['nb{}'.format(i)].value
+    if not ab:
+        q = params['qb{}'.format(i)].value    
+        re = params['reb{}'.format(i)].value
+    else:
+        aa = params['ab{}'.format(i)].value
+        bb = params['bb{}'.format(i)].value
+        q = bb/aa
+        re = np.sqrt(aa*bb)
     rarr = make_rarr(x,y,xc,yc,q=q,PA=PA)
     image = sersic1d(rarr,Ie,re,n)
     return image
+
+def eff(rarr, Io, a, gam=3):
+    """ Elson, Fall, and Freeman, 1987 (see, ex. Schweitzer, Luminosity 
+        Profiles of Resolved Young Massive Clusters)
+    """
+    return Io*(1+(rarr/a)**2)**(-gam/2)
     
+def eff2d(x, y, xc, yc, Io, scl, gam=3, q=1, PA=0):
+    """ 2D EFF image with input parameters (gamma = 3 default)
+    """
+    rarr = make_rarr(x,y,xc,yc,q=q,PA=PA)
+    image = eff(rarr,Io,scl,gam)
+    return image    
+    
+def eff2d_lmfit(params, x, y, i, ab=False):
+    """ Makes a 2D image using the EFF profile and specified parameters
+    """
+    xc = params['xcb{}'.format(i)].value
+    yc = params['ycb{}'.format(i)].value
+    PA = params['PAb{}'.format(i)].value
+    Io = params['Ieb{}'.format(i)].value
+    gam = params['nb{}'.format(i)].value
+    if not ab:
+        q = params['qb{}'.format(i)].value    
+        scl = params['reb{}'.format(i)].value
+    else:
+        aa = params['ab{}'.format(i)].value
+        bb = params['bb{}'.format(i)].value
+        q = bb/aa
+        scl = np.sqrt(aa*bb)
+    rarr = make_rarr(x,y,xc,yc,q=q,PA=PA)
+    image = eff(rarr,Io,scl,gam)
+    return image
+    
+  
+##############################################################################
+################### Various other functions... ###############################
+##############################################################################
+  
 def gauss_residual(params,xvals,zvals,invals):
     """ Residual function for gaussian with constant background, for use with
         lmfit.minimize()
@@ -562,13 +1000,13 @@ def gauss2d(xaxis, yaxis, sigma_x, sigma_y, xcenter=0, ycenter=0, q=1, PA=0,unit
         hght = 1
     else:
         hght = 1/(2*np.pi*sig_sq)
-    gauss2d = hght*np.exp(-(1/2)*(xygrid/(sig_sq**2)))
+    gauss2d = hght*np.exp(-(1.0/2)*(xygrid/(sig_sq)))
 #    plt.imshow(gauss2d,interpolation='none')
 #    plt.show()
 #    plt.close()
     return gauss2d
  
-def gauss2d_lmfit(params, xaxis, yaxis, cnt):
+def gauss2d_lmfit(params, xaxis, yaxis, cnt, ab=False):
     """Returns 2-d normalized Guassian (symmetric in x and y)
     INPUTS:
         xaxis = xvalues to be evaulated
@@ -581,24 +1019,18 @@ def gauss2d_lmfit(params, xaxis, yaxis, cnt):
     """
     xc = params['xcb{}'.format(cnt)].value
     yc = params['ycb{}'.format(cnt)].value
-#    sigx = params['sigx{}'.format(cnt)].value
-#    sigy = params['sigy{}'.format(cnt)].value
-    sig = params['sigb{}'.format(cnt)].value
     hght = params['hght{}'.format(cnt)].value
-    ### Assume q, PA of host galaxy apply to all blobs...
-    q = params['qb{}'.format(cnt)].value
     PA = params['PAb{}'.format(cnt)].value
-    #Reshuffle xaxis and yaxis inputs to be 1-D arrays
-#    lx = len(xaxis)
-#    ly = len(yaxis)
-#    x = np.array((xaxis-xcenter)).reshape(1,lx)
-#    y = np.array((yaxis-ycenter)).reshape(1,ly)
-    
-    #Convert x and y into a 2-D grid for 2d gaussian exponent
-#    sig_sq = sigx*sigy
+    if not ab:
+        q = params['qb{}'.format(i)].value    
+        sig = params['sigb{}'.format(i)].value
+    else:
+        aa = params['ab{}'.format(i)].value
+        bb = params['bb{}'.format(i)].value
+        q = bb/aa
+        sig = np.sqrt(aa*bb)
     sig_sq = sig*sig
     xygrid = make_rarr(xaxis, yaxis, xc, yc, q=q, PA=PA)
-#    xygrid = sigma_y**2*np.tile(x,(ly,1))**2 + sigma_x**2*np.tile(y.T,(1,lx))**2
     gauss2d = hght/(2*np.pi*sig_sq)*np.exp(-(1/2)*(xygrid/(sig_sq**2)))
 #    plt.imshow(gauss2d,interpolation='none')
 #    plt.show()
@@ -1180,6 +1612,38 @@ def recenter_img(img,old_center,new_center):
             new_img[i,j] = px1 + px2 + px3 + px4
     return new_img
     
+def downsample(image,pxfact,extra='exclude'):
+    """ Takes an image and downsamples it by pxfact (must be an int)
+        For example, pxfact=2 means that a 2x2 square in image will be
+        summed to form a single pixel in the downsampled image.
+        extra='include' includes pixels on the edge, and assumes average
+        pixel value for missing.  'exclude' just truncates shape
+    """
+    vdim, hdim = image.shape
+    if extra=='exclude':
+        vnew, hnew = int(np.floor(vdim/pxfact)), int(np.floor(hdim/pxfact))
+    elif extra == 'include':
+        vnew, hnew = int(np.ceil(vdim/pxfact)), int(np.ceil(hdim/pxfact))
+    else:
+        print("Invalid value for extra, must be 'include' or 'exclude'")
+        exit(0)
+    new_image = np.zeros((vnew, hnew))
+    for i in range(vnew):
+        for j in range(hnew):
+            io = i*pxfact
+            jo = j*pxfact
+            ih = io+pxfact
+            jh = jo+pxfact
+            if extra == 'include' and (ih > vdim or jh > hdim):
+                ip = min(ih, vdim)
+                jp = min(jh, hdim)
+                exi, exj = ih-ip, jh-jp
+                imsub = np.sum(image[io:ip,jo:jp])*(pxfact**2/((pxfact-exi)*(pxfact-exj)))
+            else:
+                imsub = np.sum(image[io:ih,jo:jh])           
+            new_image[i,j] = imsub
+    return new_image
+    
 def radial_quad_fct(xarr,a,b,c,x0,y0):
     val = a + b*(((xarr-x0)**2+y0**2)**(1/2)) + c*((xarr-x0)**2+y0**2)
     return val
@@ -1210,8 +1674,54 @@ def make_rarr(x,y,xc,yc,q=1,PA=0):
     x_ell = (y_matrix-yc)*cos(PA) + (x_matrix-xc)*sin(PA)
     y_ell = (x_matrix-xc)*cos(PA) - (y_matrix-yc)*sin(PA)
     r_matrix = np.sqrt((x_ell)**2*q + (y_ell)**2/q)
+#    r_matrix = np.sqrt((x_ell)**2 + (y_ell)**2/q**2)
     return r_matrix
   
+def cauchy_draw(n=1,params=None,lims=None):
+    y = np.zeros(n)
+    if params is None:
+        yc = 0
+        ys = 1
+    elif type(params) == np.ndarray:
+        yc = params[0]
+        ys = params[1]
+    else:
+        yc = params['c0'].value
+        ys = params['s0'].value
+    for i in range(n):
+        x = np.random.rand()
+        if lims is None:
+            y[i] = ys*np.tan(np.pi*(x-1/2)) + yc
+        else:
+            xl = 1/np.pi*np.arctan((lims[0]-yc)/ys)
+            ytmp = ys*np.tan(np.pi*(x-xl)) + yc
+            while ytmp < lims[0] or ytmp > lims[1]:
+                x = np.random.rand()
+                ytmp = ys*np.tan(np.pi*(x-xl)) + yc
+            y[i] = ytmp
+    return y
+
+def gauss_draw(n=1, params=None, lims=None):
+    y = np.zeros(n)
+    if params is None:
+        yc = 0
+        ys = 1
+    elif type(params) == np.ndarray:
+        yc = params[0]
+        ys = params[1]
+    else:
+        yc = params['c0'].value
+        ys = params['s0'].value
+    for i in range(n):
+        ytmp = np.random.randn()*ys + yc
+        if lims is None:
+            y[i] = ytmp
+        else:
+            while ytmp < lims[0] or ytmp > lims[1]:
+                ytmp = np.random.randn()*ys + yc
+            y[i] = ytmp
+    return y
+
 def pdf_draw(pdf,n=1,args=None,int_lims=None,res=1e4):
     """ Returns n values drawn from function 'pdf'.  Optional input
         args passed to pdf (parameters, for example).
@@ -1252,7 +1762,67 @@ def pdf_draw(pdf,n=1,args=None,int_lims=None,res=1e4):
                 y[j] = (yarr[xind-1]+yarr[xind])/2
     return y
     
-def find_peaks2D(image,min_space=1,min_px=4,bg_thresh=None,min_amp=None,offset=[0,0]):
+def pdf_nd_grid(pdf, params, lims, mx_pnts = 10**6, bpd=1, save=False):
+    """ Makes a grid of pdf values for pdf with given params between lims.
+        Splits into extra bins per dimention (bpd) and sets the max of
+        each to 1, helps speed up draws when a lot of the pdf space has
+        a low probability of being drawn.
+        lims is an n x 2 array with n = ndim and then the min/max for each
+    """
+    if type(lims) == np.ndarray:
+        ndim = lims.shape[0]
+    else:
+        print("Input 'lims' must be an ndim x 2 array")
+        exit(0)
+    shrt_pnts = 100
+    pnts_per_dim = min(int((mx_pnts)**(1/(ndim))),shrt_pnts)
+    axis_arrays = []
+    spacing = np.zeros((ndim))
+    xaxes = np.zeros((ndim,pnts_per_dim))
+    for i in range(ndim):
+        ### The following assumes zero truncation...
+        xaxes[i] = np.linspace(lims[i,0], lims[i,1], pnts_per_dim)
+        axis_arrays.append(xaxes[i])
+        spacing[i] = xaxes[i][1] - xaxes[i][0]
+    mesh = np.meshgrid(*tuple(axis_arrays),indexing='ij')
+    mesh = np.asarray(mesh)
+#    if func[0:3].__name__ == 'sf.':
+#        import special as sf
+    grid = pdf(params, mesh)
+    ### Zero any unphysical values
+    grid[grid==np.inf] = 0
+    grid[grid==np.nan] = 0
+    grid /= np.max(grid)
+    if bpd == 1:
+        return grid, spacing
+    else:
+        print("I still need to add support for the bpd function")
+#    nppd = int(pnts_per_dim/bpd)
+#    grid_final = np.zeros((ndim*(ndim,) + ndim*(nppd,)))
+#    for i in range(ndim):
+#
+    
+def pdf_draw_nd(grid,lims,spacing,ndim,n=1,args=None):
+    """ pdf draw from a grid search, split out by bins
+    """
+    accept = False
+    while not accept:
+        draw = np.random.rand(ndim+1)
+        for i in range(ndim):
+            draw[i] *= grid.shape[i]
+            draw[i] = int(np.floor(draw[i]))
+#            draw[i] *= lims[i,1]-lims[i,0]
+#            draw[i] += lims[i,0]
+#            draw[i] = int(np.floor(draw[i]/spacing[i]))
+#            if draw[i] > grid.shape[i]:
+#                draw[i] = grid.shape[i]-1
+        inds = tuple(draw[0:ndim])
+        val = grid[inds]
+        if val >= draw[-1]:
+            accept = True
+    return draw[0:ndim]*spacing + lims[:,0]
+    
+def find_peaks2D(image, min_space=1, min_px=4, bg_thresh=None, min_amp=None, offset=[0,0]):
     """ Finds all peaks in a 2 dimensional image.  Peaks must be separated by
         at least min_space with magnitude above bg_thresh and at least min_px
         pixels lit in (2*min_space+1)**2 square.
@@ -1539,15 +2109,40 @@ def combine(images,method='median'):
         exit(0)
     return comb_image
     
-def correlation_coeff(x,y):
+def correlation_coeff(x,y,mode='pearson',high_moments=None):
     """ Calculates the sample Pearson correlation coefficient, as described
         on Wikipedia and similar references.
+        Can optionally include higher moments - put in as a list/array,
+        starts at [3,]
+        mode can be 'pearson' or 'spearman'
     """
     try:
         n = x.size
     except:
         print("x, y must be arrays with at least 2 data points")
-    num = n*np.sum(x*y) - np.sum(x)*np.sum(y)
-    denom = np.sqrt(n*np.sum(x*x)-(np.sum(x))**2) * np.sqrt(n*np.sum(y*y)-(np.sum(y)**2))
-    return num/denom
-    
+    if mode == 'pearson':
+        num = n*np.sum(x*y) - np.sum(x)*np.sum(y)
+        denom = np.sqrt(n*np.sum(x*x)-(np.sum(x))**2) * np.sqrt(n*np.sum(y*y)-(np.sum(y)**2))
+        if high_moments is not None:
+            mnx, mny = np.mean(x), np.mean(y)
+            sx = np.sqrt((1/(n-1))*np.sum((x-mnx)**2))
+            sy = np.sqrt((1/(n-1))*np.sum((y-mny)**2))
+            rhigh = len(high_moments)*[0]
+            for i in range(len(high_moments)):
+                ndim = high_moments[i] - 1
+                dim_arr = np.zeros((ndim))
+                for j in range(ndim):
+                    dim_arr[j] = (1/(n-1))*np.sum(((x-mnx)/sx)**(high_moments[i]-j-1)*((y-mny)/sy)**(j+1))
+                rhigh[i] = dim_arr
+                r2 = (1/(n-1))*np.sum(((x-mnx)/sx)*((y-mny)/sy))
+            return r2, rhigh
+        else:
+            return num/denom
+    elif mode == 'spearman':
+        xr = stats.rankdata(x)
+        yr = stats.rankdata(y)
+        return correlation_coeff(xr,yr,mode='pearson',high_moments=high_moments)
+    else:
+        print("Invalid mode.  Choose one of the following:\n  'pearson'\n  'spearman'")
+        exit(0)
+        

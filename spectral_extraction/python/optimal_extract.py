@@ -13,7 +13,7 @@ import time
 import numpy as np
 #from numpy import *
 import matplotlib.pyplot as plt
-#from matplotlib import cm
+from matplotlib import cm
 #import scipy
 #import scipy.stats as stats
 #import scipy.special as sp
@@ -30,27 +30,32 @@ import minerva_utils as m_utils
 t0 = time.time()
 
 ######## Import environmental variables #################
-#os.environ['MINERVA_DATA_DIR'] = "/uufs/chpc.utah.edu/common/home/bolton_data0/minerva/data"
-#os.environ['MINERVA_REDUX_DIR'] = "/uufs/chpc.utah.edu/common/home/bolton_data0/minerva/redux"
-#os.environ['MINERVA_SIM_DIR'] = "/uufs/chpc.utah.edu/common/home/bolton_data0/minerva/sim"
 
 try:
     data_dir = os.environ['MINERVA_DATA_DIR']
 except KeyError:
     print("Must set MINERVA_DATA_DIR")
     exit(0)
+#    data_dir = "/uufs/chpc.utah.edu/common/home/bolton_data0/minerva/data"
 
 try:
     redux_dir = os.environ['MINERVA_REDUX_DIR']
 except KeyError:
     print("Must set MINERVA_REDUX_DIR")
     exit(0)
+#    redux_dir = "/uufs/chpc.utah.edu/common/home/bolton_data0/minerva/redux"
     
 try:
     sim_dir = os.environ['MINERVA_SIM_DIR']
 except KeyError:
     print("Must set MINERVA_SIM_DIR")
     exit(0)
+#    sim_dir = "/uufs/chpc.utah.edu/common/home/bolton_data0/minerva/sim"
+    
+#try:
+#    tag_dir = os.environ['MINERVA_TAG_DIR']
+#except KeyError:
+    
     
 #########################################################
 ########### Allow input arguments #######################
@@ -89,12 +94,12 @@ fiber_space = args.fiber_space
 
 #hardcode in n20160115 directory
 filename = args.filename#os.path.join(data_dir,'n20160115',args.filename)
-software_vers = 'v0.4.1' #Later grab this from somewhere else
+software_vers = 'v0.5.0' #Later grab this from somewhere else
 
 gain = 1.3
 readnoise = 3.63
 
-ccd, spec_hdr = m_utils.open_minerva_fits(filename,return_hdr=True)
+ccd, overscan, spec_hdr = m_utils.open_minerva_fits(filename,return_hdr=True)
 actypix = ccd.shape[1]
 
 ### Next part checks if iodine cell is in, assumes keyword I2POSAS exists
@@ -109,18 +114,69 @@ except KeyError:
 #########################################################
 ########### Load Flat and Bias Frames ###################
 #########################################################   
-date = 'n20160115' #Fixed for now, later make this dynamic
-bias_hdu = pyfits.open(os.path.join(redux_dir,date,'bias_avg.fits'),uint=True)
-bias = bias_hdu[0].data
-sflat_hdu = pyfits.open(os.path.join(redux_dir,date,'slit_approx.fits'),uint=True)
-slit_coeffs = sflat_hdu[0].data
-#slit_coeffs = slit_coeffs[::-1,:] #Re-order, make sure this is right
-polyord = sflat_hdu[0].header['POLYORD'] #Order of polynomial for slit fitting
-
-### subtract bias (slit will be handled in loop)
+#date = 'n20160115' #Fixed for now, later make this dynamic
+date = os.path.split(os.path.split(filename)[0])[1]
+### Load Bias
+bias = m_utils.stack_calib(redux_dir, data_dir, date)
 bias = bias[:,0:actypix] #Remove overscan
+### Load Dark
+dark, dhdr = m_utils.stack_calib(redux_dir, data_dir, date, frame='dark')
+dark = dark[:,0:actypix]
+try:
+    dark *= spec_hdr['EXPTIME']/dhdr['EXPTIME'] ### Scales linearly with exposure time
+except:
+    ### if EXPTIMES are unavailable, can't reliably subtract dark, just turn it
+    ### into zeros
+    dark = np.zeros(ccd.shape)
+### Analyze overscan (essentially flat, very minimal correction)
+overscan_fit = m_utils.overscan_fit(overscan)
+
+#bias -= np.median(bias) ### give zero mean overall - readjust by overscan
+### Making up this method, so not sure if it's good, but if it works it should reduce ccd noise
+bias = m_utils.bias_fit(bias, overscan_fit)
+
+#sflat_hdu = pyfits.open(os.path.join(redux_dir,date,'slit_approx.fits'),uint=True)
+#slit_coeffs = sflat_hdu[0].data
+#slit_coeffs = slit_coeffs[::-1,:] #Re-order, make sure this is right
+#polyord = sflat_hdu[0].header['POLYORD'] #Order of polynomial for slit fitting
+
+### Make master slitFlats
+sflat = m_utils.stack_flat(redux_dir, data_dir, date)
+### If no slit flat, sflat returns all ones, don't do any flat fielding
+if np.max(sflat) - np.min(sflat) == 0:
+    norm_sflat = np.ones(ccd.shape)
+else:
+    norm_sflat = m_utils.make_norm_sflat(sflat, redux_dir, date)
+
+### Calibrate ccd
 ccd -= bias #Note, if ccd is 16bit array, this operation can cause problems
-ccd[ccd<0] = 0 #Enforce positivity
+ccd -= dark
+
+### Find new background level (now more than readnoise because of bias/dark)
+### use bstd instead of readnoise in optimal extraction
+if (np.max(norm_sflat) - np.min(norm_sflat)) == 0:
+    cut = int(10*readnoise)
+    junk, bstd = m_utils.remove_ccd_background(ccd,cut=cut)
+    rn_eff = bstd*gain
+else:
+    bgonly = ccd[norm_sflat==1]
+    cut = np.median(bgonly)
+    if cut < 15:
+        cut = 15 ### enforce minimum
+    junk, bstd = m_utils.remove_ccd_background(bgonly,cut=cut)
+    rn_eff = bstd*gain # effective/empirical readnoise (including effects of bias/dark subtraction)
+
+### Use this to find inverse variance:
+invar = 1/(abs(ccd) + bstd**2)
+
+### flatten ccd, and inverse variance
+ccd /= norm_sflat
+#invar *= norm_sflat**2
+
+### Apply gain (I think this is the right way given my empirical invar calc.)
+ccd *= gain
+#invar /= gain
+
 
 ######################################
 ### Find or load trace information ###
@@ -128,15 +184,15 @@ ccd[ccd<0] = 0 #Enforce positivity
 
 ### Dynamically search for most recent arc frames (unless a date is supplied)
 if args.date is None:
-    date = m_utils.find_most_recent_arc_date(data_dir)
+    arc_date = m_utils.find_most_recent_frame_date('arc', data_dir)
 else:
-    date = args.date
+    arc_date = args.date
 
 ### Assumes fiber flats are taken on same date as arcs
-fiber_flat_files = glob.glob(os.path.join(data_dir,'*'+date,'*[fF]iber*[fF]lat*'))
+fiber_flat_files = glob.glob(os.path.join(data_dir,'*'+arc_date,'*[fF]iber*[fF]lat*'))
 
-if os.path.isfile(os.path.join(sim_dir,'trace_{}.fits'.format(date))):
-    trace_fits = pyfits.open(os.path.join(sim_dir,'trace_{}.fits'.format(date)))
+if os.path.isfile(os.path.join(redux_dir,arc_date,'trace_{}.fits'.format(arc_date))):
+    trace_fits = pyfits.open(os.path.join(redux_dir,arc_date,'trace_{}.fits'.format(arc_date)))
     trace_coeffs = trace_fits[0].data
     trace_intense_coeffs = trace_fits[1].data
     trace_sig_coeffs = trace_fits[2].data
@@ -145,13 +201,21 @@ else:
     ### Combine four fiber flats into one image
     trace_ccd = np.zeros((np.shape(ccd)))
     for ts in ['T1','T2','T3','T4']:
-        flat = pyfits.open(os.path.join(redux_dir, date, 'combined_flat_{}.fits'.format(ts)))[0].data
+        flatfits = pyfits.open(os.path.join(redux_dir, arc_date, 'combined_flat_{}.fits'.format(ts)))
+        flat = flatfits[0].data
+        fhdr = flatfits[0].header
+        ### calibrate each flat...
+#        plt.imshow(flat)
+#        flat = m_utils.cal_fiberflat(flat, data_dir, redux_dir, arc_date)
         #Choose fiberflats with iodine cell in
-        norm = 1000 #Arbitrary norm to match flats
+        norm = 10000 #Arbitrary norm to match flats
         tmmx = np.median(np.sort(np.ravel(flat))[-100:])
         trace_ccd += flat[:,0:actypix].astype(float)*norm/tmmx
     ### Find traces and label for the rest of the code
+    trace_ccd -= bias
     print("Searching for Traces")
+#    plt.plot(trace_ccd[:,1000])
+#    plt.show()
     multi_coeffs = m_utils.find_trace_coeffs(trace_ccd,2,fiber_space,num_points=num_points,num_fibers=num_fibers,skip_peaks=1)
     trace_coeffs = multi_coeffs[0]
     trace_intense_coeffs = multi_coeffs[1]
@@ -166,16 +230,31 @@ else:
     hdulist.append(hdu2)
     hdulist.append(hdu3)
     hdulist.append(hdu4)
-    hdulist.writeto(os.path.join(sim_dir,'trace_{}.fits'.format(date)),clobber=True)
+    hdulist.writeto(os.path.join(redux_dir,arc_date,'trace_{}.fits'.format(arc_date)),clobber=True)
     
 
 ##############################
 #### Do optimal extraction ###
 ##############################
-spec, spec_invar, spec_mask, image_model = m_utils.extract_1D(ccd,trace_coeffs,i_coeffs=trace_intense_coeffs,s_coeffs=trace_sig_coeffs,p_coeffs=trace_pow_coeffs,readnoise=readnoise,gain=gain,return_model=True,verbose=True)
+spec, spec_invar, spec_mask, image_model = m_utils.extract_1D(ccd, invar, trace_coeffs,i_coeffs=trace_intense_coeffs,s_coeffs=trace_sig_coeffs,p_coeffs=trace_pow_coeffs,readnoise=bstd*gain,gain=gain,return_model=True,verbose=True)
 ### Evaluate fit
+invar = (1/(abs(ccd)*gain + (bstd*gain)**2))
+resid = (ccd-image_model)*invar
+chi2tot = np.sum((ccd-image_model)**2*invar)/(np.size(ccd-actypix*num_fibers*3))
 chi2total = np.sum((image_model[image_model != 0]-ccd[image_model != 0])**2*(1/(ccd[image_model != 0]+readnoise**2)))/(np.size(ccd[image_model != 0])-actypix*num_fibers*3)
 print("Reduced chi^2 of ccd vs. model is {}".format(chi2total))
+### Evaluate plots
+#plt.imshow(np.hstack((ccd,image_model,ccd-image_model)), interpolation='none', cmap=cm.hot)
+#plt.show()
+#plt.close()
+#resid = (ccd-image_model)*(1/(abs(ccd)*gain + (bstd*gain)**2))
+#plt.imshow(resid, interpolation='none', cmap=cm.hot)
+#plt.show()
+#plt.close()
+#plt.plot(resid[:,1000])
+#plt.show()
+#plt.close()
+#exit(0)
 
 ############################################################
 ######### Import wavelength calibration ####################        
@@ -184,7 +263,6 @@ print("Reduced chi^2 of ccd vs. model is {}".format(chi2total))
 i2coeffs = [3.48097e-4,2.11689] #shift in pixels due to iodine cell
 i2shift = np.poly1d(i2coeffs)(np.arange(actypix))
 
-arc_date = m_utils.find_most_recent_arc_date(data_dir)
 ypx_mod = 2*(np.arange(0,actypix)-i2shift*i2-actypix/2)/actypix #includes iodine shift (if i2 is in)
 wavelength_soln = np.zeros((args.telescopes,args.num_fibers,actypix))
 for j in range(4):
@@ -249,7 +327,7 @@ if not args.nosave:
     hdu4.header.comments['NAXIS2'] = 'Fiber axis (blue to red)'
     hdu4.header.comments['NAXIS3'] = 'Telescope axis (T1, T2, T3, T4)'
     ### Additional new header values
-    hdu1.header.append(('UNITS','Flux','Relative photon counts (no flat fielding)'))
+    hdu1.header.append(('UNITS','Counts','Relative photon counts (no flat fielding)'))
     hdu2.header.append(('UNITS','Inv. Var','Inverse variance'))
     hdu3.header.append(('UNITS','Wavelength','Wavelength solution lambda (Angstroms) vs px'))
     hdu4.header.append(('UNITS','Mask','True (1) or False (0) good data point'))
@@ -269,8 +347,8 @@ if not args.nosave:
     hdulist.writeto(os.path.join(redux_dir,savedate,savefile+'.proc.fits'),clobber=True)
 
 ### Now add Jason Eastman's custom headers for barycentric corrections  
-import utils as dop_utils
-dop_utils.addzb(os.path.join(redux_dir,savedate,savefile+'.proc.fits'),fau_dir=data_dir)
+#import utils as dop_utils
+#dop_utils.addzb(os.path.join(redux_dir,savedate,savefile+'.proc.fits'),fau_dir=data_dir)
 
 tf = time.time()
 print("Total extraction time = {}s".format(tf-t0))
