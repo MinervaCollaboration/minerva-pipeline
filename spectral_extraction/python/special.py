@@ -570,6 +570,44 @@ def cauchy3_irq(params, X, idx=0, lims=None, normalized=True):
         Nq = cauchy(qs_pr, 0, scq)
     return (Nr*Ni*Nq)
     
+def gen_gauss2d(params, X, idx=0, lims=None, rots=False, normalized=False):
+    if X.shape[0] != 2:
+        print "You're not giving this function the right input!"
+        exit(0)
+    if idx == 0:
+        idx = [0, 1, 0]
+    else:
+        try:
+            if len(idx) != 3:
+                raise TypeError
+        except:
+            print "idx must be a len=3 list"
+            exit(0)
+    x = X[0]
+    y = X[1]
+    if type(params) == np.ndarray:
+        xo = params[0]
+        yo = params[1]
+        sx = params[2]
+        sy = params[3]
+        th = params[4]
+    else:
+        idx1, idx2, idx3 = idx
+        xo = params['x{}'.format(idx1)].value
+        yo = params['x{}'.format(idx2)].value
+        sx = params['s{}'.format(idx1)].value
+        sy = params['s{}'.format(idx2)].value
+        th = params['th{}'.format(idx3)].value
+    if rots:
+        xpr = (x-xo)*np.cos(th) + (y-yo)*np.sin(th)
+        ypr = (y-yo)*np.cos(th) - (x-xo)*np.sin(th)
+        return np.exp(-(xpr**2/(2*sx**2) + ypr**2/(2*sy**2)))
+    else:
+        a = np.cos(th)**2/(2*sx**2) + np.sin(th)**2/(2*sy**2)
+        b = -np.sin(2*th)/(4*sx**2) + np.sin(2*th)/(4*sy**2)
+        c = np.sin(th)**2/(2*sx**2) + np.cos(th)**2/(2*sy**2)
+        return np.exp(-(a*(x-xo)**2-2*b*(x-xo)*(y-yo)+c*(y-yo)**2))
+    
 #######################################################################
 ######################### END OF PDFS #################################
 #######################################################################

@@ -75,15 +75,48 @@ def basic_spline(t,breakpoints,order=4):
 
 
 ### 1D case, nothing complex
-def spline_1D(xarr,yarr,invar,breakpoints,order=4):
+def spline_1D(xarr,yarr,breakpoints,invar=None,order=4, window=100, pad=20):
     """ Returns the spline fit to xarr, yarr with inverse variance invar for
         the specified breakpoint array (and optionally spline order)
         
         Assumes independent data points.
     """
-    B_spline_matrix = basic_spline(xarr,breakpoints,order=order)
-    coeffs, chi = sf.chi_fit(yarr,B_spline_matrix.T,np.diag(invar))
-    spline_interp = np.dot(B_spline_matrix.T,coeffs)[:,0]
+    spline_interp = np.zeros((len(yarr)))
+    ### Break up to increase speed for large matrices
+    if len(yarr) < window:
+        B_spline_matrix = basic_spline(xarr,breakpoints,order=order)
+        if invar is None:
+            coeffs = np.linalg.lstsq(B_spline_matrix.T, yarr)
+            coeffs = coeffs[0]
+        else:
+            coeffs, chi = sf.chi_fit(yarr,B_spline_matrix.T,np.diag(invar))
+        spline_interp = np.dot(B_spline_matrix.T,coeffs)#[:,0]
+    else:
+        if pad > 0.5*window:
+            print "Spline pad is too big for window"
+            exit(0)
+        st = 0
+        while st < len(yarr):
+            if st == 0:
+                end = window+pad
+            else:
+                end = min(st+window+2*pad,len(yarr))
+            xsub, ysub = xarr[st:end], yarr[st:end]
+            bkpts = breakpoints[(breakpoints >= np.min(xsub)) * (breakpoints <= np.max(xsub))]
+            B_spline_matrix = basic_spline(xsub,bkpts,order=order)
+            if invar is None:
+                coeffs = np.linalg.lstsq(B_spline_matrix.T, ysub)
+                coeffs = coeffs[0]
+            else:
+                invsub = invar[st:end]
+                coeffs, chi = sf.chi_fit(ysub,B_spline_matrix.T,np.diag(invsub))
+            if st == 0:
+                spline_interp[st:end-pad] = np.dot(B_spline_matrix.T,coeffs)[0:window]
+            elif end == len(yarr):
+                spline_interp[st+pad:end] = np.dot(B_spline_matrix.T,coeffs)[pad:]
+            else:
+                spline_interp[st+pad:end-pad] = np.dot(B_spline_matrix.T,coeffs)[pad:window+pad]
+            st += window-pad
     return spline_interp
 
 
@@ -225,6 +258,7 @@ def build_rarr_thetaarr(img_matrix,params,pts_per_px=1):
     hc = params['hc'].value
     vc = params['vc'].value
     q = params['q'].value
+    q = abs(q)
     PA = params['PA'].value
     hpix = np.shape(img_matrix)[1] #horizontal pixels
     vpix = np.shape(img_matrix)[0] #vertical pixels
@@ -341,59 +375,6 @@ def spline_2D_radial(img_matrix,invar_matrix,r_breakpoints,params,theta_orders=[
         else:
             spline_fit *= sscale
             return spline_fit
-        
-#def spline_2D_radial_eval(coeffs,scale,img_matrix,r_breakpoints,center,theta_orders=[0],order=4):
-#    """ Returns a spline "fit" for arbitrary coefficients.
-#        Used for evaluating coefficients from spline_2D_radial.
-#        INPUTS:
-#            coeffs - array of fitted coeffs (of same format as spline_2D)
-#            scale - float, scale value to match img_matrix
-#            img_matrix - original matrix, mostly used for matching dimensions
-#            r_breakpoints - radial breakpoints used in fitting
-#            center - [vc, hc], best guess of vertical and horizontal center
-#            theta_orders - list [0,...] allows fitting of multipole orders
-#            order - spline order (4 = cubic)
-#        OUTPUTS:
-#            spline_fit - fitted spline using coeffs
-#    """
-#    hpix = np.shape(img_matrix)[1] #horizontal pixels
-#    vpix = np.shape(img_matrix)[0] #vertical pixels
-#    dim1 = vpix*hpix
-#    h_matrix = np.tile(np.arange(hpix),(vpix,1))
-#    v_matrix = np.tile(np.arange(vpix),(hpix,1)).T+1
-#    r_matrix = np.sqrt((v_matrix-center[0])**2 + (h_matrix-center[1])**2)
-#    theta_matrix = np.arctan((h_matrix-center[1])/(v_matrix-center[1]))
-#    r_inds = np.argsort(np.ravel(r_matrix))
-#    r_arr = np.ravel(r_matrix)[r_inds]
-#    theta_arr = np.ravel(theta_matrix)[r_inds]
-#    ### Given h, v arrays and breakpoints, find splines along both directions
-#    r_splines = basic_spline(r_arr,r_breakpoints,order=order)
-#    r_sp_len = np.shape(r_splines)[0]
-#    dim2 = r_sp_len*len(theta_orders)
-#    ### Use the h and v splines to construct a 2D profile matrix for linear fitting
-#    profile_matrix = np.zeros((dim1,dim2))
-#    for i in range(dim2):
-#        spline_dim = np.mod(i,r_sp_len)
-#        theta_ind = int(np.floor(i/r_sp_len))
-#        theta_i = theta_orders[theta_ind]
-#        if theta_i == 0:
-#            profile_matrix[:,i] = r_splines[spline_dim]
-#        elif theta_i < 0:
-#            profile_matrix[:,i] = r_splines[spline_dim,:]*np.sin(-theta_i*theta_arr)
-#        else:
-#            profile_matrix[:,i] = r_splines[spline_dim,:]*np.cos(theta_i*theta_arr)
-#
-#    #Evaluate spline fit and reshape back to 2D array
-#    spline_fit = np.dot(profile_matrix,coeffs)
-#    resort_inds = np.argsort(r_inds)
-#    spline_fit = np.reshape(spline_fit[resort_inds],(vpix,hpix))
-#    spline_fit *= scale
-#    res = img_matrix - spline_fit
-#    vis = np.hstack((img_matrix,spline_fit,res))
-#    plt.imshow(vis,interpolation='none')
-#    plt.show()
-#    plt.close()
-#    return spline_fit
 
 def spline_residuals(params,data,invar,breakpoints,theta_orders=[0]):
     """ Function for fitting elliptical spline profile.  Returns residuals.
@@ -515,8 +496,8 @@ def make_spline_model(params,coeff_matrix,center,hpoint,img_shape,r_breakpoints,
     PA = params['PA0'].value + params['PA1'].value*hpoint + params['PA2'].value*hpoint**2
     new_params.add('q', value = q)
     new_params.add('PA', value = PA)
-    new_params.add('hc', value = center[0])
-    new_params.add('vc', value = center[1])
+    new_params.add('hc', value = center[0]+img_shape[0]/2)
+    new_params.add('vc', value = center[1]+img_shape[0]/2)
     spline_coeffs = np.dot(coeff_matrix,np.array(([1,hpoint,hpoint**2])))
     ### Need dummy matrices for shape
     img_matrix = np.ones((img_shape))
