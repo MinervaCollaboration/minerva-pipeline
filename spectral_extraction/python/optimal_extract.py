@@ -71,7 +71,8 @@ parser.add_argument("-bs","--bundle_space",help="Minimum spacing (in pixels) bet
 parser.add_argument("-fs","--fiber_space",help="Minimum spacing (in pixels) between fibers within a bundle",
                     type=int,default=13)
 parser.add_argument("-ts","--telescopes",help="Number of telescopes feeding spectrograph",
-                    type=int,default=4) 
+                    type=int,default=4)
+parser.add_argument("-p","--profile",help="Cross-dispersion profile to use for optimal extraction", type=str,default='gaussian') 
 parser.add_argument("-np","--num_points",help="Number of trace points to fit on each fiber",
                     type=int,default=20)
 parser.add_argument("-ns","--nosave",help="Don't save results",
@@ -118,10 +119,10 @@ except KeyError:
 date = os.path.split(os.path.split(filename)[0])[1]
 ### Load Bias
 bias = m_utils.stack_calib(redux_dir, data_dir, date)
-bias = bias[:,0:actypix] #Remove overscan
+bias = bias[::-1,0:actypix] #Remove overscan
 ### Load Dark
 dark, dhdr = m_utils.stack_calib(redux_dir, data_dir, date, frame='dark')
-dark = dark[:,0:actypix]
+dark = dark[::-1,0:actypix]
 try:
     dark *= spec_hdr['EXPTIME']/dhdr['EXPTIME'] ### Scales linearly with exposure time
 except:
@@ -146,7 +147,7 @@ sflat = m_utils.stack_flat(redux_dir, data_dir, date)
 if np.max(sflat) - np.min(sflat) == 0:
     norm_sflat = np.ones(ccd.shape)
 else:
-    norm_sflat = m_utils.make_norm_sflat(sflat, redux_dir, date)
+    norm_sflat = m_utils.make_norm_sflat(sflat, redux_dir, date, spline_smooth=True, plot_results=False)
 
 ### Calibrate ccd
 ccd -= bias #Note, if ccd is 16bit array, this operation can cause problems
@@ -154,7 +155,7 @@ ccd -= dark
 
 ### Find new background level (now more than readnoise because of bias/dark)
 ### use bstd instead of readnoise in optimal extraction
-if (np.max(norm_sflat) - np.min(norm_sflat)) == 0:
+if (np.max(norm_sflat) == np.min(norm_sflat)):
     cut = int(10*readnoise)
     junk, bstd = m_utils.remove_ccd_background(ccd,cut=cut)
     rn_eff = bstd*gain
@@ -167,11 +168,11 @@ else:
     rn_eff = bstd*gain # effective/empirical readnoise (including effects of bias/dark subtraction)
 
 ### Use this to find inverse variance:
-invar = 1/(abs(ccd) + bstd**2)
+#invar = 1/(abs(ccd) + bstd**2)
 
 ### flatten ccd, and inverse variance
 ccd /= norm_sflat
-#invar *= norm_sflat**2
+#invar /= norm_sflat**2
 
 ### Apply gain (I think this is the right way given my empirical invar calc.)
 ccd *= gain
@@ -188,17 +189,24 @@ if args.date is None:
 else:
     arc_date = args.date
 
+
 ### Assumes fiber flats are taken on same date as arcs
 fiber_flat_files = glob.glob(os.path.join(data_dir,'*'+arc_date,'*[fF]iber*[fF]lat*'))
 
 if os.path.isfile(os.path.join(redux_dir,arc_date,'trace_{}.fits'.format(arc_date))):
     trace_fits = pyfits.open(os.path.join(redux_dir,arc_date,'trace_{}.fits'.format(arc_date)))
-    trace_coeffs = trace_fits[0].data
-    trace_intense_coeffs = trace_fits[1].data
-    trace_sig_coeffs = trace_fits[2].data
-    trace_pow_coeffs = trace_fits[3].data
+    hdr = trace_fits[0].header
+    profile = hdr['PROFILE']
+    multi_coeffs = trace_fits[0].data
 else:
     ### Combine four fiber flats into one image
+    profile = args.profile
+    if profile == 'moffat' or profile == 'gaussian':
+        pass
+    else:
+        print("Invalid profile choice ({})".format(profile))
+        print("Available choices are:\n  moffat\n  gaussian")
+        exit(0)
     trace_ccd = np.zeros((np.shape(ccd)))
     for ts in ['T1','T2','T3','T4']:
         flatfits = pyfits.open(os.path.join(redux_dir, arc_date, 'combined_flat_{}.fits'.format(ts)))
@@ -216,27 +224,31 @@ else:
     print("Searching for Traces")
 #    plt.plot(trace_ccd[:,1000])
 #    plt.show()
-    multi_coeffs = m_utils.find_trace_coeffs(trace_ccd,2,fiber_space,num_points=num_points,num_fibers=num_fibers,skip_peaks=1)
-    trace_coeffs = multi_coeffs[0]
-    trace_intense_coeffs = multi_coeffs[1]
-    trace_sig_coeffs = multi_coeffs[2]
-    trace_pow_coeffs = multi_coeffs[3]
-    ### Save for future use
-    hdu1 = pyfits.PrimaryHDU(trace_coeffs)
-    hdu2 = pyfits.PrimaryHDU(trace_intense_coeffs)
-    hdu3 = pyfits.PrimaryHDU(trace_sig_coeffs)
-    hdu4 = pyfits.PrimaryHDU(trace_pow_coeffs)
+    multi_coeffs = m_utils.find_trace_coeffs(trace_ccd,2,fiber_space,num_points=num_points,num_fibers=num_fibers,skip_peaks=1, profile=profile)
+#    trace_coeffs = multi_coeffs[0]
+#    trace_intense_coeffs = multi_coeffs[1]
+#    trace_sig_coeffs = multi_coeffs[2]
+#    trace_pow_coeffs = multi_coeffs[3]
+#    ### Save for future use
+#    hdu1 = pyfits.PrimaryHDU(trace_coeffs)
+#    hdu2 = pyfits.PrimaryHDU(trace_intense_coeffs)
+#    hdu3 = pyfits.PrimaryHDU(trace_sig_coeffs)
+#    hdu4 = pyfits.PrimaryHDU(trace_pow_coeffs)
+#    hdulist = pyfits.HDUList([hdu1])
+#    hdulist.append(hdu2)
+#    hdulist.append(hdu3)
+#    hdulist.append(hdu4)
+    hdu1 = pyfits.PrimaryHDU(multi_coeffs)
     hdulist = pyfits.HDUList([hdu1])
-    hdulist.append(hdu2)
-    hdulist.append(hdu3)
-    hdulist.append(hdu4)
+    hdu1.header.append(('PROFILE',profile,'Cross-dispersion profile used for trace fitting'))
     hdulist.writeto(os.path.join(redux_dir,arc_date,'trace_{}.fits'.format(arc_date)),clobber=True)
     
 
 ##############################
 #### Do optimal extraction ###
 ##############################
-spec, spec_invar, spec_mask, image_model = m_utils.extract_1D(ccd, invar, trace_coeffs,i_coeffs=trace_intense_coeffs,s_coeffs=trace_sig_coeffs,p_coeffs=trace_pow_coeffs,readnoise=bstd*gain,gain=gain,return_model=True,verbose=True)
+#spec, spec_invar, spec_mask, image_model = m_utils.extract_1D(ccd, norm_sflat, trace_coeffs,i_coeffs=trace_intense_coeffs,s_coeffs=trace_sig_coeffs,p_coeffs=trace_pow_coeffs,readnoise=bstd*gain,gain=gain,return_model=True,verbose=True)
+spec, spec_invar, spec_mask, image_model = m_utils.extract_1D(ccd, norm_sflat, multi_coeffs, profile, readnoise=bstd*gain, gain=gain, return_model=True, verbose=True)
 ### Evaluate fit
 invar = (1/(abs(ccd)*gain + (bstd*gain)**2))
 resid = (ccd-image_model)*invar
@@ -247,7 +259,7 @@ print("Reduced chi^2 of ccd vs. model is {}".format(chi2total))
 #plt.imshow(np.hstack((ccd,image_model,ccd-image_model)), interpolation='none', cmap=cm.hot)
 #plt.show()
 #plt.close()
-#resid = (ccd-image_model)*(1/(abs(ccd)*gain + (bstd*gain)**2))
+#resid = (ccd-image_model)*(1/(abs(ccd) + (bstd*gain)**2))
 #plt.imshow(resid, interpolation='none', cmap=cm.hot)
 #plt.show()
 #plt.close()

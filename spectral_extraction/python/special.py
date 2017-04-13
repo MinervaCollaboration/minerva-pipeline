@@ -617,6 +617,27 @@ def gen_gauss2d(params, X, idx=0, lims=None, rots=False, normalized=False):
 ################# Special (mostly astro) functions ####################
 #######################################################################
     
+def moffat_lmfit(params, xarr):
+    alpha = params['alpha'].value
+    beta = params['beta'].value
+    try:
+        xc = params['xc'].value
+    except:
+        xc = 0
+    try:
+        bg = params['bg'].value
+    except:
+        bg = 0
+    try:
+        hght = params['hght'].value
+    except:
+        hght = np.sqrt((beta-1)/(np.pi*alpha**2))
+    try:
+        power = params['power'].value
+    except:
+        power = 2
+    return hght*(1+abs(xarr-xc)**power/alpha**2)**(-beta) + bg
+    
 def schechter_fct(L,L_star,Phi_star,alpha):
     """ To match eqn. 1 of Guo, 2015 (CANDELS)
     """
@@ -865,19 +886,22 @@ def best_linear_gauss(axis,sig,mn,data,invar,power=2):
 #    time.sleep(2)
     return coeffs[0], coeffs[1]
 
-def best_mean(axis,sig,mn,hght,bg,data,invar,spread,power=2):
+def best_mean(axis,sig,mn,hght,bg,data,invar,spread,power=2,beta=2,profile='gaussian'):
     """ Finds the mean that minimizes squared sum of weighted residuals
         for a given sigma and height (guassian profile)
         Uses a grid-search, then fits around minimum chi^2 regionS
     """
-    def mn_find(axis,mn,spread):
+    def mn_find(axis,mn,spread, params=None, profile='gaussian'):
         """ Call with varying sig ranges for coarse vs. fine.
         """
         mn_rng = np.linspace(mn-spread,mn+spread,10)
         chis = np.zeros(len(mn_rng))
         ### Find chi^2 at a range of means aroung the best guess
-        for i in range(len(mn_rng)):        
-            gguess = gaussian(axis,sig,mn_rng[i],hght,bg,power=power)
+        for i in range(len(mn_rng)):
+            if profile == 'gaussian':
+                gguess = gaussian(axis,sig,mn_rng[i],hght,bg,power=power)
+            elif profile == 'moffat':
+                gguess = moffat_lmfit(params, axis)
             chis[i] = sum((data-gguess)**2*invar)
         ### Now take a subset of 5 points around the lowest chi^2 for fitting
         chi_min_inds =np.arange(-2,3)+np.argmin(chis)
@@ -899,14 +923,31 @@ def best_mean(axis,sig,mn,hght,bg,data,invar,spread,power=2):
             best_mn_std = abs(mn_p-mn_m)/2
             return best_mn, best_mn_std
         
-    ###Coarse find
-    ###Tradeoff with coarse sig - too small and initial guess is critical,
-    ### too big and more susceptible to comsic ray influence
-    best_mn, best_mn_std = mn_find(axis,mn,spread)
-    ###Fine find
-    best_mn, best_mn_std = mn_find(axis,best_mn,best_mn_std)
-    ###Finer find - doesn't seem to change final answer at all
-#    best_mn, best_mn_std = mn_find(axis,best_mn,best_mn_std/100)
+    if profile == 'gaussian':
+        ###Coarse find
+        ###Tradeoff with coarse sig - too small and initial guess is critical,
+        ### too big and more susceptible to comsic ray influence
+        best_mn, best_mn_std = mn_find(axis,mn,spread)
+        ###Fine find
+        best_mn, best_mn_std = mn_find(axis,best_mn,best_mn_std)
+        ###Finer find - doesn't seem to change final answer at all
+    #    best_mn, best_mn_std = mn_find(axis,best_mn,best_mn_std/100)
+    elif profile == 'moffat':
+        params0 = lmfit.Parameters()
+        params0.add('xc', value = mn)
+        params0.add('alpha', value = sig)
+        params0.add('beta', value = beta)
+        params0.add('bg', value = bg)
+        params0.add('power', value = power)
+        params0.add('hght', value = hght)
+        ###Coarse find
+        ###Tradeoff with coarse sig - too small and initial guess is critical,
+        ### too big and more susceptible to comsic ray influence
+        best_mn, best_mn_std = mn_find(axis,mn,spread,params=params0,profile=profile)
+        ###Fine find
+        best_mn, best_mn_std = mn_find(axis,best_mn,best_mn_std,params=params0,profile=profile)
+        ###Finer find - doesn't seem to change final answer at all
+    #    best_mn, best_mn_std = mn_find(axis,best_mn,best_mn_std/100)
     return best_mn, best_mn_std
     
 def fit_mn_hght_bg(xvals,zorig,invorig,sigj,mn_new,spread,powj=2):
