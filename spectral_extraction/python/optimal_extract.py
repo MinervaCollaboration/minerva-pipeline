@@ -114,7 +114,7 @@ except KeyError:
 
 #########################################################
 ########### Load Flat and Bias Frames ###################
-#########################################################   
+#########################################################
 #date = 'n20160115' #Fixed for now, later make this dynamic
 date = os.path.split(os.path.split(filename)[0])[1]
 ### Load Bias
@@ -194,6 +194,7 @@ else:
 fiber_flat_files = glob.glob(os.path.join(data_dir,'*'+arc_date,'*[fF]iber*[fF]lat*'))
 
 if os.path.isfile(os.path.join(redux_dir,arc_date,'trace_{}.fits'.format(arc_date))):
+    print "Loading Trace Frames" 
     trace_fits = pyfits.open(os.path.join(redux_dir,arc_date,'trace_{}.fits'.format(arc_date)))
     hdr = trace_fits[0].header
     profile = hdr['PROFILE']

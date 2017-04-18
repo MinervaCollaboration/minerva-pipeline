@@ -33,7 +33,7 @@ def open_minerva_fits(fits, ext=0, return_hdr=False):
     """ Converts from kiwispec format (raveled array of 2 8bit images) to
         analysis format (2D array of 16bit int, converted to float)
     """
-    spectrum = pyfits.open(fits,uint=True)
+    spectrum = pyfits.open(fits,uint=True, ignore_missing_end=True)
     hdr = spectrum[ext].header
     ccd = spectrum[ext].data
     #Dimensions
@@ -458,9 +458,11 @@ def remove_ccd_background(ccd,cut=None,plot=False):
         cut = 3*np.median(ccd)
     ccd_mask = (ccd < cut)*(ccd > -cut)
     masked_ccd = ccd[ccd_mask]
-    arr = plt.hist(masked_ccd,2*(cut-1))
-    hgt = arr[0]
-    xvl = arr[1][:-1]
+#    arr = plt.hist(masked_ccd,2*(cut-1))
+#    hgt = arr[0]
+#    xvl = arr[1][:-1]
+    hgt, xvls = np.histogram(masked_ccd,2*(cut-1))
+    xvl = xvls[:-1]
     ### Assume lower tail is a better indicator than upper tail
     xmsk = (xvl < np.median(masked_ccd))
     hgts = hgt[xmsk]
@@ -470,11 +472,12 @@ def remove_ccd_background(ccd,cut=None,plot=False):
     sigma = 1/np.sqrt(abs(hgts)+1)
     params, errarr = opt.curve_fit(sf.gaussian,xvls,hgts,p0=pguess,sigma=sigma)
     if plot:
+        plt.hist(masked_ccd,2*(cut-1))
         plt.title("Number of pixels with certain count value")
         htst = sf.gaussian(xvl, params[0], center=params[1], height=params[2],bg_mean=0,bg_slope=0,power=2)
         plt.plot(xvl,htst)
         plt.show()
-    plt.close()
+        plt.close()
     ccd_new = ccd - params[1] # mean
     bg_std = params[0]
     return ccd_new, bg_std
@@ -906,7 +909,7 @@ def extract_1D(ccd, norm_sflat, multi_coeffs, form, readnoise=1, gain=1, return_
 #            print(" ")
     if verbose:
 #        chi2red = np.median(chi2red_array[i])
-        print("Average reduced chi^2 = {}".format(np.nanmedian(chi2red_array)))
+        print("Median reduced chi^2 = {}".format(np.nanmedian(chi2red_array)))
     if return_model:
         return spec, spec_invar, spec_mask, image_model
     else:
