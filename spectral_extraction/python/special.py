@@ -64,8 +64,8 @@ def gaussian_lmfit(params, x, idx=0):
         mn = params[0]
         sigma = params[1]
     else:
-        mn = params['mn{}'.format(idx)].value
-        sigma = params['sig{}'.format(idx)].value
+        mn = params['c{}'.format(idx)].value
+        sigma = params['s{}'.format(idx)].value
     return (1/(np.sqrt(2*np.pi*sigma**2)))*np.exp(-((x-mn)**2)/(2*sigma**2))
     
 def gaussian_lmfit_trunc(params, x, idx=0):
@@ -75,8 +75,8 @@ def gaussian_lmfit_trunc(params, x, idx=0):
         mn = params[0]
         sigma = params[1]
     else:
-        mn = params['mn{}'.format(idx)].value
-        sigma = params['sig{}'.format(idx)].value
+        mn = params['c{}'.format(idx)].value
+        sigma = params['s{}'.format(idx)].value
     return trunc_gaussian(x, sigma, xc=mn, low=np.min(x), high = np.max(x)) 
     
 def gaussian_2d_lmfit(params, x, y, idx=0):
@@ -215,7 +215,18 @@ def cauchy_lmfit_trunc(params, x, idx=0):
     else:
         xc = params['c{}'.format(idx)].value
         a = params['s{}'.format(idx)].value
-    return cauchy(x, xc, a, lims=[np.min(x), np.max(x)])
+    ### Hack to fit Qgal in wider range
+    if idx == 999:
+        xl = 0.1
+    else:
+        xl = np.min(x)
+#    xarr = np.linspace(0.1, 0.9, 100)
+#    cf = cauchy(xarr, xc, a, lims=[xl, np.max(x)])
+#    plt.hist(x.T, bins=9, normed=True)
+#    plt.plot(xarr,cf,'k',linewidth=2)
+#    plt.show()
+#    plt.close()
+    return cauchy(x, xc, a, lims=[xl, np.max(x)])
     
 def cauchy_2d(x,y,xc,yc,a1,a2,gam,low=0,high=np.inf):
     """ Not normalized...
@@ -294,7 +305,7 @@ def multi_mod_cauchy(params,X,low=0,high=np.inf):
     pdf = 1/denom
     ### simple, less accurate integral
     pdf /= np.sum(pdf)
-    return pdf
+    return pdf 
     
 def cauchy_int(xc, a, low, high, low0=0, high0=np.inf):
     """ Integral of inv_xsq_power of given parameters (and limits)
@@ -333,10 +344,12 @@ def weibull_lmfit(params, x, idx=0):
         k = params[0]
         lam = params[1]
     else:
-        print "using lmfit!"
-        exit(0)
-        k = params['k{}'.format(idx)].value
-        lam = params['lam{}'.format(idx)].value
+        k = params['s{}'.format(idx)].value
+        lam = params['c{}'.format(idx)].value
+#        print "using lmfit for sf.weibull!"
+#        exit(0)
+#        k = params['k{}'.format(idx)].value
+#        lam = params['lam{}'.format(idx)].value
     return weibull(x, k, lam)
     
 def weibull_residual(params,x,y,inv):
@@ -570,9 +583,15 @@ def cauchy3_irq(params, X, idx=0, lims=None, normalized=True):
         Nq = cauchy(qs_pr, 0, scq)
     return (Nr*Ni*Nq)
     
-def gen_gauss2d(params, X, idx=0, lims=None, rots=False, normalized=False):
+def gen_central2d(params, X, idx=0, lims=None, rots=False, normalized=False, dists=['gaussian','cauchy']):#dists=['gaussian', 'gaussian']):
+    """ For any central 2d profile, where both params have a center and scale
+        Fits for a rotation, centers and scales.
+        Each param can have a different distribution.
+        Choices are gaussian and cauchy (might add voigt - convolution of
+        the two, but needs one extra parameter)
+    """
     if X.shape[0] != 2:
-        print "You're not giving this function the right input!"
+        print "You're not giving gen_central2d the right input!"
         exit(0)
     if idx == 0:
         idx = [0, 1, 0]
@@ -586,11 +605,18 @@ def gen_gauss2d(params, X, idx=0, lims=None, rots=False, normalized=False):
     x = X[0]
     y = X[1]
     if type(params) == np.ndarray:
-        xo = params[0]
-        yo = params[1]
-        sx = params[2]
-        sy = params[3]
-        th = params[4]
+        if len(params) == 5:
+            xo = params[0]
+            yo = params[1]
+            sx = params[2]
+            sy = params[3]
+            th = params[4]
+        elif len(params) == 2:
+            xo = 0
+            yo = 0
+            sx = params[0]
+            sy = params[1]
+            th = 0
     else:
         idx1, idx2, idx3 = idx
         xo = params['x{}'.format(idx1)].value
@@ -598,16 +624,112 @@ def gen_gauss2d(params, X, idx=0, lims=None, rots=False, normalized=False):
         sx = params['s{}'.format(idx1)].value
         sy = params['s{}'.format(idx2)].value
         th = params['th{}'.format(idx3)].value
-    if rots:
-        xpr = (x-xo)*np.cos(th) + (y-yo)*np.sin(th)
-        ypr = (y-yo)*np.cos(th) - (x-xo)*np.sin(th)
-        return np.exp(-(xpr**2/(2*sx**2) + ypr**2/(2*sy**2)))
+#    if rots:
+    ## boolean to rotate around centers (gaussian, cauchy) or 0 (weibull)
+    if len(dists) == 1 and dists[0] == 'lorentz':
+        return lorentz(X[0], X[1], params)
     else:
-        a = np.cos(th)**2/(2*sx**2) + np.sin(th)**2/(2*sy**2)
-        b = -np.sin(2*th)/(4*sx**2) + np.sin(2*th)/(4*sy**2)
-        c = np.sin(th)**2/(2*sx**2) + np.cos(th)**2/(2*sy**2)
-        return np.exp(-(a*(x-xo)**2-2*b*(x-xo)*(y-yo)+c*(y-yo)**2))
-    
+        xc, yc, q, PA, sig = params ### assumes this form
+        cts = [dists[0] != 'weibull', dists[1] != 'weibull']
+        xpr = (x-xo*cts[0])*np.cos(th) + (y-yo*cts[1])*np.sin(th)
+        ypr = (y-yo*cts[1])*np.cos(th) - (x-xo*cts[0])*np.sin(th)
+        if dists[0] == 'gaussian':
+            xdist = np.exp(-(xpr**2/(2*sx**2)))
+        elif dists[0] == 'cauchy':
+            xdist = 1/(1+(xpr/sx)**2)
+        elif dists[0] == 'weibull':
+            if np.min(xpr) < 0:
+                print "Weibull distribution only good for positive inputs!"
+                exit(0)
+            if xo == 0:
+                xo = 1
+            ### set k = sx, lamda = xo
+            xdist = (sx/xo)*(xpr/xo)**(sx-1)*np.exp(-(xpr/xo)**(sx))
+        if dists[1] == 'gaussian':
+            ydist = np.exp(-(ypr**2/(2*sy**2)))
+        elif dists[1] == 'cauchy':
+            ydist = 1/(1+(ypr/sy)**2)
+        elif dists[1] == 'weibull':
+            if np.min(ypr) < 0:
+                print "Weibull distribution only good for positive inputs!"
+                exit(0)
+            if yo == 0:
+                yo = 1
+            ### set k = sx, lamda = xo
+            ydist = (sy/yo)*(ypr/yo)**(sy-1)*np.exp(-(ypr/yo)**(sy))
+        return xdist*ydist
+#    return np.exp(-(xpr**2/(2*sx**2) + ypr**2/(2*sy**2)))
+#    else:
+#        a = np.cos(th)**2/(2*sx**2) + np.sin(th)**2/(2*sy**2)
+#        b = -np.sin(2*th)/(4*sx**2) + np.sin(2*th)/(4*sy**2)
+#        c = np.sin(th)**2/(2*sx**2) + np.cos(th)**2/(2*sy**2)
+#        return np.exp(-(a*(x-xo)**2-2*b*(x-xo)*(y-yo)+c*(y-yo)**2))
+
+def gen_central3d(params, X, idx=0, lims=None, normalized=False, dists=['cauchy','gaussian','gaussian']):    
+    if X.shape[0] != 3:
+        print "You're not giving this function the right input!"
+        exit(0)
+    re0 = X[0]
+    ie0 = X[1]
+    q0 = X[2]
+    if type(params) == np.ndarray:
+        mnr = params[0]
+        mni = params[1]
+        mnq = params[2]
+        scr = params[3]
+        sci = params[4]
+        scq = params[5]
+        th1 = params[6]
+        th2 = params[7]
+        th3 = params[8]
+    else:
+        mnr = params['mnr'].value
+        mni = params['mni'].value
+        mnq = params['mnq'].value
+        scr = params['scr'].value
+        sci = params['sci'].value
+        scq = params['scq'].value
+        th1 = params['th1'].value
+        th2 = params['th2'].value
+        th3 = params['th3'].value
+        #gam = params['gam'].value
+    ### Zero-mean everything
+    re = re0 - mnr
+    ie = ie0 - mni
+    qs = q0 - mnq
+    ### Three rotations    
+    re_pr = re*np.cos(th2)*np.cos(th3) + ie*(np.cos(th3)*np.sin(th1)*np.sin(th2) - np.cos(th1)*np.sin(th3)) + qs*(np.cos(th3)*np.cos(th1)*np.sin(th2) + np.sin(th3)*np.sin(th1))
+    ie_pr = re*np.sin(th3)*np.cos(th2) + ie*(np.cos(th1)*np.cos(th3) + np.sin(th1)*np.sin(th2)*np.sin(th3)) + qs*(np.cos(th1)*np.sin(th2)*np.sin(th3)-np.cos(th3)*np.sin(th1))
+    qs_pr = -re*np.sin(th2) + ie*np.cos(th2)*np.sin(th1) + qs*np.cos(th1)*np.cos(th2)
+    if lims is None:
+        limsr = [np.min(re_pr), np.max(re_pr)]
+        limsi = [np.min(ie_pr), np.max(ie_pr)]
+        limsq = [np.min(qs_pr), np.max(qs_pr)]
+    else:
+        limsr = lims[0]
+        limsi = lims[1]
+        limsq = lims[2]
+    if normalized:
+        print "Haven't programmed for this yet"
+        exit(0)
+#        Nr = trunc_gaussian(re_pr, scr, xc=0, low=limsr[0], high=limsr[1])
+        Nr = cauchy(re_pr, 0, scr, lims=limsr)
+        Ni = cauchy(ie_pr, 0, sci, lims=limsi)
+        Nq = cauchy(qs_pr, 0, scq, lims=limsq)
+    else:
+        if dists[0] == 'gaussian':
+            Nr = gaussian(re_pr, scr)
+        elif dists[0] == 'cauchy':
+            Nr = cauchy(re_pr, 0, scr)
+        if dists[1] == 'gaussian':
+            Ni = gaussian(ie_pr, sci)
+        elif dists[1] == 'cauchy':
+            Ni = cauchy(ie_pr, 0, sci)
+        if dists[2] == 'gaussian':
+            Nq = gaussian(qs_pr, scq)
+        elif dists[2] == 'cauchy':
+            Nq = cauchy(qs_pr, 0, scq)  
+    return (Nr*Ni*Nq)
 #######################################################################
 ######################### END OF PDFS #################################
 #######################################################################
@@ -805,6 +927,8 @@ def chi_fit(d,P,N,return_errors=False):
     Pm = np.matrix(P)
     Pmt = np.transpose(P)
     dm = np.transpose(np.matrix(d))
+    if min(N.shape) == 1 or N.ndim == 1:
+        N = np.diag(N)
     Nm = np.matrix(N)
     PtNP = Pmt*Nm*Pm
     try:
@@ -819,6 +943,7 @@ def chi_fit(d,P,N,return_errors=False):
         err_matrix = PtNPinv*PtN
         c = err_matrix*dm
         chi_min = np.transpose(dm - Pm*c)*Nm*(dm - Pm*c)
+        chi_min = np.asarray(chi_min)[0]
         c = np.asarray(c)[:,0]
         #chi_min2 = np.transpose(dm)*Nm*dm - np.transpose(c)*(np.transpose(Pm)*Nm*Pm)*c
         if return_errors:
@@ -1138,7 +1263,7 @@ def hermite(order,axis,sigma,center=0):
         return term1*term2
         
     try:
-        hsum = zeros(len(axis))
+        hsum = np.zeros(axis.shape)
     except TypeError:
         hsum = 0
             
@@ -1165,6 +1290,133 @@ def gauss_herm1d(axis,sigma,center=0,hg=1,h0=0,h3=0,h4=0):
     gh1d = gaussian(axis,sigma,center)*(hg+h0*hermite(0,axis,sigma,center)+h3*hermite(3,axis,sigma,center)+
                     h4*hermite(4,axis,sigma,center))
     return gh1d
+    
+def gauss_herm2d(xarr, yarr, params, weights, mx_ord=4, skip_ords=[(0,1),(1,0),(0,2),(2,0)], ord2diff=True, return_profile=False, empirical_norm=True):
+    """ 2D gauss-hermite polynomials using lmfit.Parameters() object or array
+        Maximum hermite order can be adjusted (m+n <= mx_ord)
+        Also allow order to be skipped - by default skip corrections to center, std
+        Can include std x/y asymmetry with ord2diff=True
+    """
+    if type(params) == np.ndarray:
+        ### Order must match below
+        xc, yc = params[0], params[1]
+        sig = params[2]
+        try:
+            power = params[3]
+        except:
+            power = 2
+    elif type(params) == lmfit.parameter.Parameters:
+        ### Naming must match below
+        xc, yc = params['xc'].value, params['yc'].value
+        sig = params['sig'].value
+        try:
+            power = params['power'].value
+        except:
+            power = 2
+    else:
+        print "Invalid parameter input format to 'gauss_herm2d'"
+        print "Must be numpy array or lmfit.Parameters() object"
+        exit(0)
+    xgrid, ygrid = np.meshgrid(xarr-xc, yarr-yc)
+    num_ords = int(0.5*(mx_ord+1)*(mx_ord+2) - len(skip_ords) + ord2diff)
+    gh_matrix = np.zeros((num_ords,)+xgrid.shape)
+    ord_idx = 0
+    G = np.exp(-0.5*(abs(xgrid)**power + abs(ygrid)**power)/sig**power)
+    if empirical_norm:
+        norm = np.sum(G)*np.ediff1d(xarr)[0]*np.ediff1d(yarr)[0]
+    else:
+        norm = (2*np.pi*sig**2)
+#    if power != 2:
+#        norm = 1/((2/power)**2*(sig)**(1/power)*(2*np.pi)**(2/power))
+#    print norm
+    G /= norm
+    for m in range(mx_ord+1):
+        for n in range(mx_ord+1):
+            if m+n > mx_ord:
+                continue
+            if (m,n) in skip_ords:
+                continue
+            Hx = hermite(m,xgrid,sig)
+            Hy = hermite(n,ygrid,sig)
+            gh_matrix[ord_idx] = Hx*Hy*G
+            ord_idx += 1
+    if ord2diff and (0,2) in skip_ords and (2,0) in skip_ords:
+        ### Move (2,0) and (0,2) difference to 2nd position
+        gh_matrix[2:] = gh_matrix[1:-1]
+        Hx20 = hermite(2,xgrid,sig)
+        Hx02 = hermite(0,xgrid,sig)
+        Hy20 = hermite(0,ygrid,sig)
+        Hy02 = hermite(2,ygrid,sig)
+        gh20 = (Hx20*Hy20-Hx02*Hy02)*G
+        gh_matrix[1] = gh20
+    if return_profile:
+        profile = np.zeros((xgrid.size, num_ords))
+        for i in range(num_ords):
+            profile[:,i] = np.ravel(gh_matrix[i])
+        return profile
+    else:
+        if weights.ndim == 1:
+            weights = weights.reshape((len(weights),1))
+        if weights.size != num_ords:
+            print "Weights matrix is wrong size {} for number of orders {}".format(weights.size,num_ords)
+            exit(0)
+        return np.dot(gh_matrix.T,weights).T[0]
+
+def lorentz(xarr, yarr, params):
+    xc, yc, q, PA, sig = params ### assumes this form
+    xnew = (xarr-xc)*np.cos(PA) - (yarr-yc)*np.sin(PA)
+    ynew = (yarr-yc)*np.cos(PA) + (xarr-xc)*np.sin(PA)
+    rarr = np.sqrt(q*xnew**2 + ynew**2/q)
+#    rarr = make_rarr(xarr, yarr, xc, yc, q, PA)
+    return 1/(2*np.pi*sig**2)/(1+rarr**2/sig**2)**(1.5)
+
+def lorentz_int(params, lims):
+    xc, yc, q, PA, sig = params
+
+def lorentz_for_ghl(data, params, norm, cpad):
+    xc, yc = params['xc'].value, params['yc'].value
+    sigl, ratio = abs(params['sigl'].value), params['ratio'].value
+    hc = int(np.round(xc))
+    vc = int(np.round(yc))
+    xarr = np.arange(hc-cpad,hc+cpad+1)
+    yarr = np.arange(vc-cpad,vc+cpad+1)
+    xgrid, ygrid = np.meshgrid(xarr-xc, yarr-yc)
+    return (1-ratio)*norm/(2*np.pi*sigl**2)/(1+(xgrid/sigl)**2 + (ygrid/sigl)**2)**(1.5)
+
+def gh_lorentz(xarr, yarr, params, weights):
+    """ Saves 2D Gauss-Hermite with Lorentz envelope
+    """
+    gh = gauss_herm2d(xarr, yarr, params, weights)
+    xc, yc = params['xc'].value, params['yc'].value
+    sigl, ratio = params['sigl'].value, params['ratio'].value
+    xgrid, ygrid = np.meshgrid(xarr-xc, yarr-yc)
+#    lorentz1 = sigl**2/(np.pi)*1/(1+(xgrid/sigl)**2)/(1+(ygrid/sigl)**2)*weights[0]
+    lorentz = sigl**2/(2*np.pi)/(1+(xgrid/sigl)**2 + (ygrid/sigl)**2)**(1.5)*weights[0]
+    return (ratio*gh + (1-ratio)*lorentz) + params['bg'].value
+
+def ghl_nonlin_fit(data, invar, params, weights):
+    def ghl_res(params, data, invar, weights):
+        ghl = gh_lorentz(np.arange(data.shape[1]), np.arange(data.shape[0]), params, weights)
+        return np.ravel((data-ghl)*np.sqrt(invar))
+    args = (data, invar, weights)
+    results = lmfit.minimize(ghl_res, params, args=args)
+    return results.params
+    
+def ghl_linear_fit(data, invar, params, weights):
+    ### find lorentz component and subtract from data
+    xc, yc = params['xc'].value, params['yc'].value
+    sigl, ratio = params['sigl'].value, params['ratio'].value
+    xarr, yarr = np.arange(data.shape[1]), np.arange(data.shape[0])
+    xgrid, ygrid = np.meshgrid(xarr-xc, yarr-yc)
+#    lorentz = sigl**2/(np.pi)*1/(1+(xgrid/sigl)**2)/(1+(ygrid/sigl)**2)*weights[0]
+    lorentz = sigl**2/(2*np.pi)/(1+(xgrid/sigl)**2 + (ygrid/sigl)**2)**(1.5)*weights[0]
+    lin_data = data-(1-ratio)*lorentz - params['bg'].value
+    profile = ratio*gauss_herm2d(xarr, yarr, params, weights, return_profile=True)
+    init_model = np.dot(profile,weights)
+    init_model = np.reshape(init_model,xgrid.shape)
+    new_weights, chi = chi_fit(np.ravel(lin_data), profile, np.diag(np.ravel(invar)))
+    return new_weights
+        
     
 def fit_gauss_herm1d(xarr,yarr,invr=1):
     """ Fits to the gauss_herm1d function
@@ -1748,10 +2000,14 @@ def radial_quad_res(params,data,xarr):
 def make_rarr(x,y,xc,yc,q=1,PA=0):
     """ Makes 2D array with radius from center at each coordinate.
     """
-    x_matrix = np.tile(x,(len(y),1))
-    y_matrix = np.tile(y,(len(x),1)).T
-    x_ell = (y_matrix-yc)*cos(PA) + (x_matrix-xc)*sin(PA)
-    y_ell = (x_matrix-xc)*cos(PA) - (y_matrix-yc)*sin(PA)
+    if len(x.shape) == 2 and len(y.shape) == 2:
+        x_matrix = x
+        y_matrix = y
+    else:
+        x_matrix = np.tile(x,(len(y),1))
+        y_matrix = np.tile(y,(len(x),1)).T
+    x_ell = (y_matrix-yc)*np.cos(PA) + (x_matrix-xc)*np.sin(PA)
+    y_ell = (x_matrix-xc)*np.cos(PA) - (y_matrix-yc)*np.sin(PA)
     r_matrix = np.sqrt((x_ell)**2*q + (y_ell)**2/q)
 #    r_matrix = np.sqrt((x_ell)**2 + (y_ell)**2/q**2)
     return r_matrix
@@ -1798,6 +2054,27 @@ def gauss_draw(n=1, params=None, lims=None):
         else:
             while ytmp < lims[0] or ytmp > lims[1]:
                 ytmp = np.random.randn()*ys + yc
+            y[i] = ytmp
+    return y
+    
+def weibull_draw(n=1, params=None, lims=None):
+    y = np.zeros(n)
+    if params is None:
+        lam = 1
+        k = 1
+    elif type(params) == np.ndarray:
+        lam = params[0]
+        k = params[1]
+    else:
+        lam = params['c0'].value
+        k = params['s0'].value
+    for i in range(n):
+        ytmp = np.random.weibull(k)*lam
+        if lims is None:
+            y[i] = ytmp
+        else:
+            while ytmp < lims[0] or ytmp > lims[1]:
+                ytmp = np.random.weibull(k)*lam
             y[i] = ytmp
     return y
 
@@ -2164,7 +2441,7 @@ def combine(images,method='median'):
         All images must be the same size...
         Methods can be:
             - median
-            - average
+            - mean or average
             - sum
     """
     if type(images) is list:
@@ -2178,13 +2455,13 @@ def combine(images,method='median'):
         images = images_tmp
     if method == 'median':
         comb_image = np.median(images,axis=0)
-    elif method == 'average':
+    elif method == 'mean' or method == 'average':
         comb_image = np.mean(images,axis=0)
     elif method == 'sum':
         comb_image = np.sum(images,axis=0)
     else:
         print("Invalid input method.  Must be one of:")
-        print(" median\n mean\n sum")
+        print(" median\n mean (or average)\n sum")
         exit(0)
     return comb_image
     

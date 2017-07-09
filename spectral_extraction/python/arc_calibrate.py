@@ -71,7 +71,6 @@ if inargs.date is None:
 else:
     date = inargs.date
 
-### TODO - dynamically adjust this value to last available date
 if use_base:
     base_date = 'n20160130'
 

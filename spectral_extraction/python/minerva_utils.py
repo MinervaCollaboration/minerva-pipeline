@@ -41,7 +41,7 @@ def open_minerva_fits(fits, ext=0, return_hdr=False):
     xpix = hdr['NAXIS2']
     
     actypix = 2048 ### Hardcoded to remove overscan, fix later if needed
-    
+
     if np.shape(ccd)[0] > xpix:
         ccd_new = np.resize(ccd,[xpix,ypix,2])
             
@@ -461,7 +461,7 @@ def remove_ccd_background(ccd,cut=None,plot=False):
 #    arr = plt.hist(masked_ccd,2*(cut-1))
 #    hgt = arr[0]
 #    xvl = arr[1][:-1]
-    hgt, xvls = np.histogram(masked_ccd,2*(cut-1))
+    hgt, xvls = np.histogram(masked_ccd,max(2*(int(cut)-1),20))
     xvl = xvls[:-1]
     ### Assume lower tail is a better indicator than upper tail
     xmsk = (xvl < np.median(masked_ccd))
@@ -472,7 +472,7 @@ def remove_ccd_background(ccd,cut=None,plot=False):
     sigma = 1/np.sqrt(abs(hgts)+1)
     params, errarr = opt.curve_fit(sf.gaussian,xvls,hgts,p0=pguess,sigma=sigma)
     if plot:
-        plt.hist(masked_ccd,2*(cut-1))
+        plt.hist(masked_ccd,max(2*(int(cut)-1),20))
         plt.title("Number of pixels with certain count value")
         htst = sf.gaussian(xvl, params[0], center=params[1], height=params[2],bg_mean=0,bg_slope=0,power=2)
         plt.plot(xvl,htst)
@@ -1243,7 +1243,7 @@ def fits_to_arrays(fits_files,ext=0,i2_in=False):
     idx = 0
     didx = 0
     for flnm in fits_files:
-        img, hdr = open_minerva_fits(flnm, ext=ext, return_hdr=True)
+        img, oscan, hdr = open_minerva_fits(flnm, ext=ext, return_hdr=True)
         if idx == 0 and didx == 0:
             imgs = np.zeros((len(fits_files),img.shape[0],img.shape[1]))
         try:
@@ -1381,7 +1381,10 @@ def stack_flat(redux_dir, data_dir, date, method='median'):
             ## Subtract overscan corrected bias
             sflats[i] -= bias_fiti
             ## subtract scaled dark exposure
-            sflats[i] -= dark*(hdr['EXPTIME']/dhdr['EXPTIME'])
+            try:
+                sflats[i] -= dark*(hdr['EXPTIME']/dhdr['EXPTIME'])
+            except:
+                continue
         sflat = sf.combine(sflats, method=method)
         ### Reverse orientation to match ccd, etc.
         sflat = sflat[::-1,:]
@@ -1660,7 +1663,10 @@ def cal_fiberflat(flat, data_dir, redux_dir, arc_date):
 def save_comb_arc_flat(filelist,frm,ts,redux_dir,date,no_overwrite=True, verbose=False, method='median'):
     """ frm must be 'arc' or 'flat'
     """
-    if os.path.isfile(os.path.join(redux_dir,date,'combined_{}_{}.fits'.format(frm,ts))) and no_overwrite:
+    pre = ''
+    if method == 'mean':
+        pre = 'mean_'
+    if os.path.isfile(os.path.join(redux_dir,date,'{}combined_{}_{}.fits'.format(pre,frm,ts))) and no_overwrite:
         return
     else:
         if verbose:
@@ -1670,11 +1676,54 @@ def save_comb_arc_flat(filelist,frm,ts,redux_dir,date,no_overwrite=True, verbose
         elif frm == 'flat':
             frames = [f for f in filelist if ts in f.upper()]
         frame_imgs = fits_to_arrays(frames)
+        print 'ARC COMBINING'
+        print method
         comb_img = sf.combine(frame_imgs, method=method)
         if not os.path.isdir(os.path.join(redux_dir,date)):
             os.makedirs(os.path.join(redux_dir,date))
         hdu = pyfits.PrimaryHDU(comb_img)
         hdu.header.append(('COMBMTHD',method,'Method used to combine frames'))
         hdulist = pyfits.HDUList([hdu])
-        hdulist.writeto(os.path.join(redux_dir,date,'combined_{}_{}.fits'.format(frm,ts)),clobber=True)
+        hdulist.writeto(os.path.join(redux_dir,date,'{}combined_{}_{}.fits'.format(pre,frm,ts)),clobber=True)
         return
+        
+def find_peaks(array,bg_cutoff=None,mx_peaks=None,skip_peaks=0, view_plot=False):
+        """ Finds peaks of a 1D array.
+            Assumes decent signal to noise ratio, no anomalies
+            Assumes separation of at least 5 units between peaks
+        """
+        ###find initial peaks (center is best in general, but edge is okay here)
+        xpix = len(array)
+        px = 2
+        pcnt = 0
+        skcnt = 0
+        peaks = np.zeros(len(array))
+        if mx_peaks is None:
+            mx_peaks = len(array)
+        if bg_cutoff is None:
+            bg_cutoff = 0.5*np.mean(array)
+        while px<xpix:
+#            if trct>=num_fibers:
+#                break
+#            y = yvals[0]
+            if array[px-1]>bg_cutoff and array[px]<array[px-1] and array[px-1]>array[px-2]: #not good for noisy
+                if skcnt < skip_peaks:
+                    skcnt += 1 #Increment skip counter
+                    continue
+                else:
+                    peaks[pcnt] = px-1
+                    px += 5 #jump past peak
+                    pcnt+=1 #increment peak counts
+                    skcnt += 1 #increment skip counter
+                if pcnt >= mx_peaks:
+                    break
+            else:
+                px+=1
+        peaks = peaks[0:pcnt]
+        if view_plot:
+            plt.plot(array)
+            plt.plot(peaks,array[peaks.astype(int)],'ro')
+            plt.plot(bg_cutoff*np.ones((array.shape)),'k')
+            plt.show()
+            plt.close()
+        return peaks

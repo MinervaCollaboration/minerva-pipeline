@@ -69,10 +69,10 @@ def arc_peaks(data,wvln,invar,ts,sampling_est=3,pad=4):
                 pos_est[j] = j
         #Then remove extra elements from pos_est
         pos_est = pos_est[np.nonzero(pos_est)[0]]
-        #Cut out any that are within 2*sampling of each other (won't be able to fit well)
+        #Cut out any that are within 3*sampling of each other (won't be able to fit well)
         pos_diff = ediff1d(pos_est)
-        if np.count_nonzero(pos_diff<(2*sampling_est))>0:
-            close_inds = np.nonzero(pos_diff<(2*sampling_est))[0]
+        if np.count_nonzero(pos_diff<(3*sampling_est))>0:
+            close_inds = np.nonzero(pos_diff<(3*sampling_est))[0]
         ### Try 1x sampling and see if that gives any more peaks in the end...
 #        if np.count_nonzero(pos_diff<(1*sampling_est))>0:
 #            close_inds = np.nonzero(pos_diff<(1*sampling_est))[0]
@@ -171,70 +171,89 @@ def spline_coeff_fit(raw_img,hcenters,vcenters,invar,r_breakpoints,sigmas,powers
         Fits a spline to each peak and returns and array with the spline
         coefficients (which can later be used for 2D extraction)
     """
+#    print "scfit"
     new_hcenters = np.zeros(len(hcenters))
     new_vcenters = np.zeros(len(vcenters))
     fit_params = np.zeros((2,len(vcenters)))
     scale_fit = zeros((len(vcenters)))
-    voff = 1
+#    voff = 1
+#    print len(vcenters)
     for k in range(len(vcenters)):
-        harr = np.arange(-cpad,cpad+1)+hcenters[k]
-        varr = np.arange(-cpad,cpad+1)+int(np.floor(vcenters[k]))
-        harr = harr[harr>=0]
-        harr = harr[harr<raw_img.shape[1]]
-        varr = varr[varr>=0]
-        varr = varr[varr<raw_img.shape[0]]
-        small_img = raw_img[varr[0]:varr[-1]+1,harr[0]:harr[-1]+1]
-        small_inv = invar[varr[0]:varr[-1]+1,harr[0]:harr[-1]+1]
-        hcut = int(np.mod(np.argmax(small_img),small_img.shape[1]))
-        vcut = int(np.floor(np.argmax(small_img)/small_img.shape[1]))
-        hmean, hheight, hbg = sf.fit_mn_hght_bg(harr,small_img[vcut,:],small_inv[vcut,:],sigmas[k],hcenters[k],sigmas[k],powj=powers[k])
-        vmean, vheight, vbg = sf.fit_mn_hght_bg(varr+voff,small_img[:,hcut],small_inv[:,hcut],sigmas[k],vcenters[k],sigmas[k],powj=powers[k])
-        hdec, hint = math.modf(hmean)
-        vdec, vint = math.modf(vmean)
-#        small_img = recenter_img(small_img,[vmean,hmean],[varr[0]+cpad,harr[0]+cpad])
-    #    print "Mean is [", vmean, hmean, "]"
-    #    plt.imshow(small_img,extent=(-cpad+hcenters[k],cpad+hcenters[k]+1,-cpad+vcenters[k],cpad+vcenters[k]+1),interpolation='none')
-    #    plt.show()
-    #    plt.close()
-#        r_breakpoints = [0, 1, 2, 2.5, 3, 3.5, 4, 5, 10]
-#        r_breakpoints = [0, 1, 2, 3, 4, 5, 9]
-#        theta_orders=[0,-2,2]
-        args = (small_img,small_inv,r_breakpoints)
-        kws = dict()
-        kws['theta_orders'] = theta_orders
-        params = lmfit.Parameters()
-        params.add('vc', value = vmean-varr[0])
-        params.add('hc', value = hmean-harr[0])
-        params.add('q',value = 0.85, min=0)
-        params.add('PA',value = 0)
-        minimizer_results = lmfit.minimize(spline.spline_residuals,params,args=args,kws=kws)
-        ecc = minimizer_results.params['q'].value
-        pos_ang = minimizer_results.params['PA'].value
-        if ecc > 1:
-            ecc = 1/ecc
-            pos_ang -= (np.pi/2)
-        pos_ang = pos_ang % (2*np.pi)
-#        print "Eccentricity = ", ecc
-#        print "Position Angle = ", pos_ang*180/(np.pi)
-#        center=[vmean-varr[0],hmean-harr[0]]
-#        print center
-        spline_fit, s_coeffs, s_scale = spline.spline_2D_radial(small_img,small_inv,r_breakpoints,minimizer_results.params,theta_orders=theta_orders,return_coeffs=True)
-#        v_bpts = varr[np.mod(np.arange(len(varr)),bp_space)==0]-vcenters[k]
-#        h_bpts = harr[np.mod(np.arange(len(harr)),bp_space)==0]-hcenters[k]
-#        spline_fit, s_coeffs, s_scale = spline.spline_2D(small_img,1/(small_img+readnoise**2),h_bpts,v_bpts,return_coeffs=True)
-#        if k == 0:            
-#            vis = np.hstack((small_img,spline_fit,small_img-spline_fit))
-#            plt.imshow(vis,interpolation='none')
-##    #        plt.figure()
-##    #        plt.hist(np.ravel((small_img-spline_fit)*small_inv))
-#            plt.show()
-#            plt.close()
+        chi2old = 1e10
+        chi2 = 0
+        mx = 50
+        itr = 0
+        while abs(chi2-chi2old) > 0.001 and itr < mx:
+            chi2old = 1.0*chi2
+            harr = np.arange(-cpad,cpad+1)+hcenters[k]
+            varr = np.arange(-cpad,cpad+1)+int(np.floor(vcenters[k]))
+            harr = harr[harr>=0]
+            harr = harr[harr<raw_img.shape[1]]
+            varr = varr[varr>=0]
+            varr = varr[varr<raw_img.shape[0]]
+            small_img = raw_img[varr[0]:varr[-1]+1,harr[0]:harr[-1]+1]
+    #        plt.imshow(small_img, interpolation='none')
+    ##        plt.plot(harr, varr, 'bo')
+    #        plt.show()
+    #        plt.close()
+            small_inv = invar[varr[0]:varr[-1]+1,harr[0]:harr[-1]+1]
+#            hcut = int(np.mod(np.argmax(small_img),small_img.shape[1]))
+#            vcut = int(np.floor(np.argmax(small_img)/small_img.shape[1]))
+#            hmean, hheight, hbg = sf.fit_mn_hght_bg(harr,small_img[vcut,:],small_inv[vcut,:],sigmas[k],hcenters[k],sigmas[k],powj=powers[k])
+#            vmean, vheight, vbg = sf.fit_mn_hght_bg(varr+voff,small_img[:,hcut],small_inv[:,hcut],sigmas[k],vcenters[k],sigmas[k],powj=powers[k])
+#            hdec, hint = math.modf(hmean)
+#            vdec, vint = math.modf(vmean)
+            if itr == 0:
+                params = lmfit.Parameters()
+                vo = cpad#vmean-varr[0]
+                ho = cpad#hmean-harr[0]
+                params.add('vc', value = vo, min=vo-0.5, max=vo+0.5)
+                params.add('hc', value = ho, min=ho-0.5, max=ho+0.5)
+                params.add('q',value = 0.95, min=0)
+                params.add('PA',value = 0)
+                print "minimizing", k
+            spline_fit, s_coeffs, s_scale = spline.spline_2D_radial(small_img,small_inv,r_breakpoints,params,theta_orders=theta_orders,return_coeffs=True)
+            args = (small_img,small_inv,r_breakpoints)
+            kws = dict()
+            kws['theta_orders'] = theta_orders
+            kws['spline_coeffs'] = s_coeffs
+            kws['sscale'] = s_scale
+            minimizer_results = lmfit.minimize(spline.spline_residuals,params,args=args,kws=kws)
+            ecc = minimizer_results.params['q'].value
+            pos_ang = minimizer_results.params['PA'].value
+            if ecc > 1:
+                ecc = 1/ecc
+                pos_ang -= (np.pi/2)
+            pos_ang = pos_ang % (2*np.pi)
+            minimizer_results.params['q'].value = ecc
+            minimizer_results.params['PA'].value = pos_ang
+            params = minimizer_results.params
+            print params['hc']
+            spline_fit = spline.spline_2D_radial(small_img, small_inv, r_breakpoints, minimizer_results.params, theta_orders=[0], order=4, return_coeffs=False, spline_coeffs=s_coeffs.T, sscale=s_scale, fit_bg=False, pts_per_px=1) 
+            itr += 1
+            chi2 = np.sum((small_img-spline_fit)**2*small_inv)
+            print chi2/(np.size(small_img)-20)
+    #        print "Eccentricity = ", ecc
+    #        print "Position Angle = ", pos_ang*180/(np.pi)
+    #        center=[vmean-varr[0],hmean-harr[0]]
+    #        print center
+            
+    #        v_bpts = varr[np.mod(np.arange(len(varr)),bp_space)==0]-vcenters[k]
+    #        h_bpts = harr[np.mod(np.arange(len(harr)),bp_space)==0]-hcenters[k]
+    #        spline_fit, s_coeffs, s_scale = spline.spline_2D(small_img,1/(small_img+readnoise**2),h_bpts,v_bpts,return_coeffs=True)
+    #        if k == 0:            
+    #            vis = np.hstack((small_img,spline_fit,small_img-spline_fit))
+    #            plt.imshow(vis,interpolation='none')
+    ##    #        plt.figure()
+    ##    #        plt.hist(np.ravel((small_img-spline_fit)*small_inv))
+    #            plt.show()
+    #            plt.close()
         if k==0:
                 spline_coeffs = zeros((len(vcenters),len(s_coeffs)))
         spline_coeffs[k] = s_coeffs
         scale_fit[k] = s_scale
-        new_hcenters[k] = hmean
-        new_vcenters[k] = vmean
+        new_hcenters[k] = params['hc'].value
+        new_vcenters[k] = params['vc'].value
         fit_params[:,k] = np.array(([ecc,pos_ang]))
     if return_new_centers:
         return spline_coeffs, scale_fit, fit_params, new_hcenters, new_vcenters
@@ -536,7 +555,7 @@ def fit_spline_psf(raw_img,hcenters,vcenters,sigmas,powers,readnoise,
 #            print bg_array*s_scale
             trunc_coeffs = next_coeffs[0:3*num_bases]
         else:
-            trunc_coeffs = np.copy(next_coeffs)
+            trunc_coeffs = 1.0*next_coeffs
         dd2 = int(np.size(trunc_coeffs)/3)
         coeff_matrix = trunc_coeffs.reshape(3,dd2).T
     #    if fit_bg: ### Don't save background fit term
@@ -579,11 +598,11 @@ def fit_spline_psf(raw_img,hcenters,vcenters,sigmas,powers,readnoise,
             resort_inds = np.argsort(r_inds)
             tmp_fit = np.reshape(tmp_fit[resort_inds],data_for_fitting[:,:,k].shape)
         #    plt.figure("Arc, iteration {}".format(k))
-        ##    plt.imshow(np.hstack((tmp_fit,small_img/s_scale[k])),interpolation='none')
+#            plt.imshow(np.hstack((data_for_fitting[:,:,k],tmp_fit)),interpolation='none')
             chi2_first[k] = np.sum(((tmp_fit-data_for_fitting[:,:,k])**2)*invar_for_fitting[:,:,k])#*s_scale[k]**2
         #    plt.imshow((tmp_fit-small_img/s_scale[k])*small_inv,interpolation='none')
-        #    plt.show()
-        #    plt.close()
+#            plt.show()
+#            plt.close()
     #    print "chi2 first:", chi2_first
     #    next_coeffs *= fit_sums/(k+1)
     #    s_scale /= fit_sums/(k+1)
@@ -756,13 +775,13 @@ def fit_spline_psf(raw_img,hcenters,vcenters,sigmas,powers,readnoise,
         new_vcenters = new_vcenters[peak_mask]    
         ### Record minimum values (some subsequent iterations give higher chi2)
         if loop_cnt == 0:
-            coeff_matrix_min = np.copy(coeff_matrix)
+            coeff_matrix_min = 1.0*coeff_matrix
             params_min = lmfit.Parameters(params1)
         if np.sum(chi_new) < chi_min:
             if verbose:
                 print "Better fit on loop ", loop_cnt
             chi_min = np.sum(chi_new)
-            coeff_matrix_min = np.copy(coeff_matrix)
+            coeff_matrix_min = 1.0*coeff_matrix
             params_min = lmfit.Parameters(params1)
         loop_cnt += 1
     
@@ -815,7 +834,7 @@ def fit_spline_psf(raw_img,hcenters,vcenters,sigmas,powers,readnoise,
 #            plt.plot(np.sum(fitted_image,axis=1)/np.max(np.sum(fitted_image,axis=1)))
 #            plt.show()
 #            plt.imshow(np.hstack((img_matrix,fitted_image,(img_matrix-fitted_image))),interpolation='none')
-            plt.imshow((img_matrix-fitted_image)*invar_matrix,interpolation='none')
+            plt.imshow(np.hstack((img_matrix, fitted_image, (img_matrix-fitted_image))),interpolation='none')
         #    plt.imshow((img_matrix-fitted_image)*invar_matrix,interpolation='none')
             plt.show()
             plt.close()
@@ -823,3 +842,321 @@ def fit_spline_psf(raw_img,hcenters,vcenters,sigmas,powers,readnoise,
     centers, ellipse = params_to_array(params_min)
     results = np.hstack((np.ravel(coeff_matrix_min),np.ravel(ellipse)))    
     return results
+    
+def get_fitting_arrays(arc, hcenters, vcenters, pord, cpad, readnoise, scale_arr=None, return_scale_arr=False):
+    data = np.zeros((len(hcenters),2*cpad+1,2*cpad+1))
+    invar = np.zeros((len(hcenters),2*cpad+1,2*cpad+1))
+    if return_scale_arr:
+        new_scale = np.zeros((len(hcenters)))
+    for i in range(len(hcenters)):
+        vc = int(np.round(vcenters[i]))
+        hc = int(np.round(hcenters[i]))
+        data[i] = arc[vc-cpad:vc+cpad+1, hc-cpad:hc+cpad+1]
+        if scale_arr is None:
+            scl = np.sum(data[i])
+            if return_scale_arr:
+                new_scale[i] = scl
+        else:
+            scl = scale_arr[i]#np.sum(data[i])/scale_arr[i]
+        invar[i] = scl/(abs(data[i]) + readnoise**2/scl)
+        data[i] /= scl
+    if return_scale_arr:
+        return data, invar, new_scale
+    else:
+        return data, invar
+    
+def convert_params(params, idx, pord):
+    params_out = lmfit.Parameters()
+    hscale = (params['xc{}'.format(idx)].value-1024)/2048
+    params_out.add('xc', value = params['xc{}'.format(idx)].value)#, min=params['xc{}'.format(idx)].value-0.5, max=params['xc{}'.format(idx)].value+0.5)
+    params_out.add('yc', value = params['yc{}'.format(idx)].value)#, min=params['yc{}'.format(idx)].value-0.5, max=params['yc{}'.format(idx)].value+0.5)
+    params_out.add('bg', value = params['bg{}'.format(idx)].value)
+    ### Unpack polynomial fitted parameters
+    sigs = np.zeros((pord+1))
+    pows = np.zeros((pord+1))
+    sigls = np.zeros((pord+1))
+    rats = np.zeros((pord+1))
+    for o in range(pord+1):
+        sigs[o] = params['sigma{}'.format(o)].value
+        pows[o] = params['power{}'.format(o)].value
+        sigls[o] = params['sigl{}'.format(o)].value
+        rats[o] = params['ratio{}'.format(o)].value
+    params_out.add('sig', value = np.poly1d(sigs)(hscale), vary=0)
+    params_out.add('power', value = np.poly1d(pows)(hscale), vary=0)
+    params_out.add('sigl', value = np.poly1d(sigls)(hscale))
+    params_out.add('ratio', value = np.poly1d(rats)(hscale))
+    return params_out
+
+def init_params(hcenters, vcenters, s_coeffs, p_coeffs, pord, r_guess=None, s_guess=None, bg_arr=None):
+    params_in = lmfit.Parameters()
+    for i in range(len(hcenters)):
+        params_in.add('xc{}'.format(i), value = hcenters[i], min=hcenters[i]-0.5, max=hcenters[i]+0.5)
+        params_in.add('yc{}'.format(i), value = vcenters[i], min=vcenters[i]-0.5, max=vcenters[i]+0.5)
+        if bg_arr is None:
+            params_in.add('bg{}'.format(i), value = 0.00001)
+        else:
+            params_in.add('bg{}'.format(i), value = bg_arr[i])
+    if r_guess is None:
+        r_guess = [0, 0, 0.95]
+    if s_guess is None:
+        s_guess = [0, 0, 2*s_coeffs[-1]]
+    for o in range(pord+1):
+        params_in.add('sigma{}'.format(o), value=s_coeffs[o], vary=0)
+        params_in.add('power{}'.format(o), value=p_coeffs[o], vary=0)
+        params_in.add('sigl{}'.format(o), value=s_guess[o])
+#        if o == pord:
+#            params_in.add('ratio{}'.format(o), value=r_guess[o], min=0.8, max=1.0)
+#        else:
+        params_in.add('ratio{}'.format(o), value=r_guess[o])
+    return params_in
+    
+def get_ghl_profile(ncenters, params, weights, pord, cpad, return_model=False, no_convert=False):
+    hcenters, vcenters = update_centers(params, ncenters)
+    ghl_profile = np.zeros(((2*cpad+1)**2*len(hcenters),weights.size))
+    hscale = (hcenters-1024)/2048
+    ws = int((weights.size-len(hcenters))/(pord+1))
+    ### Weights array is divided into normalization factor (which varies per
+    ### hcenter) and shape parameters (which we will smooth with a polynomial)
+    w0s = weights[0:len(hcenters)]
+    wpolys = weights[len(hcenters):].reshape((11,pord+1))
+    for i in range(len(hcenters)):
+        hc = int(np.round(hcenters[i]))
+        vc = int(np.round(vcenters[i]))
+        xarr = np.arange(hc-cpad,hc+cpad+1)
+        yarr = np.arange(vc-cpad,vc+cpad+1)
+        ### Assign nonlinear parameters
+        if not no_convert:
+            params1 = convert_params(params, i, pord)
+        else:
+            params1 = params
+        sub_weights = np.zeros((12,1))
+        sub_weights[0] = w0s[i]
+        for j in range(1,12):
+            sub_weights[j] = np.poly1d(wpolys[j-1])(hscale[i])
+#        if i == 0:
+#            print "start GH"
+#            print params1
+#            print sub_weights
+#            print xarr, yarr
+#        print params1['sigl'].value
+#        print i, sub_weights
+#        sub_weights /= sub_weights[0] ## Normalize...
+        profile = params1['ratio'].value*sf.gauss_herm2d(xarr, yarr, params1, sub_weights, return_profile=True)
+#        model = sf.gauss_herm2d(xarr, yarr, params1, sub_weights)
+#        print np.sum(model), params1['ratio'].value, params1['sigl'].value
+#        if i == 0:
+#            print profile
+#            print "end GH"
+        ghl_profile[(2*cpad+1)**2*i:(2*cpad+1)**2*(i+1),i] = profile[:,0]
+        lh = len(hcenters)
+        for p in range(pord+1):
+            ghl_profile[(2*cpad+1)**2*i:(2*cpad+1)**2*(i+1),lh+ws*p:lh+ws*(p+1)] = profile[:,1:]*(hscale[i]**(pord-p))
+    if return_model:
+        return np.dot(ghl_profile,weights).reshape(len(hcenters),(2*cpad+1),(2*cpad+1))
+    else:
+        return ghl_profile
+    
+def get_data_minus_lorentz(data, ncenters, params, weights, pord, cpad, return_lorentz=False, no_convert=False):
+    """ data is from get_arrays_for_fitting"""
+#    hcenters, vcenters = update_centers(params, ncenters)
+    lorentz_arr = np.zeros((data.shape))
+    data_minus_lorentz = 1.0*data
+    for i in range(ncenters):
+#        xarr = np.arange(int(hcenters[i])-cpad,int(hcenters[i])+cpad+1)
+#        yarr = np.arange(int(vcenters[i])-cpad,int(vcenters[i])+cpad+1)
+        if not no_convert:
+            params1 = convert_params(params, i, pord)
+#            if i == 0:
+#                print params1, weights[i]
+            lorentz = sf.lorentz_for_ghl(data[i], params1, weights[i], cpad)
+            data_minus_lorentz[i] -= lorentz
+            lorentz_arr[i] = lorentz
+        else:
+            params1 = params
+            lorentz = sf.lorentz_for_ghl(data, params1, weights[i], cpad)
+            data_minus_lorentz -= lorentz
+            lorentz_arr = lorentz
+    if return_lorentz:
+        return lorentz_arr
+    else:
+        return data_minus_lorentz
+
+#def ghl_residuals(params, data, invar, ncenters, weights, pord, cpad):
+def ghl_residuals(params, arc, readnoise, scale_arr, ncenters, weights, pord, cpad):
+    hcenters, vcenters = update_centers(params, ncenters)
+    data, invar = get_fitting_arrays(arc, hcenters, vcenters, pord, cpad, readnoise, scale_arr=scale_arr)
+    gh_model = get_ghl_profile(ncenters, params, weights, pord, cpad, return_model=True)
+    data_lorentz = get_data_minus_lorentz(data, ncenters, params, weights, pord, cpad)
+    return np.ravel((gh_model-data_lorentz)**2*invar)
+    
+def update_centers(params, cnt):
+    hcenters = np.zeros((cnt))
+    vcenters = np.zeros((cnt))
+    for i in range(cnt):
+        hcenters[i] = params['xc{}'.format(i)].value
+        vcenters[i] = params['yc{}'.format(i)].value
+    return hcenters, vcenters
+        
+def fit_ghl_psf(arc, hcenters, vcenters, s_coeffs, p_coeffs, readnoise, gain, pord=2, cpad=4, plot_results=False, verbose=False, return_centers=False):
+    """ Fits the PSF for the raw image (should be an arc frame or similar) to
+        2D Gauss-Hermite polynomials with a Lorentzian term.
+        Interpolates a polynomial along each order.
+        Takes inputs for arc centers to evaluate, best fit sigma and power
+        for Gaussian envelope, CCD gain and readnoise, and polynomial order
+        (2 = quadratic), and image padding from h/vcenter
+    """
+    ### Initialize arrays to house fitted parameters
+    ncenters = len(hcenters)
+    norm_weights = np.zeros((ncenters)) ### GH (0,0) - overall norm
+    other_weights = np.zeros((pord+1,11)) ### GH weights
+    all_params = np.zeros((pord+1,2)) ### Lorentz nonlinear parameters
+    ### Initialize while loop - iterate between nonlinear, linear fits until convergence
+    chi2 = 0
+    chi2old = 1
+    chi2_min = 1000
+    mx_iter = 100
+    itr = 0
+    params = init_params(hcenters, vcenters, s_coeffs, p_coeffs, pord)
+    data, invar, scale_arr = get_fitting_arrays(arc, hcenters, vcenters, pord, cpad, readnoise, return_scale_arr=True)
+    weights = np.zeros((ncenters+(pord+1)*11,1))
+    ### Set initial normalization guess
+    for i in range(ncenters):
+        weights[i] = np.sum(data[i])
+    ### Set default scaling to prevent runaway fitting in while loop
+#    dscale = 1.0*weights[0:ncenters].reshape((ncenters,))
+    t0 = time.time()
+    while abs(chi2-chi2old) > 0.001 and itr < mx_iter:
+        if verbose:
+            print "Iteration {}".format(itr)
+            print "  Delta chi^2:", abs(chi2-chi2old)
+        chi2old = 1.0*chi2
+#        hcenters, vcenters = update_centers(params, ncenters)
+#        data, invar = get_fitting_arrays(arc, hcenters, vcenters, pord, cpad, readnoise, scale_arr=scale_arr)
+#        args = (data, invar, ncenters, weights, pord, cpad)
+        args = (arc, readnoise, scale_arr, ncenters, weights, pord, cpad)
+        ta = time.time()
+        results = lmfit.minimize(ghl_residuals, params, args=args)
+        if verbose:
+            tb = time.time()
+            print "  Nonlinear time = {}".format(tb-ta)
+        params = results.params
+        hcenters, vcenters = update_centers(params, ncenters)
+        data, invar = get_fitting_arrays(arc, hcenters, vcenters, pord, cpad, readnoise, scale_arr=scale_arr)
+        data_lorentz = get_data_minus_lorentz(data, ncenters, params, weights, pord, cpad)
+        profile = get_ghl_profile(ncenters, params, weights, pord, cpad)
+        weights, chi2 = sf.chi_fit(np.ravel(data_lorentz),profile,np.ravel(invar))
+        if verbose:
+            tc = time.time()
+            print "  Linear time = {}".format(tc-tb)
+        if verbose:
+            print "  chi^2 new = {}".format(chi2)
+#        scc = 1.0*weights[0:ncenters]
+#        ### Prevent runaway fits
+#        scc[scc>1.5] = 1
+#        scc[scc<0.5] = 1
+#        scale_arr /= scc
+        ### Prevent scales from wandering too far from original data scale
+#        scale_ok = weights[0:ncenters] < 1.5
+#        scale_arr = scale_arr*scale_ok + dscale*(1-scale_ok)
+        if chi2 < chi2_min:
+            chi2_min = chi2
+            norm_weights = weights[0:ncenters]
+            other_weights = weights[ncenters:].reshape((11,pord+1))
+            for o in range(pord+1):
+                all_params[o,0] = params['sigl{}'.format(o)].value
+                all_params[o,1] = params['ratio{}'.format(o)].value
+#        weights[0:ncenters] = 1.0*np.ones(scale_arr.shape) ### always re-scale data so this is true(ish)
+        itr += 1
+    tf = time.time()
+    if verbose:
+        print "Total fitting time = {}s".format(tf-t0)
+    hcenters, vcenters = update_centers(params, ncenters)
+    if plot_results:
+#        print data
+#        print hcenters, vcenters
+#        print params
+#        print weights
+#        print pord
+#        print cpad
+        lorentzs = get_data_minus_lorentz(data, ncenters, params, weights, pord, cpad, return_lorentz=True)
+        for i in range(ncenters):
+            gh_model = get_ghl_profile(ncenters, params, weights, pord, cpad, return_model=True)[i]
+            weightsi = np.zeros(12)
+            weightsi[0] = weights[i]
+            ows = np.reshape(weights[ncenters:], (11, pord+1))
+            for k in range(1,12):
+                weightsi[k] = np.poly1d(ows[k-1])((hcenters[i]-1024)/2048)
+#            print weightsi
+#            params1 = convert_params(params, i, pord)
+#            print params1['ratio'].value
+#            print params1['sigl'].value
+#            print params1['power'].value
+#            print params1['sig'].value
+#            print params['xc{}'.format(i)].value, params['yc{}'.format(i)].value, params['bg{}'.format(i)].value
+#            print np.sum(lorentzs[i])/np.sum(gh_model)
+            model = gh_model + lorentzs[i] + params['bg{}'.format(i)].value
+#            print gh_model
+#            print lorentzs[i]
+#            print np.max(data[i]), np.sum(model), np.sum(gh_model)
+            plt.imshow(np.hstack((data[i], model, data[i]-model)), interpolation='none')
+            plt.show()
+            plt.close()
+    if return_centers:
+        return norm_weights, other_weights, all_params, hcenters, vcenters
+    else:
+        return norm_weights, other_weights, all_params
+        
+'''
+#Old way, fitting to each individual peak, rather than enforcing smoothness
+sm_arc = arc[int(vcenters[i])-cpad:int(vcenters[i])+cpad+1, int(hcenters[i])-cpad:int(hcenters[i])+cpad+1]
+sm_invar = 1/(abs(sm_arc) + readnoise**2)
+params = lmfit.Parameters()
+params.add('xc', value = np.modf(hcenters[i])[0]+cpad, min=cpad-1, max=cpad+1)#-int(hcenters[0]) + cpad)
+params.add('yc', value = np.modf(vcenters[i])[0]+cpad, min=cpad-1, max=cpad+1)#-int(np.floor(vcenters[0])) + cpad -1)
+params.add('sig', value = sigmas[i])
+params.add('power', value = powers[i])
+params.add('sigl', value = 2*sigmas[i], min=0.5*sigmas[i])
+params.add('ratio', value = 0.95, min = 0.9, max = 1.0)
+params.add('bg', value = 0)
+weights = np.zeros(12)
+weights[0] = np.sum(sm_arc)
+chi2 = 0
+chi2old = 1
+mx_iter = 200
+itr = 0
+#            if i < 5:
+#                continue
+while abs(chi2-chi2old) > 0.01 and itr < mx_iter:
+    chi2old = chi2
+    params = sf.ghl_nonlin_fit(sm_arc, sm_invar, params, weights)
+    model = sf.gh_lorentz(np.arange(sm_arc.shape[1]), np.arange(sm_arc.shape[0]), params, weights)
+    chi2 = np.sum((sm_arc-model)**2*sm_invar)
+#                if i == 5:
+#                    print weights[0]
+#                    print chi2
+#                    plt.imshow(np.hstack((sm_arc,model,(sm_arc-model))),interpolation='none')
+#                    plt.show()
+#                    plt.close()
+    weights = sf.ghl_linear_fit(sm_arc, sm_invar, params, weights)
+    ### Enforce positivity in magnitude
+    weights[0] = abs(weights[0])
+    ### prevent runaway magnitudes
+    if weights[0] > 1.5*np.sum(sm_arc):
+        print "runaway"
+        weights /= (weights[0]/np.sum(sm_arc))
+    model = sf.gh_lorentz(np.arange(sm_arc.shape[1]), np.arange(sm_arc.shape[0]), params, weights)
+    chi2 = np.sum((sm_arc-model)**2*sm_invar)
+#                if i == 5:
+#                    print weights[0]
+#                    print chi2
+#                    plt.imshow(np.hstack((sm_arc,model,(sm_arc-model))),interpolation='none')
+#                    plt.show()
+#                    plt.close()
+    itr += 1
+print "Iter {}, arc/model diff = {}, Chi^2 reduced = {}, weights[0]={}".format(i, np.sum(sm_arc-model), chi2/(sm_arc.size-len(params)-weights.size),weights[0])
+all_weights[i] = weights/weights[0]
+all_params[i] = [params['sigl'].value, params['ratio'].value]
+plt.imshow(np.hstack((sm_arc,model,(sm_arc-model))),interpolation='none')
+plt.show()
+plt.close()
+#'''

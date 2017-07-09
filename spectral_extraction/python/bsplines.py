@@ -268,6 +268,12 @@ def build_rarr_thetaarr(img_matrix,params,pts_per_px=1):
     x_ell = (v_matrix-vc)*cos(PA) + (h_matrix-hc)*sin(PA)
     y_ell = (h_matrix-hc)*cos(PA) - (v_matrix-vc)*sin(PA)
     r_matrix = np.sqrt((x_ell)**2*q + (y_ell)**2/q)
+#    if np.min(r_matrix) > 2:
+#        plt.imshow(img_matrix)
+##        plt.plot(hc,vc,'b.')
+#        print hc, vc
+#        plt.show()
+#        plt.close()
     theta_matrix = np.arctan(y_ell/x_ell)
     r_inds = np.argsort(np.ravel(r_matrix))
     r_arr = np.ravel(r_matrix)[r_inds]
@@ -337,12 +343,14 @@ def spline_2D_radial(img_matrix,invar_matrix,r_breakpoints,params,theta_orders=[
     ### Given h, v arrays and breakpoints, find splines along both directions
     ### Use the h and v splines to construct a 2D profile matrix for linear fitting
     profile_matrix = build_radial_profile(r_arr,theta_arr,r_breakpoints,theta_orders,dim1,order=order,fit_bg=fit_bg)
-#    if fit_bg:
+#    if np.max(profile_matrix)==0:
+#        plt.plot(r_arr)
+#        plt.show()
+    #    if fit_bg:
 #        profile_matrix = np.hstack((profile_matrix,np.ones((dim1,1))))
 #    print profile_matrix[:,0]
 #    print profile_matrix[:,-1]
-#    plt.imshow(profile_matrix,interpolation='none')
-#    plt.show()
+
     #Reshape the profile matrix and input image and invar matrices for chi^2 fitting
     #Evaluate spline fit and reshape back to 2D array
     if spline_coeffs is None:
@@ -351,7 +359,15 @@ def spline_2D_radial(img_matrix,invar_matrix,r_breakpoints,params,theta_orders=[
         #noise = np.ravel(invar_matrix)[r_inds]
         #Chi^2 fit
         #a_coeffs, chi = sf.chi_fit(data,profile_matrix,noise)
-        a_coeffs = sf.extract_2D(data,profile_matrix,noise,return_no_conv=False)
+        try:
+            a_coeffs = sf.extract_2D(data,profile_matrix,noise,return_no_conv=False)
+        except:
+            plt.plot(r_arr)
+            plt.show()
+            plt.close()
+            plt.imshow(profile_matrix,interpolation='none')
+            plt.show()
+            plt.close()
         spline_fit = np.dot(profile_matrix,a_coeffs)
         resort_inds = np.argsort(r_inds)
         spline_fit = np.reshape(spline_fit[resort_inds],(vpix,hpix))
@@ -376,7 +392,7 @@ def spline_2D_radial(img_matrix,invar_matrix,r_breakpoints,params,theta_orders=[
             spline_fit *= sscale
             return spline_fit
 
-def spline_residuals(params,data,invar,breakpoints,theta_orders=[0]):
+def spline_residuals(params, data, invar, breakpoints, theta_orders=[0], spline_coeffs=None, sscale=None):
     """ Function for fitting elliptical spline profile.  Returns residuals.
         INPUTS:
             params - parameter array from lmfit (or not if using x_coords)
@@ -385,7 +401,7 @@ def spline_residuals(params,data,invar,breakpoints,theta_orders=[0]):
         OUTPUTS:
             residuals - residual array scaled by errors
     """
-    spline_fit = spline_2D_radial(data,invar,breakpoints,params,theta_orders=theta_orders)
+    spline_fit = spline_2D_radial(data,invar,breakpoints,params,theta_orders=theta_orders, spline_coeffs=spline_coeffs,sscale=sscale)
     residuals = (spline_fit-data)*np.sqrt(invar)
 #    plt.imshow(np.hstack((data,spline_fit,residuals)))
 #    plt.show()

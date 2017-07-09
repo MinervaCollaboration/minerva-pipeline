@@ -118,23 +118,23 @@ except KeyError:
 #date = 'n20160115' #Fixed for now, later make this dynamic
 date = os.path.split(os.path.split(filename)[0])[1]
 ### Load Bias
-bias = m_utils.stack_calib(redux_dir, data_dir, date)
-bias = bias[::-1,0:actypix] #Remove overscan
-### Load Dark
-dark, dhdr = m_utils.stack_calib(redux_dir, data_dir, date, frame='dark')
-dark = dark[::-1,0:actypix]
-try:
-    dark *= spec_hdr['EXPTIME']/dhdr['EXPTIME'] ### Scales linearly with exposure time
-except:
-    ### if EXPTIMES are unavailable, can't reliably subtract dark, just turn it
-    ### into zeros
-    dark = np.zeros(ccd.shape)
-### Analyze overscan (essentially flat, very minimal correction)
-overscan_fit = m_utils.overscan_fit(overscan)
-
-#bias -= np.median(bias) ### give zero mean overall - readjust by overscan
-### Making up this method, so not sure if it's good, but if it works it should reduce ccd noise
-bias = m_utils.bias_fit(bias, overscan_fit)
+#bias = m_utils.stack_calib(redux_dir, data_dir, date)
+#bias = bias[::-1,0:actypix] #Remove overscan
+#### Load Dark
+#dark, dhdr = m_utils.stack_calib(redux_dir, data_dir, date, frame='dark')
+#dark = dark[::-1,0:actypix]
+#try:
+#    dark *= spec_hdr['EXPTIME']/dhdr['EXPTIME'] ### Scales linearly with exposure time
+#except:
+#    ### if EXPTIMES are unavailable, can't reliably subtract dark, just turn it
+#    ### into zeros
+#    dark = np.zeros(ccd.shape)
+#### Analyze overscan (essentially flat, very minimal correction)
+#overscan_fit = m_utils.overscan_fit(overscan)
+#
+##bias -= np.median(bias) ### give zero mean overall - readjust by overscan
+#### Making up this method, so not sure if it's good, but if it works it should reduce ccd noise
+#bias = m_utils.bias_fit(bias, overscan_fit)
 
 #sflat_hdu = pyfits.open(os.path.join(redux_dir,date,'slit_approx.fits'),uint=True)
 #slit_coeffs = sflat_hdu[0].data
@@ -142,42 +142,46 @@ bias = m_utils.bias_fit(bias, overscan_fit)
 #polyord = sflat_hdu[0].header['POLYORD'] #Order of polynomial for slit fitting
 
 ### Make master slitFlats
-sflat = m_utils.stack_flat(redux_dir, data_dir, date)
-### If no slit flat, sflat returns all ones, don't do any flat fielding
-if np.max(sflat) - np.min(sflat) == 0:
-    norm_sflat = np.ones(ccd.shape)
-else:
-    norm_sflat = m_utils.make_norm_sflat(sflat, redux_dir, date, spline_smooth=True, plot_results=False)
-
-### Calibrate ccd
-ccd -= bias #Note, if ccd is 16bit array, this operation can cause problems
-ccd -= dark
+#sflat = m_utils.stack_flat(redux_dir, data_dir, date)
+#### If no slit flat, sflat returns all ones, don't do any flat fielding
+#if np.max(sflat) - np.min(sflat) == 0:
+#    norm_sflat = np.ones(ccd.shape)
+#else:
+#    norm_sflat = m_utils.make_norm_sflat(sflat, redux_dir, date, spline_smooth=True, plot_results=False)
+#norm_sflat = np.ones(ccd.shape)
+#
+#### Calibrate ccd
+#ccd -= bias #Note, if ccd is 16bit array, this operation can cause problems
+#ccd -= dark
 
 ### Find new background level (now more than readnoise because of bias/dark)
 ### use bstd instead of readnoise in optimal extraction
-if (np.max(norm_sflat) == np.min(norm_sflat)):
-    cut = int(10*readnoise)
-    junk, bstd = m_utils.remove_ccd_background(ccd,cut=cut)
-    rn_eff = bstd*gain
-else:
-    bgonly = ccd[norm_sflat==1]
-    cut = np.median(bgonly)
-    if cut < 15:
-        cut = 15 ### enforce minimum
-    junk, bstd = m_utils.remove_ccd_background(bgonly,cut=cut)
-    rn_eff = bstd*gain # effective/empirical readnoise (including effects of bias/dark subtraction)
+#if (np.max(norm_sflat) == np.min(norm_sflat)):
+#    cut = int(10*readnoise)
+#    junk, bstd = m_utils.remove_ccd_background(ccd,cut=cut)
+#    rn_eff = bstd*gain
+#else:
+#    bgonly = ccd[norm_sflat==1]
+#    cut = np.median(bgonly)
+#    if cut < 15:
+#        cut = 15 ### enforce minimum
+#    junk, bstd = m_utils.remove_ccd_background(bgonly,cut=cut)
+#    rn_eff = bstd*gain # effective/empirical readnoise (including effects of bias/dark subtraction)
+#    ccd -= cut ## Remove mean background?
+bstd = 1.3
+ccd -= np.median(ccd)
+ccd = ccd[::-1,:]
 
 ### Use this to find inverse variance:
 #invar = 1/(abs(ccd) + bstd**2)
 
 ### flatten ccd, and inverse variance
-ccd /= norm_sflat
+#ccd /= norm_sflat
 #invar /= norm_sflat**2
 
 ### Apply gain (I think this is the right way given my empirical invar calc.)
 ccd *= gain
 #invar /= gain
-
 
 ######################################
 ### Find or load trace information ###
@@ -249,6 +253,7 @@ else:
 #### Do optimal extraction ###
 ##############################
 #spec, spec_invar, spec_mask, image_model = m_utils.extract_1D(ccd, norm_sflat, trace_coeffs,i_coeffs=trace_intense_coeffs,s_coeffs=trace_sig_coeffs,p_coeffs=trace_pow_coeffs,readnoise=bstd*gain,gain=gain,return_model=True,verbose=True)
+norm_sflat = np.ones(ccd.shape)
 spec, spec_invar, spec_mask, image_model = m_utils.extract_1D(ccd, norm_sflat, multi_coeffs, profile, readnoise=bstd*gain, gain=gain, return_model=True, verbose=True)
 ### Evaluate fit
 invar = (1/(abs(ccd)*gain + (bstd*gain)**2))
