@@ -42,7 +42,12 @@ def gaussian(axis, sigma, center=0, height=None,bg_mean=0,bg_slope=0,power=2):
     #Height scale factor*(1/(sqrt(2*pi*sigma**2)))
 #    print sigma, center, height
     if height is None:
-        height = 1/(np.sqrt(2*np.pi*sigma))
+        height = 1/(np.sqrt(2*np.pi*sigma**2))
+        ### For more general expression can switch to the following:
+        gen_norm = False
+        if gen_norm:
+            norm = (2*sigma**power)**(1/power)*(2/power)*sp.gamma(1/power)
+            height = 1/norm
     gaussian = height*exp(-abs(axis-center)**power/(2*(abs(sigma)**power)))+bg_mean+bg_slope*(axis-center)
 #    print sigma, center, height, bg_mean,bg_slope,power
 #    print gaussian
@@ -593,7 +598,7 @@ def gen_central2d(params, X, idx=0, lims=None, rots=False, normalized=False, dis
     if X.shape[0] != 2:
         print "You're not giving gen_central2d the right input!"
         exit(0)
-    if idx == 0:
+    if idx == 0 or idx is None:
         idx = [0, 1, 0]
     else:
         try:
@@ -629,7 +634,7 @@ def gen_central2d(params, X, idx=0, lims=None, rots=False, normalized=False, dis
     if len(dists) == 1 and dists[0] == 'lorentz':
         return lorentz(X[0], X[1], params)
     else:
-        xc, yc, q, PA, sig = params ### assumes this form
+#        xc, yc, q, PA, sig = params ### assumes this form
         cts = [dists[0] != 'weibull', dists[1] != 'weibull']
         xpr = (x-xo*cts[0])*np.cos(th) + (y-yo*cts[1])*np.sin(th)
         ypr = (y-yo*cts[1])*np.cos(th) - (x-xo*cts[0])*np.sin(th)
@@ -1241,21 +1246,26 @@ def gauss2d_lmfit(params, xaxis, yaxis, cnt, ab=False):
 #    plt.close()
     return gauss2d   
     
+def gauss_poly_int(poly,power,sig):
+    aa = 2*sig**power ### Requires the gaussian to be defined exp(-x^p/aa)
+    ### Following is derived from wikipedia formula in "definite integrals" of
+    ### 'List of integrals of exponential functions' (7th from bottom)
+    return (2/power)*(aa**((poly+1)/power))*sp.gamma((poly+1)/power)
 
-def hermite(order,axis,sigma,center=0):
+def hermite(order,axis,sigma,center=0,return_coeffs=False):
     """Function to calculate probabilists Hermite function
     INPUTS:
         order = hermite order (function is likely slow for high orders)
         axis = "x" values at which to calculate Hermite polynomial
         sigma = scaling factor for axis
         center = optional axis center offset
-        
+        return_coeffs = returns polynomial coefficients
     OUTPUTS:
         herm = array of len(axis)
     """
     #axis = np.array(([axis,]))
     uplim = int(np.floor(order/2)) #Upper limit for sum
-    def insum(n,m,axis):
+    def insum(n,m,axis,center=0):
         """Formula for inner sum of explicit Hermite function.
         """
         term1 = (-1)**m/(np.math.factorial(m)*np.math.factorial(n-2*m))
@@ -1266,12 +1276,19 @@ def hermite(order,axis,sigma,center=0):
         hsum = np.zeros(axis.shape)
     except TypeError:
         hsum = 0
-            
+
+    if return_coeffs:
+        coeffs = np.zeros((uplim+1))            
     for ii in range(uplim+1):
-        hsum += insum(order,ii,axis)
+        if return_coeffs:
+            coeffs[ii] = np.math.factorial(order)*insum(order,ii,1)
+        hsum += insum(order,ii,axis,center=center)
         
     herm = np.math.factorial(order)*hsum
-    return herm
+    if return_coeffs:
+        return coeffs
+    else:
+        return herm
     
 def gauss_herm1d(axis,sigma,center=0,hg=1,h0=0,h3=0,h4=0):
     """ Function for fitting to a 1d gauss hermite with orders 0,3, and 4
@@ -1291,7 +1308,7 @@ def gauss_herm1d(axis,sigma,center=0,hg=1,h0=0,h3=0,h4=0):
                     h4*hermite(4,axis,sigma,center))
     return gh1d
     
-def gauss_herm2d(xarr, yarr, params, weights, mx_ord=4, skip_ords=[(0,1),(1,0),(0,2),(2,0)], ord2diff=True, return_profile=False, empirical_norm=True):
+def gauss_herm2d(xarr, yarr, params, weights, mx_ord=4, skip_ords=[(0,1),(1,0),(0,2),(2,0)], ord2diff=True, return_profile=False, return_norm=False, force_norm=False):
     """ 2D gauss-hermite polynomials using lmfit.Parameters() object or array
         Maximum hermite order can be adjusted (m+n <= mx_ord)
         Also allow order to be skipped - by default skip corrections to center, std
@@ -1317,19 +1334,24 @@ def gauss_herm2d(xarr, yarr, params, weights, mx_ord=4, skip_ords=[(0,1),(1,0),(
         print "Invalid parameter input format to 'gauss_herm2d'"
         print "Must be numpy array or lmfit.Parameters() object"
         exit(0)
+    def gh_norm(sig,power,order):
+        axis = np.ones((1))
+        coeffs = hermite(order,axis,sig,return_coeffs=True)
+        integrals = np.ones((int(np.floor(order/2))+1))
+        for ii in range(len(integrals)):
+            poly = order - 2*ii
+            integrals[ii] = gauss_poly_int(poly,power,sig)
+        return np.sum(coeffs*integrals)
     xgrid, ygrid = np.meshgrid(xarr-xc, yarr-yc)
     num_ords = int(0.5*(mx_ord+1)*(mx_ord+2) - len(skip_ords) + ord2diff)
     gh_matrix = np.zeros((num_ords,)+xgrid.shape)
     ord_idx = 0
     G = np.exp(-0.5*(abs(xgrid)**power + abs(ygrid)**power)/sig**power)
-    if empirical_norm:
-        norm = np.sum(G)*np.ediff1d(xarr)[0]*np.ediff1d(yarr)[0]
+    if power != 2:
+        norm = 0
     else:
-        norm = (2*np.pi*sig**2)
-#    if power != 2:
-#        norm = 1/((2/power)**2*(sig)**(1/power)*(2*np.pi)**(2/power))
-#    print norm
-    G /= norm
+        norm = 2*np.pi*sig**2
+    normr = np.zeros((len(weights)))
     for m in range(mx_ord+1):
         for n in range(mx_ord+1):
             if m+n > mx_ord:
@@ -1339,6 +1361,11 @@ def gauss_herm2d(xarr, yarr, params, weights, mx_ord=4, skip_ords=[(0,1),(1,0),(
             Hx = hermite(m,xgrid,sig)
             Hy = hermite(n,ygrid,sig)
             gh_matrix[ord_idx] = Hx*Hy*G
+            if np.mod(m,2) == 0 and np.mod(n,2) == 0 and power != 2:
+                normx = gh_norm(sig,power,m)
+                normy = gh_norm(sig,power,n)
+                norm += (normx*normy)
+                normr[ord_idx] = norm
             ord_idx += 1
     if ord2diff and (0,2) in skip_ords and (2,0) in skip_ords:
         ### Move (2,0) and (0,2) difference to 2nd position
@@ -1349,11 +1376,37 @@ def gauss_herm2d(xarr, yarr, params, weights, mx_ord=4, skip_ords=[(0,1),(1,0),(
         Hy02 = hermite(2,ygrid,sig)
         gh20 = (Hx20*Hy20-Hx02*Hy02)*G
         gh_matrix[1] = gh20
+    if force_norm:
+#        print "force norm =", np.dot(normr, weights)
+        ### analytic, but seems to be off - need to recalculate...
+        analytic = True
+        if analytic:
+            gh_matrix /= np.dot(normr, weights)
+        ### empricial norm - resolution/window limited...
+        else:
+            dx, dy = xarr[1]-xarr[0], yarr[1]-yarr[0]
+            gh_matrix /= (np.sum(gh_matrix)*dx*dy)
+    else:
+        gh_matrix /= norm
     if return_profile:
         profile = np.zeros((xgrid.size, num_ords))
         for i in range(num_ords):
             profile[:,i] = np.ravel(gh_matrix[i])
         return profile
+    elif return_norm:
+#        print normr
+#        print weights
+#        print norm
+#        print "Analytical norm:", np.dot(normr,weights)/norm
+        if weights.ndim == 1:
+            weights = weights.reshape((len(weights),1))
+        if weights.size != num_ords:
+            print "Weights matrix is wrong size {} for number of orders {}".format(weights.size,num_ords)
+            exit(0)
+#        print "Empirical norm:", np.sum(np.dot(gh_matrix.T,weights).T[0])
+#        print ""
+#        time.sleep(2)
+        return np.dot(normr,weights)/norm
     else:
         if weights.ndim == 1:
             weights = weights.reshape((len(weights),1))
@@ -1373,11 +1426,10 @@ def lorentz(xarr, yarr, params):
 def lorentz_int(params, lims):
     xc, yc, q, PA, sig = params
 
-def lorentz_for_ghl(data, params, norm, cpad):
+def lorentz_for_ghl(data, center_ref, params, norm, cpad):
     xc, yc = params['xc'].value, params['yc'].value
     sigl, ratio = abs(params['sigl'].value), params['ratio'].value
-    hc = int(np.round(xc))
-    vc = int(np.round(yc))
+    hc, vc = center_ref
     xarr = np.arange(hc-cpad,hc+cpad+1)
     yarr = np.arange(vc-cpad,vc+cpad+1)
     xgrid, ygrid = np.meshgrid(xarr-xc, yarr-yc)
@@ -2369,6 +2421,30 @@ def centroid(image,view_plot=False):
         plt.plot(Mx/A,My/A,'bo')
         plt.show()
         plt.close()
+    ### Testing radius weighted
+    ### Get rid of this part once all is settled
+#    xc, yc = Mx/A, My/A
+#    xcarr = np.linspace(xc-2,xc+2,100)
+#    ycarr = np.linspace(yc-2,yc+2,100)
+##    xgrid, ygrid = np.meshgrid(xcarr, ycarr)
+##    rcgrid = xgrid**2 + ygrid**2
+#    immom_min = 1e100
+#    xmin, ymin = 1000, 1000
+#    for xx in range(len(xcarr)):
+#        print xx
+#        for yy in range(len(ycarr)):
+#            rarr = make_rarr(np.arange(image.shape[1]),np.arange(image.shape[0]),xcarr[xx], ycarr[yy])
+#            immom = np.sum(rarr*image)
+#            if immom < immom_min:
+#                immom_min = 1.0*immom
+#                xmin, ymin = xcarr[xx], ycarr[yy]
+#    print "Old method", xc, yc
+#    print "New method", xmin, ymin
+#    plt.imshow(image,interpolation='none')
+#    plt.plot(xc,yc,'r.')
+#    plt.plot(xmin,ymin,'bo')
+#    plt.show()
+#    plt.close()
     return [Mx/A, My/A]
     
 def kolmogorov(y1,y2):
@@ -2381,17 +2457,37 @@ def kolmogorov(y1,y2):
     else:
         print("input arrays must be same length")
         exit(0)
+
+def get_xy_rot(xin, yin, angle, cntr = [0,0]):
+    xc, yc = cntr
+    xrot = (xin-xc)*np.cos(angle) - (yin-yc)*np.sin(angle)
+    yrot = (xin-xc)*np.sin(angle) + (yin-yc)*np.cos(angle)
+    return xrot, yrot
         
-def plot_circle(center,radius,q=1,PA=0):
+def plot_circle(center,radius,q=1,PA=0,lw=2,color='r'):
     """ Plots a circle with defined center and radius (option to turn into
         an ellipse).  Center format is [xc,yc]
     """
     xc = center[0]
     yc = center[1]
-    xvals = np.linspace(xc-radius,xc+radius,300)
-    arc = np.sqrt(radius**2-(xvals-xc)**2)
-    plt.plot(xvals,yc+arc,'r',linewidth=2)
-    plt.plot(xvals,yc-arc,'r',linewidth=2)
+    xvals = np.linspace(xc-radius/np.sqrt(q),xc+radius/np.sqrt(q),600)
+    arc = np.sqrt(q**2*radius**2-q*(xvals-xc)**2)
+    yup = yc + arc
+    ylw = yc - arc
+#    if q != 1 and PA != 0:
+#        xprime = np.linspace(-radius/np.sqrt(q),radius/np.sqrt(q),300)
+#        yprime = 
+#    
+#    print PA/np.pi*180
+    xrot1, yupr = get_xy_rot(xvals, yup, PA, cntr=center)
+    xrot2, ylwr = get_xy_rot(xvals, ylw, PA, cntr=center)
+    plt.plot(xrot1+xc,yupr+yc,color,linewidth=lw)
+    plt.plot(xrot2+xc,ylwr+yc,color,linewidth=lw)
+#    xpl = np.linspace(xc-4*radius, xc+4*radius, 100)
+#    ypl = yc+(xpl-xc)*np.tan(PA)
+#    ypl[ypl < yc-20] = np.nan
+#    ypl[ypl > yc+20] = np.nan
+#    plt.plot(xpl, ypl,'w')
     return
     
 def plot_3D(image,x=None,y=None):

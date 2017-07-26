@@ -883,111 +883,100 @@ def convert_params(params, idx, pord):
         rats[o] = params['ratio{}'.format(o)].value
     params_out.add('sig', value = np.poly1d(sigs)(hscale), vary=0)
     params_out.add('power', value = np.poly1d(pows)(hscale), vary=0)
-    params_out.add('sigl', value = np.poly1d(sigls)(hscale))
-    params_out.add('ratio', value = np.poly1d(rats)(hscale))
+    params_out.add('sigl', value = np.poly1d(sigls)(hscale), min=params_out['sig'].value/2, max=params_out['sig'].value*10)
+    params_out.add('ratio', value = np.poly1d(rats)(hscale), min=0, max=1)
     return params_out
 
 def init_params(hcenters, vcenters, s_coeffs, p_coeffs, pord, r_guess=None, s_guess=None, bg_arr=None):
     params_in = lmfit.Parameters()
     for i in range(len(hcenters)):
-        params_in.add('xc{}'.format(i), value = hcenters[i], min=hcenters[i]-0.5, max=hcenters[i]+0.5)
-        params_in.add('yc{}'.format(i), value = vcenters[i], min=vcenters[i]-0.5, max=vcenters[i]+0.5)
+        params_in.add('xc{}'.format(i), value = hcenters[i])#, min=hcenters[i]-1.0, max=hcenters[i]+1.0)
+        params_in.add('yc{}'.format(i), value = vcenters[i])#, min=vcenters[i]-1.0, max=vcenters[i]+1.0)
         if bg_arr is None:
-            params_in.add('bg{}'.format(i), value = 0.00001)
+            params_in.add('bg{}'.format(i), value = 1e-6, min=0)
         else:
             params_in.add('bg{}'.format(i), value = bg_arr[i])
     if r_guess is None:
-        r_guess = [0, 0, 0.95]
+        r_guess = [0, 0, 1]#fix at 10.95]
     if s_guess is None:
         s_guess = [0, 0, 2*s_coeffs[-1]]
     for o in range(pord+1):
         params_in.add('sigma{}'.format(o), value=s_coeffs[o], vary=0)
         params_in.add('power{}'.format(o), value=p_coeffs[o], vary=0)
-        params_in.add('sigl{}'.format(o), value=s_guess[o])
-#        if o == pord:
-#            params_in.add('ratio{}'.format(o), value=r_guess[o], min=0.8, max=1.0)
-#        else:
-        params_in.add('ratio{}'.format(o), value=r_guess[o])
+        ### For now, fix lorentz at zero (ratio=1)
+        params_in.add('sigl{}'.format(o), value=s_guess[o], vary=0)
+        params_in.add('ratio{}'.format(o), value=r_guess[o], vary=0)
     return params_in
     
-def get_ghl_profile(ncenters, params, weights, pord, cpad, return_model=False, no_convert=False):
-    hcenters, vcenters = update_centers(params, ncenters)
-    ghl_profile = np.zeros(((2*cpad+1)**2*len(hcenters),weights.size))
-    hscale = (hcenters-1024)/2048
-    ws = int((weights.size-len(hcenters))/(pord+1))
-    ### Weights array is divided into normalization factor (which varies per
-    ### hcenter) and shape parameters (which we will smooth with a polynomial)
-    w0s = weights[0:len(hcenters)]
-    wpolys = weights[len(hcenters):].reshape((11,pord+1))
-    for i in range(len(hcenters)):
-        hc = int(np.round(hcenters[i]))
-        vc = int(np.round(vcenters[i]))
+def get_ghl_profile(icenters, params, weights, pord, cpad, return_model=False, no_convert=False, force_norm=False):
+    ncenters = len(icenters[0])
+    ghl_profile = np.zeros(((2*cpad+1)**2*ncenters,weights.size))
+    hscale = (icenters[0]-1024)/2048
+    ws = 12
+    for i in range(ncenters):
+        hc = int(np.round(icenters[0][i]))
+        vc = int(np.round(icenters[1][i]))
         xarr = np.arange(hc-cpad,hc+cpad+1)
         yarr = np.arange(vc-cpad,vc+cpad+1)
         ### Assign nonlinear parameters
-        if not no_convert:
-            params1 = convert_params(params, i, pord)
-        else:
+        if no_convert:
             params1 = params
-        sub_weights = np.zeros((12,1))
-        sub_weights[0] = w0s[i]
-        for j in range(1,12):
-            sub_weights[j] = np.poly1d(wpolys[j-1])(hscale[i])
-#        if i == 0:
-#            print "start GH"
-#            print params1
-#            print sub_weights
-#            print xarr, yarr
-#        print params1['sigl'].value
-#        print i, sub_weights
-#        sub_weights /= sub_weights[0] ## Normalize...
-        profile = params1['ratio'].value*sf.gauss_herm2d(xarr, yarr, params1, sub_weights, return_profile=True)
-#        model = sf.gauss_herm2d(xarr, yarr, params1, sub_weights)
-#        print np.sum(model), params1['ratio'].value, params1['sigl'].value
-#        if i == 0:
-#            print profile
-#            print "end GH"
-        ghl_profile[(2*cpad+1)**2*i:(2*cpad+1)**2*(i+1),i] = profile[:,0]
-        lh = len(hcenters)
+        else:
+            params1 = convert_params(params, i, pord)
+        sub_weights = update_weights_arr(weights, hscale[i], pord)
+        profile = params1['ratio'].value*sf.gauss_herm2d(xarr, yarr, params1, sub_weights, return_profile=True, force_norm=force_norm)
         for p in range(pord+1):
-            ghl_profile[(2*cpad+1)**2*i:(2*cpad+1)**2*(i+1),lh+ws*p:lh+ws*(p+1)] = profile[:,1:]*(hscale[i]**(pord-p))
+            ghl_profile[(2*cpad+1)**2*i:(2*cpad+1)**2*(i+1),ws*p:ws*(p+1)] = profile*(hscale[i]**(pord-p))
     if return_model:
-        return np.dot(ghl_profile,weights).reshape(len(hcenters),(2*cpad+1),(2*cpad+1))
+        return np.dot(ghl_profile,weights).reshape(ncenters,(2*cpad+1),(2*cpad+1))
     else:
         return ghl_profile
     
-def get_data_minus_lorentz(data, ncenters, params, weights, pord, cpad, return_lorentz=False, no_convert=False):
+def get_data_minus_lorentz(data, icenters, params, weights, pord, cpad, return_lorentz=False, no_convert=False):
     """ data is from get_arrays_for_fitting"""
-#    hcenters, vcenters = update_centers(params, ncenters)
+    ncenters = len(icenters[0])
     lorentz_arr = np.zeros((data.shape))
     data_minus_lorentz = 1.0*data
     for i in range(ncenters):
-#        xarr = np.arange(int(hcenters[i])-cpad,int(hcenters[i])+cpad+1)
-#        yarr = np.arange(int(vcenters[i])-cpad,int(vcenters[i])+cpad+1)
         if not no_convert:
             params1 = convert_params(params, i, pord)
 #            if i == 0:
 #                print params1, weights[i]
-            lorentz = sf.lorentz_for_ghl(data[i], params1, weights[i], cpad)
-            data_minus_lorentz[i] -= lorentz
+            icenter = (icenters[0][i], icenters[1][i])
+            lorentz = sf.lorentz_for_ghl(data[i], icenter, params1, 1, cpad)
+            data_minus_lorentz[i] -= (lorentz+params1['bg'].value)
             lorentz_arr[i] = lorentz
         else:
             params1 = params
-            lorentz = sf.lorentz_for_ghl(data, params1, weights[i], cpad)
-            data_minus_lorentz -= lorentz
+            icenter = (icenters[0][i], icenters[1][i])
+            lorentz = sf.lorentz_for_ghl(data, icenter, params1, 1, cpad)
+            data_minus_lorentz -= (lorentz+params1['bg'].value)
             lorentz_arr = lorentz
     if return_lorentz:
         return lorentz_arr
     else:
         return data_minus_lorentz
 
-#def ghl_residuals(params, data, invar, ncenters, weights, pord, cpad):
-def ghl_residuals(params, arc, readnoise, scale_arr, ncenters, weights, pord, cpad):
-    hcenters, vcenters = update_centers(params, ncenters)
-    data, invar = get_fitting_arrays(arc, hcenters, vcenters, pord, cpad, readnoise, scale_arr=scale_arr)
-    gh_model = get_ghl_profile(ncenters, params, weights, pord, cpad, return_model=True)
-    data_lorentz = get_data_minus_lorentz(data, ncenters, params, weights, pord, cpad)
-    return np.ravel((gh_model-data_lorentz)**2*invar)
+def ghl_residuals(params, arc, readnoise, scale_arr, icenters, weights, pord, cpad):
+#    try:
+#        itr += 1
+#    except:
+#        global itr
+#        itr = 0
+#    ta = time.time()
+#    hcenters, vcenters = update_centers(params, ncenters)
+    data, invar = get_fitting_arrays(arc, icenters[0], icenters[1], pord, cpad, readnoise, scale_arr=scale_arr)
+#    tb = time.time()
+#    print "ITERATION", itr
+#    print "get_fitting_arrays time=", tb-ta
+    gh_model = get_ghl_profile(icenters, params, weights, pord, cpad, return_model=True, force_norm=True)
+#    tc = time.time()
+#    print "get_ghl_profile time =", tc-tb
+    data_lorentz = get_data_minus_lorentz(data, icenters, params, weights, pord, cpad)
+#    td = time.time()
+#    print "get_data_minus_lorentz time =", td-tc, "\n"
+#    print np.sum(np.ravel((gh_model-data_lorentz)**2*invar))
+    return np.ravel((data_lorentz-gh_model)**2*invar)
     
 def update_centers(params, cnt):
     hcenters = np.zeros((cnt))
@@ -996,6 +985,31 @@ def update_centers(params, cnt):
         hcenters[i] = params['xc{}'.format(i)].value
         vcenters[i] = params['yc{}'.format(i)].value
     return hcenters, vcenters
+
+#def update_scale_arr(scale_old, params, weights, pord, cpad):
+#    scale_arr = np.ones((len(scale_old)))
+#    hcenters, vcenters = update_centers(params, len(scale_old))
+#    for i in range(len(scale_arr)):
+#        params1 = convert_params(params, i, pord)
+#        hscale = (hcenters[i]-1024)/2048
+#        weightsi = update_weights_arr(weights, hscale, pord)
+#        hc = int(np.round(hcenters[i]))
+#        vc = int(np.round(vcenters[i]))
+#        xarr = np.arange(hc-cpad,hc+cpad+1)
+#        yarr = np.arange(vc-cpad,vc+cpad+1)
+#        scale_arr[i] = sf.gauss_herm2d(xarr, yarr, params1, weightsi, return_norm=True)
+#    scale_arr = scale_old*scale_arr
+##    print scale_old[0], scale_arr[0]
+#    return scale_arr
+    
+def update_weights_arr(weights, hscale, pord, ypix=2048):
+    """ Finds weights at a particular point from polynomial fit array
+    """
+    weightsi = np.zeros(12)
+    ows = np.reshape(weights, (pord+1, 12)).T
+    for k in range(0,12):
+        weightsi[k] = np.poly1d(ows[k])(hscale)
+    return weightsi
         
 def fit_ghl_psf(arc, hcenters, vcenters, s_coeffs, p_coeffs, readnoise, gain, pord=2, cpad=4, plot_results=False, verbose=False, return_centers=False):
     """ Fits the PSF for the raw image (should be an arc frame or similar) to
@@ -1007,104 +1021,105 @@ def fit_ghl_psf(arc, hcenters, vcenters, s_coeffs, p_coeffs, readnoise, gain, po
     """
     ### Initialize arrays to house fitted parameters
     ncenters = len(hcenters)
-    norm_weights = np.zeros((ncenters)) ### GH (0,0) - overall norm
-    other_weights = np.zeros((pord+1,11)) ### GH weights
+    other_weights = np.zeros((12, pord+1)) ### GH weights
     all_params = np.zeros((pord+1,2)) ### Lorentz nonlinear parameters
     ### Initialize while loop - iterate between nonlinear, linear fits until convergence
     chi2 = 0
     chi2old = 1
     chi2_min = 1000
-    mx_iter = 100
+    mx_iter = 200
     itr = 0
     params = init_params(hcenters, vcenters, s_coeffs, p_coeffs, pord)
     data, invar, scale_arr = get_fitting_arrays(arc, hcenters, vcenters, pord, cpad, readnoise, return_scale_arr=True)
-    weights = np.zeros((ncenters+(pord+1)*11,1))
-    ### Set initial normalization guess
-    for i in range(ncenters):
-        weights[i] = np.sum(data[i])
-    ### Set default scaling to prevent runaway fitting in while loop
-#    dscale = 1.0*weights[0:ncenters].reshape((ncenters,))
+    ### fix initial centers in a new variable
+    ihcenters, ivcenters = 1.0*hcenters, 1.0*vcenters
+    icenters = np.vstack((ihcenters, ivcenters))
+    weights = np.zeros(((pord+1)*12,1))
+    weights[12*2] = 1 ### initially set all to a pure Gaussian
     t0 = time.time()
+    kws = dict()
+    nvars = 3*len(hcenters)+6 #+6 for lorentz components
+    kws['maxfev'] = 1*(nvars+1)
     while abs(chi2-chi2old) > 0.001 and itr < mx_iter:
         if verbose:
             print "Iteration {}".format(itr)
-            print "  Delta chi^2:", abs(chi2-chi2old)
+#            print "  Delta chi^2:", abs(chi2-chi2old)
         chi2old = 1.0*chi2
-#        hcenters, vcenters = update_centers(params, ncenters)
-#        data, invar = get_fitting_arrays(arc, hcenters, vcenters, pord, cpad, readnoise, scale_arr=scale_arr)
-#        args = (data, invar, ncenters, weights, pord, cpad)
-        args = (arc, readnoise, scale_arr, ncenters, weights, pord, cpad)
+        args = (arc, readnoise, scale_arr, icenters, weights, pord, cpad)
         ta = time.time()
-        results = lmfit.minimize(ghl_residuals, params, args=args)
+        results = lmfit.minimize(ghl_residuals, params, args=args, **kws)
         if verbose:
             tb = time.time()
             print "  Nonlinear time = {}".format(tb-ta)
         params = results.params
-        hcenters, vcenters = update_centers(params, ncenters)
-        data, invar = get_fitting_arrays(arc, hcenters, vcenters, pord, cpad, readnoise, scale_arr=scale_arr)
-        data_lorentz = get_data_minus_lorentz(data, ncenters, params, weights, pord, cpad)
-        profile = get_ghl_profile(ncenters, params, weights, pord, cpad)
+        data, invar = get_fitting_arrays(arc, ihcenters, ivcenters, pord, cpad, readnoise, scale_arr=scale_arr)
+        data_lorentz = get_data_minus_lorentz(data, icenters, params, weights, pord, cpad)
+        profile = get_ghl_profile(icenters, params, weights, pord, cpad, force_norm=True)
+        model = np.dot(profile, weights)
         weights, chi2 = sf.chi_fit(np.ravel(data_lorentz),profile,np.ravel(invar))
+        profile_norm = get_ghl_profile(icenters, params, weights, pord, cpad, force_norm=True)
+        model = np.dot(profile_norm, weights)
+        model = model.reshape((len(hcenters),(2*cpad+1),(2*cpad+1)))
+        lorentzs = get_data_minus_lorentz(data, icenters, params, weights, pord, cpad, return_lorentz=True)
+        model += lorentzs
+        datans, invarns = get_fitting_arrays(arc, ihcenters, ivcenters, pord, cpad, readnoise, scale_arr=np.ones(hcenters.shape))
+        mprof = np.zeros(((2*cpad+1)**2*len(hcenters),len(hcenters)))
+        for k in range(len(hcenters)):
+            ind1 = (2*cpad+1)**2*k
+            ind2 = (2*cpad+1)**2*(k+1)
+            mprof[ind1:ind2,k] = np.ravel(model[k])
+        scale_arr, jnkchi2 = sf.chi_fit(np.ravel(datans), mprof, np.ravel(invarns))
         if verbose:
             tc = time.time()
             print "  Linear time = {}".format(tc-tb)
         if verbose:
             print "  chi^2 new = {}".format(chi2)
-#        scc = 1.0*weights[0:ncenters]
-#        ### Prevent runaway fits
-#        scc[scc>1.5] = 1
-#        scc[scc<0.5] = 1
-#        scale_arr /= scc
-        ### Prevent scales from wandering too far from original data scale
-#        scale_ok = weights[0:ncenters] < 1.5
-#        scale_arr = scale_arr*scale_ok + dscale*(1-scale_ok)
         if chi2 < chi2_min:
             chi2_min = chi2
-            norm_weights = weights[0:ncenters]
-            other_weights = weights[ncenters:].reshape((11,pord+1))
+            other_weights = weights.reshape((12,pord+1))
             for o in range(pord+1):
                 all_params[o,0] = params['sigl{}'.format(o)].value
                 all_params[o,1] = params['ratio{}'.format(o)].value
-#        weights[0:ncenters] = 1.0*np.ones(scale_arr.shape) ### always re-scale data so this is true(ish)
+            chi2r = chi2_min/(data.size-3*len(hcenters)-6-12*(pord+1))
         itr += 1
     tf = time.time()
     if verbose:
         print "Total fitting time = {}s".format(tf-t0)
     hcenters, vcenters = update_centers(params, ncenters)
     if plot_results:
+#        hscale = (hcenters-1024)/2048
+#        print "Plotting weight fits"
+#        for j in range(other_weights.shape[0]):            
+#            wfit = np.poly1d(other_weights[j])(hscale)
+#            plt.plot(hcenters, wfit)
+#            plt.show()
+#            plt.close()
+#        print "Plotting sigl, ratio"
+#        slfit = np.poly1d(all_params[:,0])(hscale)
+#        rfit = np.poly1d(all_params[:,1])(hscale)
+#        plt.plot(hcenters, slfit)
+#        plt.show()
+#        plt.close()
+#        plt.plot(hcenters, rfit)
+#        plt.show()
+#        plt.close()
 #        print data
 #        print hcenters, vcenters
 #        print params
 #        print weights
 #        print pord
 #        print cpad
-        lorentzs = get_data_minus_lorentz(data, ncenters, params, weights, pord, cpad, return_lorentz=True)
+        lorentzs = get_data_minus_lorentz(data, icenters, params, weights, pord, cpad, return_lorentz=True)
         for i in range(ncenters):
-            gh_model = get_ghl_profile(ncenters, params, weights, pord, cpad, return_model=True)[i]
-            weightsi = np.zeros(12)
-            weightsi[0] = weights[i]
-            ows = np.reshape(weights[ncenters:], (11, pord+1))
-            for k in range(1,12):
-                weightsi[k] = np.poly1d(ows[k-1])((hcenters[i]-1024)/2048)
-#            print weightsi
-#            params1 = convert_params(params, i, pord)
-#            print params1['ratio'].value
-#            print params1['sigl'].value
-#            print params1['power'].value
-#            print params1['sig'].value
-#            print params['xc{}'.format(i)].value, params['yc{}'.format(i)].value, params['bg{}'.format(i)].value
-#            print np.sum(lorentzs[i])/np.sum(gh_model)
+            gh_model = get_ghl_profile(icenters, params, weights, pord, cpad, return_model=True, force_norm=True)[i]
             model = gh_model + lorentzs[i] + params['bg{}'.format(i)].value
-#            print gh_model
-#            print lorentzs[i]
-#            print np.max(data[i]), np.sum(model), np.sum(gh_model)
             plt.imshow(np.hstack((data[i], model, data[i]-model)), interpolation='none')
             plt.show()
             plt.close()
     if return_centers:
-        return norm_weights, other_weights, all_params, hcenters, vcenters
+        return other_weights, all_params, hcenters, vcenters, chi2r
     else:
-        return norm_weights, other_weights, all_params
+        return other_weights, all_params, chi2r
         
 '''
 #Old way, fitting to each individual peak, rather than enforcing smoothness
