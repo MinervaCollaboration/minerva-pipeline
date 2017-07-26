@@ -1025,6 +1025,7 @@ def fit_ghl_psf(arc, hcenters, vcenters, s_coeffs, p_coeffs, readnoise, gain, po
     all_params = np.zeros((pord+1,2)) ### Lorentz nonlinear parameters
     ### Initialize while loop - iterate between nonlinear, linear fits until convergence
     chi2 = 0
+    chi2r = 0
     chi2old = 1
     chi2_min = 1000
     mx_iter = 200
@@ -1072,9 +1073,8 @@ def fit_ghl_psf(arc, hcenters, vcenters, s_coeffs, p_coeffs, readnoise, gain, po
         if verbose:
             tc = time.time()
             print "  Linear time = {}".format(tc-tb)
-        if verbose:
             print "  chi^2 new = {}".format(chi2)
-        if chi2 < chi2_min:
+        if chi2 < chi2_min and chi2 > 0:
             chi2_min = chi2
             other_weights = weights.reshape((12,pord+1))
             for o in range(pord+1):

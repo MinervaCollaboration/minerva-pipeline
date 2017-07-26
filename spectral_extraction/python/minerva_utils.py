@@ -667,7 +667,7 @@ def extract_1D(ccd, norm_sflat, multi_coeffs, form, readnoise=1, gain=1, return_
             jadj = int(np.floor(j/fact))
             yj = (j-hpix/2)/hpix
             yc_ccd[i,jadj] = j
-            xc = np.poly1d(t_coeffs[:,i])(yj)
+            xc = np.poly1d(t_coeffs[:,i])(yj) + 2
             powj = np.poly1d(p_coeffs[:,i])(yj)
             if form == 'gaussian':
                 sigj = np.poly1d(s_coeffs[:,i])(yj)
@@ -1264,6 +1264,8 @@ def fits_to_arrays(fits_files,ext=0,i2_in=False):
 def overscan_fit(overscan,pord=5,plot_fit=False):
     """ Assumes we are fitting along the vertical direction
     """
+    if overscan.size <= 1:
+        return 0
     overscan_avg = np.median(overscan, axis=1)
     vgrph = np.arange(len(overscan_avg))
     vfit = (vgrph-len(overscan_avg)/2)/len(overscan_avg)

@@ -48,6 +48,8 @@ def gaussian(axis, sigma, center=0, height=None,bg_mean=0,bg_slope=0,power=2):
         if gen_norm:
             norm = (2*sigma**power)**(1/power)*(2/power)*sp.gamma(1/power)
             height = 1/norm
+    if sigma == 0:
+        sigma = 0.0001
     gaussian = height*exp(-abs(axis-center)**power/(2*(abs(sigma)**power)))+bg_mean+bg_slope*(axis-center)
 #    print sigma, center, height, bg_mean,bg_slope,power
 #    print gaussian
@@ -954,7 +956,7 @@ def chi_fit(d,P,N,return_errors=False):
         if return_errors:
             return c, np.sqrt(np.diag(abs(err_matrix)))
         else:
-            return c, chi_min
+            return c, abs(chi_min)
 
 def fit_polynomial_coeffs(xarr,yarr,invar,order,return_errors=False):
     """ Use chi-squared fitting routine to return polynomial coefficients.
@@ -1430,8 +1432,8 @@ def lorentz_for_ghl(data, center_ref, params, norm, cpad):
     xc, yc = params['xc'].value, params['yc'].value
     sigl, ratio = abs(params['sigl'].value), params['ratio'].value
     hc, vc = center_ref
-    xarr = np.arange(hc-cpad,hc+cpad+1)
-    yarr = np.arange(vc-cpad,vc+cpad+1)
+    xarr = np.arange(hc-cpad,hc+cpad+0.9)
+    yarr = np.arange(vc-cpad,vc+cpad+0.9)
     xgrid, ygrid = np.meshgrid(xarr-xc, yarr-yc)
     return (1-ratio)*norm/(2*np.pi*sigl**2)/(1+(xgrid/sigl)**2 + (ygrid/sigl)**2)**(1.5)
 
@@ -1651,13 +1653,14 @@ def gauss_fit(xarr,yarr,invr=1,xcguess=-10,pguess=0,fit_background='y',fit_exp='
         if type(invr) == int:
             sigma = np.sqrt(abs(yarr))
         else:
-            sigma = np.sqrt(1/abs(invr.astype(float)))
+            sigma = np.sqrt(1/abs(invr.astype(float)+0.0001))
         ### Set initial guess values
         if type(pguess) == int:
             #background mean initial guess: average of first two and last two points
             bg_m0 = np.mean([yarr[0:2],yarr[-3:-1]])
             #background slope initial guess: slope between avg of first two and last two
-            bg_s0 = (np.mean(yarr[0:2])-np.mean(yarr[-3:-1]))/(np.mean(xarr[0:2])-np.mean(xarr[-3:-1]))
+            #bg_s0 = (np.mean(yarr[0:2])-np.mean(yarr[-3:-1]))/(np.mean(xarr[0:2])-np.mean(xarr[-3:-1]))
+            bg_s0 = 0
             #height guess - highest point
             h0 = np.max(yarr)-bg_m0*(fit_background=='y')
             #center guess - x value at index of highest point

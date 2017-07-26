@@ -217,11 +217,15 @@ else:
     hcenters = arc_pos[idx].astype(float)
     hscale = (hcenters-actypix/2)/actypix
     shft = int(np.mod(ts_num+1,4))
+    if ts_num == 3:
+        idx += 1 ### shift for traces, skip first for T4
     vcenters = np.poly1d(trace_coeffs[:,4*idx+shft])(hscale) + 2 ##have some mistake messing up vcenters, need offset of 2, but don't know why :(
     sigmas = np.poly1d(trace_sig_coeffs[:,4*idx+shft])(hscale)
     powers = np.poly1d(trace_pow_coeffs[:,4*idx+shft])(hscale)
     s_coeffs = trace_sig_coeffs[:,4*idx+shft]
     p_coeffs = trace_pow_coeffs[:,4*idx+shft]
+    if ts_num == 3:
+        idx -= 1 ### shift index back so it matches other telescope formats
     if args.verbose:
         print("Running PSF Fitting on trace {}".format(idx))
     if args.psf is 'bspline':
