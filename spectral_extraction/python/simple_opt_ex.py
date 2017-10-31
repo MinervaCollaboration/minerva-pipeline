@@ -147,7 +147,7 @@ def fit_trace(x,y,ccd,form='gaussian'):
 
 #hardcode in n20160115 directory
 filename = args.filename#os.path.join(data_dir,'n20160115',args.filename)
-software_vers = 'v0.2' #Later grab this from somewhere else
+software_vers = 'v0.2.1' #Later grab this from somewhere else
 
 gain = 1.3
 readnoise = 3.63
@@ -161,9 +161,12 @@ ccd = spectrum[0].data
 ypix = spec_hdr['NAXIS1']
 xpix = spec_hdr['NAXIS2']
 ### Next part checks if iodine cell is in, assumes keyword I2POSAS exists
-if spec_hdr['I2POSAS']=='in':
-    i2 = True
-else:
+try:
+    if spec_hdr['I2POSAS']=='in':
+        i2 = True
+    else:
+        i2 = False
+except KeyError:
     i2 = False
 
 actypix = 2048
