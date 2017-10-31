@@ -321,7 +321,7 @@ def numconv(y, kern):
     kwargs = {'mode':'full'}
     new = timeout(fftconvolve,(ynew,kern,),kwargs=kwargs,timeout_duration=300)
 #    new = fftconvolve(ynew, kern, mode='full')
-    if new == None: ipdb.set_trace()
+#    if new == None: ipdb.set_trace()
 
     new /= kern.sum()
     nel = len(kern)+lenex*2

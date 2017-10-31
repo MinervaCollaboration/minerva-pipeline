@@ -4,7 +4,8 @@ Created on Mon Mar 28 09:33:31 2016
 
 @author: johnjohn
 """
-
+import matplotlib
+matplotlib.use('Agg',warn = False)
 import numpy as np
 import matplotlib.pyplot as pl
 from scipy.interpolate import interp1d
@@ -36,7 +37,10 @@ class Spectrum(object):
         t = Time(self.h[0].header['DATE-OBS'], format='isot', scale='utc')
         self.jd = t.jd
 
-        self.wls = np.load('templates/MC_bstar_wls.air.npy')
+        if self.jd < 2457712.5:
+            self.wls = np.load('templates/MC_bstar_wls.air.npy')
+        else: self.wls = np.load('templates/bstar_wls_20170307_HR3799.29orders.npy')
+
         self.iodine = np.load('templates/MINERVA_I2_0.1_nm.npy')
         self.template = []
         self.ipdict = np.load('synthetic_IPs/ipdict.npy')
@@ -95,6 +99,8 @@ class Spectrum(object):
                     # starting point for solar spectrum template
                     self.template = np.append(self.template,readsav('templates/nso.sav'))
                     self.zguess = np.append(self.zguess,2.8e-4)
+                    self.active[i] = True
+                    self.nactive += 1
                 elif 'HD' in self.objname[i]:
                     with open('templates/kbcvel.ascii','rb') as fh:
                         fh.seek(1) # skip the header
@@ -125,7 +131,7 @@ class Spectrum(object):
                     self.zguess = np.append(self.zguess,(1.0+ztemp)/(1.0+self.zbc[i]) - 1.0)
             else:
                 self.zguess = np.append(self.zguess,0.0)
-            self.bstar = bstar
+        self.bstar = bstar
 
 class FourChunk(object):
     def __init__(self, spectrum, order, lpix, dpix, fixip=False, juststar=False):
@@ -208,6 +214,7 @@ class FourChunk(object):
         coef = np.array([0.00059673, 0.06555841]) # wavelength offset per trace...per order
         dwdtrace = np.polyval(coef, order) # find wavelength offset per trace for this order
         offset = np.arange(spectrum.ntel)[::-1] * dwdtrace
+        if spectrum.jd > 2457712.5: offset[:] = 0.0 # we fixed the tilt after this date
 
         # parameter properties for MPYFIT
         self.parinfo = [{'fixed':False, 'limited':(False,False), 'limits':(None, None), 'relstep':0.} for i in range(npar)]
@@ -334,8 +341,11 @@ class FourChunk(object):
         obs = self.obchunk[good,:][0].flatten()
         err = np.sqrt(obs)
 
-        bad = np.where(obs == 0)
+        bad = np.where((obs == 0) | (np.isnan(err)))
         err[bad] = float('inf')
+
+#        print (obs-model)/err
+#        ipdb.set_trace()
 
         return (obs-model)/err
 
@@ -414,7 +424,7 @@ class FourChunk(object):
         sigmasq = self.obchunk[good,:][0] # sigma = sqrt(Ncts), sigma^2 = Ncts
 
         # mask bad values
-        bad = np.where(sigmasq == 0.0)
+        bad = np.where(sigmasq <= 0.0)
         sigmasq[bad] = float('inf')
 
         chisq = np.sum(self.resid**2/sigmasq,axis=1)
@@ -425,6 +435,10 @@ class FourChunk(object):
         self.chisq = chisq
         self.redchi = redchi
         self.chi = np.sqrt(redchi) # sqrt(chi^2) =~ number of sigmas 
+
+        if len(np.where(np.isnan(self.chi))[0]) != 0:
+            ipdb.set_trace()
+
 
         wav = np.append(np.append(-1, self.xchunk), 1) * pfit[2] + pfit[1]
         dV = np.median(wav - np.roll(wav,-1))/wav * self.c
@@ -474,6 +488,9 @@ def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
             ch = FourChunk(spectrum, Ord, Pix, dpix)
 
             chind = j+i*npix
+            
+            if chind >= 270: ipdb.set_trace()
+
             chrec[chind].pixel = Pix
             chrec[chind].order = Ord
 #            chrec[chind].bp = bp
@@ -491,6 +508,7 @@ def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
             if ch.nactive == 0: continue
 
             mod, bp = ch.mpfitter() # Full fit
+
 #            try: mod, bp = ch.mpfitter() # Full fit
 #            except: return # no template for observation
 
@@ -512,27 +530,43 @@ def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
                 exec("chrec[chind].wt%s    = ch.weight[tel]" % (ii+1))
                 exec("chrec[chind].chi%s   = ch.chi[tel]" % (ii+1))
                 tel+=1
-                
+
             if plot:
                 col = ['b', 'g', 'y', 'r']
                 
                 tel = 0
                 for ii in range(ch.ntel):
                     if not ch.active[ii]: continue
-                    wav = bp[1+tel*parspertrace] + bp[2+tel*parspertrace]*np.arange(mod.shape[1])
+
+                    if len(mod.shape) == 1: npixperchunk = mod.shape[0] 
+                    else: npixperchunk = mod.shape[1]
+
+                    wav = bp[1+tel*parspertrace] + bp[2+tel*parspertrace]*np.arange(npixperchunk)
                     pl.plot(wav, ch.obchunk[ii, :], col[ii]+'.')
-                    pl.plot(wav, mod[ii, :], col[ii])
-                    pl.plot(wav, ch.resid[ii, :]+0.6*mod.flatten().min(), col[ii]+'.')
+
+                    if len(mod.shape) == 1:
+                        pl.plot(wav, mod[:], col[ii])
+                    else:
+                        pl.plot(wav, mod[tel, :], col[ii])
+                    pl.plot(wav, ch.resid[tel, :]+0.6*mod.flatten().min(), col[ii]+'+')
+#                    pl.show()
                     tel+=1
 
                 pl.xlabel('Wavelength [Ang]')
                 pl.ylabel('Flux [cts/pixel]')
                 pl.xlim((wav.min(), wav.max()))
-                pl.show()
+                pngname = os.path.splitext(obsname)[0]+'.' + str(chind).zfill(3) + '.png'
+                pl.savefig(pngname)
+#                pl.show()
+
+
             #charr[j, i] = ch
             if printit:
                 print 'chi^2 = ', ch.chi
-                if len(np.where(np.isnan(ch.chi))[0]) != 0: ipdb.set_trace()
+                if len(np.where(np.isnan(ch.chi))[0]) != 0:
+                    ipdb.set_trace()
+#                    nans_rep = np.isnan(ch.chi)
+#                    ch.chi[nans_rep] = 0
                 end = timer()
                 print 'Chunk time: ', (end-chstart), 'seconds'
                 
@@ -620,49 +654,63 @@ def globgrind(globobs, bstar=False, returnfile=False, printit=False,plot=False,r
                     print ofile, h[0].header['I2POSAS']
     return ofarr
 
-def globgrindall(shuffle=False):
-    datadirs = glob(getpath() + '*')
+def globgrindall(shuffle=False, plot=False):
+    datadirs = glob(getpath() + 'n2017*')
+    datadirs.sort()
+    datadirs.reverse()
+    datadirs[0] = '/Data/kiwispec-proc/n20171017'
     if shuffle: random.shuffle(datadirs)
     for datadir in datadirs:
-        ofarr = globgrind(datadir + '/*daytimeSky*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
-        ofarr = globgrind(datadir + '/*HD*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
-        ofarr = globgrind(datadir + '/*HR*.proc.fits', bstar=True, returnfile=False, printit=True, plot=False)
-#        ofarr = globgrind(datadir + '/*HD122064*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
+#        ofarr = globgrind(datadir + '/*daytimeSky*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False, redo=True)
+#        ofarr = globgrind(datadir + '/*HD*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
+#        ofarr = globgrind(datadir + '/*HR*.proc.fits', bstar=True, returnfile=False, printit=True, plot=False)
+#        ofarr = globgrind(datadir + '/*HD122064*.proc.fits', bstar=False, returnfile=False, printit=True, plot=True)#False)
 #        ofarr = globgrind(datadir + '/*HD185144*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
 #        ofarr = globgrind(datadir + '/*daytimeSky*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
+#        ofarr = globgrind(datadir + '/*HD97601*.proc.fits', bstar=False, returnfile=False, printit=True, plot=True)
+
+#       ofarr = globgrind(datadir + '/n20170607.HD142245*.proc.fits', bstar=False, returnfile =False, printit=True, plot=False)
+#       ofarr = globgrind(datadir + '/n20170628.HD97601*.proc.fits', bstar=False, returnfile=False, printit=True, plot= False)
+        ofarr = globgrind(datadir + '/*HD217107*.proc.fits', bstar=False, returnfile=False, printit=True, plot=plot)
+
+#        ofarr = globgrind(datadir + '/*HD*.proc.fits', bstar=False, returnfile=False, printit=True, plot=True)#False)
+
 
 #ofarr = globgrind('/Data/kiwispec-proc/n20160212/n20160212.HD191408A.0017.proc.fits',bstar=False,returnfile=False,printit=True,plot=False)
+
+#ofarr = globgrind('/Data/kiwispec-proc/n20170411/n20170411.HD97601.0037.proc.fits',bstar=False,returnfile=False,printit=True,plot=False)
 
 #globgrind('/Data/kiwispec-proc/n20160606/n20160606.HD122064.0015.proc.fits',bstar=False, returnfile=False, printit=True, plot=False)
 #ipdb.set_trace()
 
 
 
-globgrindall(shuffle=True)
-ipdb.set_trace()
+if __name__ == "__main__":
 
 
+    globgrindall(shuffle=False)#True)
+    ipdb.set_trace()
 
-'''
-# a quality set of daytime sky spectra
-globobs = getpath(night='n20160305') + '/n20160305.daytimeSky.008*.proc.fits'
-ofarr = globgrind(globobs, bstar=False, returnfile=False, printit=True, plot=True)
-ipdb.set_trace()
+    # a quality set of daytime sky spectra
+    globobs = getpath(night='n20160305') + '/n20160305.daytimeSky.008*.proc.fits'
+    ofarr = globgrind(globobs, bstar=False, returnfile=False, printit=True, plot=True)
+    ipdb.set_trace()
+    
+    # a quality spectrum of HD9407
+    globobs = getpath(night='n20160505') + '/n20160505.HD*.proc.fits'
+    ofarr = globgrind(globobs, bstar=False, returnfile=False, printit=True, plot=False)
+    ipdb.set_trace()
 
-# a quality spectrum of HD9407
-globobs = getpath(night='n20160505') + '/n20160505.HD*.proc.fits'
-ofarr = globgrind(globobs, bstar=False, returnfile=False, printit=True, plot=False)
-ipdb.set_trace()
+    # poor quality spectra (missing telescopes, etc)
+    globobs = getpath(night='n20160504') + '/n20160504.HD*.proc.fits'
+    ofarr = globgrind(globobs, bstar=False, returnfile=False, printit=True, plot=True)
+    ipdb.set_trace()
 
-# poor quality spectra (missing telescopes, etc)
-globobs = getpath(night='n20160504') + '/n20160504.HD*.proc.fits'
-ofarr = globgrind(globobs, bstar=False, returnfile=False, printit=True, plot=True)
-ipdb.set_trace()
+    # mixed quality B star spectra
+    globobs = getpath(night='n20160504') + '/n20160504.HR*.proc.fits'
+    ofarr = globgrind(globobs, bstar=True, returnfile=False, printit=True, plot=True)
+    ipdb.set_trace()
 
-# mixed quality B star spectra
-globobs = getpath(night='n20160504') + '/n20160504.HR*.proc.fits'
-ofarr = globgrind(globobs, bstar=True, returnfile=False, printit=True, plot=True)
-ipdb.set_trace()
 '''
 
 #obsname = getpath(night='n20160305') + '/n20160305.daytimeSky.0065.proc.fits'
@@ -672,11 +720,11 @@ ipdb.set_trace()
 
 
 
-ipdb.set_trace()
+#ipdb.set_trace()
 parray = getpararray(ofarr)
 #######################
 
-ipdb.set_trace()
+#ipdb.set_trace()
 
 #gfile = getpath(night='n20160323') + '/n20160323.HR4828.00*.proc.fits'
 #globobs = 'n20160323.HR4828.00*.proc.fits'
@@ -712,13 +760,13 @@ pl.xlabel('Time [hrs]')
 pl.show()
 
 #pl.plot(temp, medwr/5500.*3e8, 'o')
-pl.plot(t-t.min(), temp, 'o')
+#pl.plot(t-t.min(), temp, 'o')
 #pl.xlabel('Temperature [degrees C]')
 #pl.ylabel('Wavelength Shift [m/s]')
-pl.xlabel('Time')
-pl.ylabel('Temperature [degrees C]')
+#pl.xlabel('Time')
+#pl.ylabel('Temperature [degrees C]')
 
-pl.show()
+#pl.show()
 
 #charr = grind(ffile, bstar=True, plot=True, printit=True)
 #parr, iparr = getparr(charr)
@@ -730,7 +778,7 @@ pl.show()
 #ffile = getpath(night='n20160323') + '/n20160323.HR4828.0020.proc.fits'
 obsname = 'n20160305.daytimeSky.0065.proc.fits' #iodine
 #ffile = getpath(night='n20160305') + '/n20160305.daytimeSky.0069.proc.fits'
-wls = np.load('templates/MC_bstar_wls.air.npy')
+#wls = np.load('templates/MC_bstar_wls.air.npy')
 
 ffile = getpath(night='n20160305') + '/'+obsname
 h = fits.open(ffile)
@@ -764,3 +812,4 @@ pl.show()
 #print h[0].data[:, 13, 500:600].shape
 #h.close()
 
+'''

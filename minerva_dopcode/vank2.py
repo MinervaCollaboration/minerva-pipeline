@@ -24,7 +24,10 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
     c = 299792458.0
 
     if socket.gethostname() == 'Main':
-        filenames = glob.glob('/Data/kiwispec-proc/n20160[5,6]*/*' + objname + '*.chrec' + exten + '.npy')
+#      filenames = glob.glob('/Data/kiwispec-proc/n20160[5,6]*/*' + objname + '*.chrec' + exten + '.npy')
+       filenames = glob.glob('/Data/kiwispec-proc/n2017[09,10]*/*' + objname + '*.chrec6.npy')
+       print filenames
+
     else:
         filenames = glob.glob('/n/home12/jeastman/minerva/data/n2016051[4-9]/*' + objname + '*.chrec' + exten + '.npy') +\
             glob.glob('/n/home12/jeastman/minerva/data/n201605[2-3]?/*' + objname + '*.chrec' + exten + '.npy') +\
@@ -289,7 +292,7 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
     plt.savefig(objname + '.' + exten + '.hist.png')
     plt.close()
 
-
+    
     # plot median sigma as a function of chunk number
     for tel in range(1,ntel+1):
         match = np.where(telescope == tel)
@@ -413,10 +416,11 @@ if __name__ == "__main__":
                        
 #    filename = '/Data/kiwispec-proc/n20160524/n20160524.HD185144.0023.proc.chrec.npy'
 #    vank(filename)
-    objnames = ['HD10700','HD9407','HD62613','HD122064','HD191408A','HD185144','HD217107','daytimeSky']
+#    objnames = ['HD10700','HD9407','HD62613','HD122064','HD191408A','HD185144','HD217107','daytimeSky']
     
-    objnames = ['HD122064']#,'HD185144']#['daytimeSky','HD122064','HD185144']
+    objnames = ['HD185144']#['HD97601']['HD122064']#,'HD185144']#['daytimeSky','HD122064','HD185144'] ['HD97601']#
     for objname in objnames:
+        print objnames
         vank(objname)
     sys.exit()
 

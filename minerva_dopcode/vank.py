@@ -1,3 +1,5 @@
+import matplotlib
+matplotlib.use('Agg',warn=False)
 import numpy as np
 import os
 import glob
@@ -14,7 +16,8 @@ def vank(objname, weightthresh=1.0,chithresh=99.0, sigmaithresh=1.0):
 
     c = 299792458.0
 
-    filenames = glob.glob('/Data/kiwispec-proc/n20160[4,5,6]*/*' + objname + '*.chrec.npy')
+    #filenames = glob.glob('/Data/kiwispec-proc/n20160[4,5,6]*/*' + objname + '*.chrec.npy')
+    filenames = glob.glob('/Data/kiwispec-proc/n20170409/*' + objname + '*.chrec6.npy')
 
     nobs = len(filenames)
     if nobs <= 3: return
@@ -191,10 +194,10 @@ if __name__ == "__main__":
                        
 #    filename = '/Data/kiwispec-proc/n20160524/n20160524.HD185144.0023.proc.chrec.npy'
 #    vank(filename)
-    objnames = ['HD10700','HD9407','HD62613','HD122064','HD191408A','HD185144','HD217107','daytimeSky']
+    #objnames = ['HD10700','HD9407','HD62613','HD122064','HD191408A','HD185144','HD217107','daytimeSky']
 
     
-    objnames = ['HD122064','HD185144']
+    objnames =  ['HD97601']#['HD122064','HD185144']
     for objname in objnames:
         vank(objname)
     
