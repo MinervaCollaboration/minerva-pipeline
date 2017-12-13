@@ -1,17 +1,7 @@
-#!/usr/bin/env python 2.7
-
-#This code holds special functions that I've built that I've had a recurring
-#need to use.
-
-#Function List:
-# gaussian - builds 1-D gaussian curve
-# chi_fit - finds coefficients for linear chi-squared equation d = P*c + N
-
-#Import all of the necessary packages
 from __future__ import division
 import pyfits
 import os
-import math
+#import math
 import time
 import numpy as np
 from numpy import *
@@ -22,20 +12,30 @@ from matplotlib.colors import LinearSegmentedColormap
 #import scipy
 import scipy.stats as stats
 import scipy.special as sp
-import scipy.interpolate as si
+#import scipy.interpolate as si
 import scipy.optimize as opt
 import scipy.integrate as integrate
-import lmfit
+#import lmfit
 import scipy.sparse as sparse
 #import scipy.signal as sig
 #import scipy.linalg as linalg
 #import astropy.stats as stats
 
+"""
+#!/usr/bin/env python 2.7
+
+#This code holds special functions that I've built that I've had a recurring
+#need to use.
+
+#Import all of the necessary packages
+"""
+
+#'''
 #######################################################################
 ######################## START OF PDFS ################################
 #######################################################################
 
-def gaussian(axis, sigma, center=0, height=None,bg_mean=0,bg_slope=0,power=2):
+def gaussian(axis, sigma, center=0, height=None,bg_mean=0,bg_slope=0,power=2,askw=0,cskw=1):
     """Returns gaussian output values for a given input array, sigma, center,
        and height.  Center defaults to zero and height to 1.  Can also
        tweak the exponent parameter if desired."""
@@ -51,6 +51,10 @@ def gaussian(axis, sigma, center=0, height=None,bg_mean=0,bg_slope=0,power=2):
     if sigma == 0:
         sigma = 0.0001
     gaussian = height*exp(-abs(axis-center)**power/(2*(abs(sigma)**power)))+bg_mean+bg_slope*(axis-center)
+    divisor = (askw*axis+cskw)
+    if np.min(abs(divisor)) == 0:
+        divisor += 0.001
+    gaussian /= divisor
 #    print sigma, center, height, bg_mean,bg_slope,power
 #    print gaussian
     return gaussian
@@ -292,14 +296,14 @@ def cauchy_nd_lmfit(params, X, idx=None):
     
 
 def multi_mod_cauchy(params,X,low=0,high=np.inf):
-    ''' Multi dimensional modified cauchy pdf.
+    """Multi dimensional modified cauchy pdf.
         Form is P(x) = A/(1+((x-xc1)/a1)**2+((x-xc2)/a2)**2+...)**(n/2)
         A is determined numerically based upon provided upper and lower bounds
         params must be of form [xc1, a1, xc2, a2, ..., n]
         if len(params) is even, n is assumed to be 2.
         X is a 2d array, # rows = num components
         Order is arbitrary, but X row must be paired with correct params
-    '''
+    """
     if len(params)%2 == 1:
         n = params[-1]
     else:
@@ -840,7 +844,10 @@ def eff2d_lmfit(params, x, y, i, ab=False):
     yc = params['ycb{}'.format(i)].value
     PA = params['PAb{}'.format(i)].value
     Io = params['Ieb{}'.format(i)].value
-    gam = params['nb{}'.format(i)].value
+    try:
+        gam = params['nb{}'.format(i)].value
+    except KeyError:
+        gam = 3
     if not ab:
         q = params['qb{}'.format(i)].value    
         scl = params['reb{}'.format(i)].value
@@ -957,6 +964,35 @@ def chi_fit(d,P,N,return_errors=False):
             return c, np.sqrt(np.diag(abs(err_matrix)))
         else:
             return c, abs(chi_min)
+
+def get_std(xarr, chiarr, sigma=1, plot_results=False):
+    """ Assumes you are looking at chi2 as a fct of xarr and are near
+        the local minimum (where xarr vs chiarr is well-approximated
+        by a quadratic)
+        Can use sigma to set significance level, default returns the
+        mean and 1 sigma variation
+    """
+    ### Change to fit on interval [-1, 1]
+    mn, fctr = np.mean(xarr), (np.max(xarr)-np.min(xarr))/2
+    xscl = (xarr-mn)/fctr
+    coeffs = np.polyfit(xscl, chiarr, 2)
+    chifit = np.poly1d(coeffs)(xscl)
+    sclmin = -coeffs[1]/(2*coeffs[0])
+    xmin = sclmin*fctr + mn
+    chimin = np.poly1d(coeffs)(sclmin)
+    chisub = (chimin+sigma**2)
+    coeffs[2] -= chisub
+    x1, x2 = np.roots(coeffs)
+    x1r = np.real(x1)*fctr+xmin
+    x2r = np.real(x2)*fctr+xmin
+    xstd = abs(x1r-x2r)/2
+    if plot_results:
+        print xmin, xstd
+        plt.plot(xarr, chiarr-chisub, xarr, chifit-chisub)
+        plt.plot(xarr, np.zeros(xarr.shape), 'k', linewidth = 2)
+        plt.show()
+        plt.close()
+    return xmin, xstd
 
 def fit_polynomial_coeffs(xarr,yarr,invar,order,return_errors=False):
     """ Use chi-squared fitting routine to return polynomial coefficients.
@@ -1436,6 +1472,16 @@ def lorentz_for_ghl(data, center_ref, params, norm, cpad):
     yarr = np.arange(vc-cpad,vc+cpad+0.9)
     xgrid, ygrid = np.meshgrid(xarr-xc, yarr-yc)
     return (1-ratio)*norm/(2*np.pi*sigl**2)/(1+(xgrid/sigl)**2 + (ygrid/sigl)**2)**(1.5)
+    
+def lorentz_ellipse(center_ref, cpad, params):
+    xc, yc = params['xc'].value, params['yc'].value
+    sigl, ratio = abs(params['sigl'].value), params['ratio'].value
+    q, PA = params['q'].value, params['PA'].value
+    hc, vc = center_ref
+    xarr = np.arange(hc-cpad,hc+cpad+0.9)
+    yarr = np.arange(vc-cpad,vc+cpad+0.9)
+    rarr = make_rarr(xarr, yarr, xc, yc, q=q, PA=PA)
+    return (1-ratio)/(2*np.pi*sigl**2)/(1+(rarr/sigl)**2)**(1.5)
 
 def gh_lorentz(xarr, yarr, params, weights):
     """ Saves 2D Gauss-Hermite with Lorentz envelope
@@ -1621,7 +1667,7 @@ def plt_deltas(xarr,yarr,color='b',linewidth=1):
     plt.plot(xplt,yplt,color,linewidth=linewidth)
     return
     
-def gauss_fit(xarr,yarr,invr=1,xcguess=-10,pguess=0,fit_background='y',fit_exp='n',verbose='n'):
+def gauss_fit(xarr,yarr,invr=1,xcguess=-10,pguess=0,fit_background='y',fit_exp='n',fit_skew='n',verbose='n'):
     """3 parameter gaussian fit of the data and 2 parameter background fit
        returns 5 parameter array:
            [sigma, center, height, background mean, background slope]
@@ -1631,8 +1677,7 @@ def gauss_fit(xarr,yarr,invr=1,xcguess=-10,pguess=0,fit_background='y',fit_exp='
            [sigma, center, height, background mean, background slope, power]
        in all cases, returns the covariance matrix of parameter estimates
     """
-#    print "in gauss_fit"
-    plen = 3+2*(fit_background=='y')+1*(fit_exp=='y')
+    plen = 3+2*(fit_background=='y')+1*(fit_exp=='y')+2*(fit_skew=='y')
 #    plen = 3+1*(fit_background=='y')+1*(fit_exp=='y')
     if len(xarr)!=len(yarr):
         if verbose=='y':
@@ -1682,7 +1727,11 @@ def gauss_fit(xarr,yarr,invr=1,xcguess=-10,pguess=0,fit_background='y',fit_exp='
             sig0 = (xarr[idx2]-xarr[idx1])/2.355
 #            h0 *= (sig0*np.sqrt(2*np.pi))
             power0 = 2
-            if fit_background == 'y' and fit_exp == 'y':
+            askw0 = 0
+            cskw0 = 1
+            if fit_background == 'y' and fit_exp == 'y' and fit_skew == 'y':
+                p0 = np.array(([sig0,c0,h0,bg_m0,bg_s0,power0,askw0,cskw0]))
+            elif fit_background == 'y' and fit_exp == 'y':
                 p0 = np.array(([sig0,c0,h0,bg_m0,bg_s0,power0]))
             elif fit_background == 'y' and fit_exp == 'n':
                 p0 = np.array(([sig0,c0,h0,bg_m0,bg_s0]))
@@ -1702,6 +1751,8 @@ def gauss_fit(xarr,yarr,invr=1,xcguess=-10,pguess=0,fit_background='y',fit_exp='
 #                rightlen = len(pguess)==4
             elif fit_background == 'n' and fit_exp == 'n':
                 rightlen = len(pguess)==3
+            elif fit_background == 'y' and fit_exp == 'y' and fit_skew=='y':
+                rightlen = len(pguess)==8
             else:
                 raise ValueError('Invalid fit_background and/or fit_exp:')
                 print("Acceptable values are 'y' or 'n'.")
@@ -1840,13 +1891,6 @@ def interpolate_coeffs(coeffs,c_invars,pord,hcenters,coeff_mask,method='polynomi
         plt.close()
     return poly_coeffs, poly_errs
     
-def build_2D_action():
-    """ Function to build the profile/action matrix for 2D extraction.
-        INPUTS:
-        
-        OUTPUTS:
-    """
-    
 def extract_2D(d,A,N,return_no_conv=False):
     """ Runs 2D extraction on a sample of data.  Requires input of a 
         profile (aka. action) matrix.
@@ -1890,7 +1934,7 @@ def extract_2D(d,A,N,return_no_conv=False):
         fluxtilde = np.reshape(fluxtilde,(len(fluxtilde),))
         return fluxtilde
         
-def extract_2D_sparse(d,A,N,return_no_conv=False):
+def extract_2D_sparse(d,A,N,return_no_conv=False,return_covar=False):
     """ Runs 2D extraction on a sample of data.  Requires input of a 
         profile (aka. action) matrix.  Uses sparse matrices for calculation.
         INPUTS:
@@ -1898,6 +1942,7 @@ def extract_2D_sparse(d,A,N,return_no_conv=False):
             A - profile/action matrix (can be matrix or 2D array) (mxc)
             N - Per pixel inverse variance matrix (diagonal if independent) (mxm)
             return_no_conv - Boolean T/F.  If True, does not do reconvolution (F by default)
+            return_covar - returns covariance matrix (and resolution matrix)
         OUTPUTS:
             fluxtilde - reconvolved flux output (default when return_no_conv = False) (cx1)
             flux - non reconvolved flux output (only if return_no_conv = True) (cx1)
@@ -1911,7 +1956,9 @@ def extract_2D_sparse(d,A,N,return_no_conv=False):
     Ninv = sparse.csr_matrix(Ninv)
     ###
     Cinv = A.T*Ninv*A
+    t1 = time.time()
     U, s, Vt = linalg.svd(Cinv.todense())
+    t2 = time.time()
     Cpsuedo = Vt.T*np.matrix(np.diag(1/s))*U.T
     Cpsuedo = sparse.csr_matrix(Cpsuedo)
 #    U, s, Vt = sparse.linalg.svds(Cinv,k=np.min(Cinv.shape)-2)
@@ -1924,9 +1971,14 @@ def extract_2D_sparse(d,A,N,return_no_conv=False):
     if return_no_conv:
         flux = np.asarray(flux)
         flux = np.reshape(flux,(len(flux),))
-        return flux
+        if return_covar:
+            C = np.linalg.inv(Cinv)
+            return flux, np.diag(np.asarray(Cinv))
+        else:
+            return flux
     else:
         ### Now find reconvolution matrix
+        t3 = time.time()
         Cinv = sparse.csc_matrix(Cinv)
         f, Wt = sparse.linalg.eigs(Cinv,k=int(np.min(Cinv.shape)-2))
         F = np.matrix(np.diag(np.asarray(f)))
@@ -1946,12 +1998,23 @@ def extract_2D_sparse(d,A,N,return_no_conv=False):
 #        WtDhW = sparse.csr_matrix(WtDhW)
         WtDhW = np.matrix(WtDhW)
         R = Sinv*WtDhW
+        t4 = time.time()
+#        print "Total time = {}s".format(t4-t1)
+#        print "  SVD time = {}s".format(t2-t1)
+#        print "  Reconv time = {}s".format(t4-t3)
+#        print ""
+#        time.sleep(2)
 #        R = R.todense()
         ### Convert to final formats    
         fluxtilde = R*flux
         fluxtilde = np.asarray(fluxtilde)
         fluxtilde = np.reshape(fluxtilde,(len(fluxtilde),))
-        return fluxtilde
+        if return_covar:
+            C = np.linalg.inv((A.T*Ninv*A).todense())
+            Ctilde = R*C*R.T
+            return fluxtilde, np.diag(np.asarray(Ctilde)), R
+        else:
+            return fluxtilde
         
 def recenter_img(img,old_center,new_center):
     """ Resamples image to shift center.  Note that this assumes a sub-pixel
@@ -2059,10 +2122,13 @@ def make_rarr(x,y,xc,yc,q=1,PA=0):
         x_matrix = x
         y_matrix = y
     else:
-        x_matrix = np.tile(x,(len(y),1))
-        y_matrix = np.tile(y,(len(x),1)).T
+#        x_matrix = np.tile(x,(len(y),1))
+#        y_matrix = np.tile(y,(len(x),1)).T
+        x_matrix, y_matrix = np.meshgrid(x, y)
     x_ell = (y_matrix-yc)*np.cos(PA) + (x_matrix-xc)*np.sin(PA)
     y_ell = (x_matrix-xc)*np.cos(PA) - (y_matrix-yc)*np.sin(PA)
+    if q == 0:
+        q = 0.0001
     r_matrix = np.sqrt((x_ell)**2*q + (y_ell)**2/q)
 #    r_matrix = np.sqrt((x_ell)**2 + (y_ell)**2/q**2)
     return r_matrix
@@ -2089,7 +2155,10 @@ def cauchy_draw(n=1,params=None,lims=None):
                 x = np.random.rand()
                 ytmp = ys*np.tan(np.pi*(x-xl)) + yc
             y[i] = ytmp
-    return y
+    if n == 1:
+        return y[0]
+    else:
+        return y
 
 def gauss_draw(n=1, params=None, lims=None):
     y = np.zeros(n)
@@ -2110,7 +2179,10 @@ def gauss_draw(n=1, params=None, lims=None):
             while ytmp < lims[0] or ytmp > lims[1]:
                 ytmp = np.random.randn()*ys + yc
             y[i] = ytmp
-    return y
+    if n == 1:
+        return y[0]
+    else:
+        return y
     
 def weibull_draw(n=1, params=None, lims=None):
     y = np.zeros(n)
@@ -2131,7 +2203,10 @@ def weibull_draw(n=1, params=None, lims=None):
             while ytmp < lims[0] or ytmp > lims[1]:
                 ytmp = np.random.weibull(k)*lam
             y[i] = ytmp
-    return y
+    if n == 1:
+        return y[0]
+    else:
+        return y
 
 def pdf_draw(pdf,n=1,args=None,int_lims=None,res=1e4):
     """ Returns n values drawn from function 'pdf'.  Optional input
@@ -2601,3 +2676,45 @@ def correlation_coeff(x,y,mode='pearson',high_moments=None):
         print("Invalid mode.  Choose one of the following:\n  'pearson'\n  'spearman'")
         exit(0)
         
+def linear_interp(xnew, xarr, yarr, verbose=False):
+    """ Linearly interpolates ynew @ xnew on interval xarr """
+    if len(xarr) != 2 or len(yarr) !=2:
+        print("ERROR: xarr and yarr must be length 2 lists or arrays")
+        exit(0)
+    if xnew < xarr[0] or xnew > xarr[1]:
+        if verbose:
+            print("WARNING: xnew must be on interval [xarr[0],xarr[1]]")
+            print("Returning all zeros")
+        return np.zeros(xnew.shape)
+    slope = (yarr[1]-yarr[0])/(xarr[1]-xarr[0])
+    ynew = yarr[0] + slope*(xnew-xarr[0])
+    return ynew
+
+def re_interp(xarr, xc, xorig, fitorig):
+    """ interpolates spline fit from file onto new xgrid"""
+    xorig = 1.0*xorig + xc
+    fitout = np.zeros(xarr.shape)
+    for i in range(xarr.size):
+        idx2 = np.argmax(xorig>xarr[i])
+        if idx2 == 0:
+            idx1 = len(xorig)-1
+            idx2 = int(1.0*idx1)
+        else:
+            idx1 = idx2 -1
+        fitout[i] = linear_interp(xarr[i], [xorig[idx1], xorig[idx2]],[fitorig[idx1],fitorig[idx2]])
+    return fitout
+    
+def chi_coeffs_to_mn_std(poly_coeffs, sigma=1):
+    """ Expands a second order quadratic to find mean and Nsigma chi2
+    """
+    bq = poly_coeffs[1]
+    aq = poly_coeffs[0]
+    best_mn = -bq/(2*aq)
+#    sigma = 1 #1 standard dev, 4 = 2 std devs
+    aq = abs(aq) ### Ensure positive
+    ### Find values sqrt(sigma) std devs to each side
+    mn_p = (-bq + np.sqrt(4*aq*np.sqrt(sigma)))/(2*aq)
+    mn_m = (-bq - np.sqrt(4*aq*np.sqrt(sigma)))/(2*aq)
+    best_mn_std = abs(mn_p-mn_m)/2
+    return best_mn, best_mn_std
+#'''

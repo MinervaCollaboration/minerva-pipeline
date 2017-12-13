@@ -26,7 +26,7 @@ def basic_spline(t,breakpoints,order=4):
         exit(0)
     def w(i,k,t,breakpoints):
         ### REVISIT LATER? Don't think this edge handling is correct
-        if i < 0 or i+k-1 >= len(breakpoints):
+        if i < 0 or breakpoints[i] == breakpoints[i+k-1]:#i+k-1 >= len(breakpoints):
             return np.zeros(len(t))
         if breakpoints[i] != breakpoints[i+k-1]:
             return (t-breakpoints[i])/(breakpoints[i+k-1]-breakpoints[i])
@@ -68,56 +68,116 @@ def basic_spline(t,breakpoints,order=4):
         if pad == 0:
             B_spline[i,:] = B(i,order,t_pad,bpt_pad)
         else:
+#            print t_per_bpts
             B_spline[i,:] = B(i,order,t_pad,bpt_pad)[pad*t_per_bpts:-pad*t_per_bpts]
 #        plt.plot(t,B_spline[i-pad,:])
 #    plt.show()
     return B_spline
 
+def get_spline_1D_fit(xarr, yarr, breakpoints, coeffs, order=4, return_matrix=False):
+    spline_interp = np.zeros((len(yarr)))
+    ### (Assumes matrix size is relatively small)
+    B_spline_matrix = basic_spline(xarr,breakpoints,order=order)
+    spline_interp = np.dot(B_spline_matrix.T,coeffs)
+    if return_matrix:
+        return B_spline_matrix.T
+    else:
+        return spline_interp
 
 ### 1D case, nothing complex
-def spline_1D(xarr,yarr,breakpoints,invar=None,order=4, window=100, pad=20):
+def spline_1D(xarr,yarr,breakpoints,invar=None,order=4, window=100, pad=20, return_coeffs=False, incoeffs=None, inalign=None):
     """ Returns the spline fit to xarr, yarr with inverse variance invar for
         the specified breakpoint array (and optionally spline order)
         
         Assumes independent data points.
+        
+        Code is a little messy now - forced in a way to fit to a set of data, 
+        then re-evaulate for arbitrary new inputs.  Works, but could stand
+        to be cleaned up/simplified
     """
     spline_interp = np.zeros((len(yarr)))
     ### Break up to increase speed for large matrices
     if len(yarr) < window:
         B_spline_matrix = basic_spline(xarr,breakpoints,order=order)
-        if invar is None:
-            coeffs = np.linalg.lstsq(B_spline_matrix.T, yarr)
-            coeffs = coeffs[0]
+        if incoeffs is None:
+            if invar is None:
+                coeffs = np.linalg.lstsq(B_spline_matrix.T, yarr)
+                coeffs = coeffs[0]
+            else:
+                coeffs, chi = sf.chi_fit(yarr,B_spline_matrix.T,np.diag(invar))
         else:
-            coeffs, chi = sf.chi_fit(yarr,B_spline_matrix.T,np.diag(invar))
+            coeffs = incoeffs
+        outcoeffs = 1.0*coeffs
         spline_interp = np.dot(B_spline_matrix.T,coeffs)#[:,0]
+        if return_coeffs:
+            align_points = None
     else:
         if pad > 0.5*window:
             print "Spline pad is too big for window"
             exit(0)
         st = 0
-        while st < len(yarr):
+        if return_coeffs:
+            outcoeffs = dict()
+            align_points = np.zeros((int(np.ceil(len(xarr)/(window-pad))),4))
+        lc = 0
+        m2 = 0
+        while m2 < len(yarr):
+            if inalign is not None:
+                if lc == inalign.shape[0]:
+                    m2 = len(yarr)
+                    continue
             if st == 0:
                 end = window+pad
             else:
                 end = min(st+window+2*pad,len(yarr))
             xsub, ysub = xarr[st:end], yarr[st:end]
-            bkpts = breakpoints[(breakpoints >= np.min(xsub)) * (breakpoints <= np.max(xsub))]
+            xsl, xsh = np.min(xsub), np.max(xsub)
+            if return_coeffs:
+                align_points[lc,:] = [st, end, xsl, xsh]
+            if inalign is not None:
+                st, end, xsl, xsh = inalign[lc,:]
+                st, end = int(st), int(end)
+            mask = (xarr >= xsl) * (xarr <= xsh)
+            m1 = np.argmax(mask) ## m1 = st
+            if np.argmin(mask[m1:]) == 0:
+                m2 = len(mask)
+            else:
+                m2 = np.argmin(mask[m1:])+m1+1 ## m2 = end
+            if inalign is not None:
+                xsub, ysub = xarr[m1:m2], yarr[m1:m2]
+            wd = m2-m1
+            bkpts = breakpoints[(breakpoints >= xsl) * (breakpoints < xsh)]
+            if len(bkpts) == 0:
+                lc+=1
+#                m2 == len(yarr)
+                continue
             B_spline_matrix = basic_spline(xsub,bkpts,order=order)
-            if invar is None:
-                coeffs = np.linalg.lstsq(B_spline_matrix.T, ysub)
-                coeffs = coeffs[0]
+#            print B_spline_matrix.shape
+            if incoeffs is None:
+                if invar is None:
+                    coeffs = np.linalg.lstsq(B_spline_matrix.T, ysub)
+                    coeffs = coeffs[0]
+                else:
+                    invsub = invar[st:end]
+                    coeffs, chi = sf.chi_fit(ysub,B_spline_matrix.T,np.diag(invsub))
             else:
-                invsub = invar[st:end]
-                coeffs, chi = sf.chi_fit(ysub,B_spline_matrix.T,np.diag(invsub))
+                coeffs = incoeffs[lc]
             if st == 0:
-                spline_interp[st:end-pad] = np.dot(B_spline_matrix.T,coeffs)[0:window]
+#                spline_interp[st:end-pad] = np.dot(B_spline_matrix.T,coeffs)[0:window]
+                spline_interp[m1:m2-pad] = np.dot(B_spline_matrix.T,coeffs)[0:wd-pad]
             elif end == len(yarr):
-                spline_interp[st+pad:end] = np.dot(B_spline_matrix.T,coeffs)[pad:]
+                spline_interp[m1+pad:m2] = np.dot(B_spline_matrix.T,coeffs)[pad:]
             else:
-                spline_interp[st+pad:end-pad] = np.dot(B_spline_matrix.T,coeffs)[pad:window+pad]
+#                try:
+                spline_interp[m1+pad:m2-pad] = np.dot(B_spline_matrix.T,coeffs)[pad:wd-pad]
+            if return_coeffs:
+                outcoeffs[lc] = coeffs
             st += window-pad
-    return spline_interp
+            lc += 1
+    if return_coeffs:
+        return outcoeffs, breakpoints, align_points
+    else:
+        return spline_interp
 
 
 ### 2D case using method described in Bolton, et. al, SLACS I
