@@ -85,19 +85,25 @@ def vank(objname, weightthresh=10.0, chithresh=1.0, sigmaithresh=0.0):
 
             # very noisy data can find great fits
             bad = np.where(chrec['chi' + str(i)] <= 0.3)
-            chrec['z' + str(i)][bad] = np.nan
+            #chrec['z' + str(i)][bad] = np.nan
+            print("nbad low chi",i,len(bad[0]))
 
             # bad fits will have bad chi^2
             bad = np.where(chrec['chi' + str(i)] >= 5)
             chrec['z' + str(i)][bad] = np.nan
+            print("nbad high chi",i,len(bad[0]))
 
             # very noisy data can find great fits
             bad = np.where((chrec['alpha' + str(i)] <= -0.95) | (chrec['alpha' + str(i)] >= 0.95))
-            chrec['z' + str(i)][bad] = np.nan
+            #chrec['z' + str(i)][bad] = np.nan
+            print("nbad extreme alpha",i,len(bad[0]))
 
             # very noisy data can find great fits
             bad = np.where((chrec['sigma' + str(i)] <= 0.25) | (chrec['sigma' + str(i)] >= 1.25))
-            chrec['z' + str(i)][bad] = np.nan
+            #chrec['z' + str(i)][bad] = np.nan
+            print("nbad extreme sigma",i,len(bad[0]))
+
+            print("nbad z=nan",i,len(np.where(np.isnan(chrec['z' + str(i)]))[0]))
 
             # reject chunks with the lowest DSST weight (Step 3) or bad weights (Step 1)
             lowweight = np.nanpercentile(chrec['wt' + str(i)],weightthresh)
@@ -203,13 +209,17 @@ def vank(objname, weightthresh=10.0, chithresh=1.0, sigmaithresh=0.0):
     vij[bad,:] = np.nan  
 
     # Starting to vank telescopes independently
-    vj = np.zeros(nobs*nchunks)
-    sigmavj = np.zeros(nobs*nchunks)
+    vj = np.zeros(nobs)
+    sigmavj = np.zeros(nobs)
 
+    for i in np.arange(0, nobs):
+        print(len(np.where(np.isnan(vij[:,i]))[0]))
+
+    #ipdb.set_trace()
     # loop through telescopes
     for i in range(1, ntel + 1):
         match = np.where(telescope == i)
-        thisvj, thissigmavj = vanktel(vij, i, sigmaithresh=sigmaithresh)
+        thisvj, thissigmavj = vanktel(vij, i, telescope, sigmaithresh=sigmaithresh)
         vj[match] = thisvj
         sigmavj[match] = thissigmavj
 
@@ -241,7 +251,7 @@ def vank(objname, weightthresh=10.0, chithresh=1.0, sigmaithresh=0.0):
     # bin per telescope per night
     for jd in range(2457480,2457571):
         for i in range(1,ntel+1):
-            
+            #ipdb.set_trace()
             match = np.where((jdutcs >= jd) & (jdutcs < (jd+1)) & np.isfinite(vj) & (telescope==i))
             night = np.mean(jdutcs[match])-2457389
             nightlyrv = np.sum(vj[match]/sigmavj[match]**2)/np.sum(1.0/sigmavj[match]**2)
@@ -365,7 +375,7 @@ def vank(objname, weightthresh=10.0, chithresh=1.0, sigmaithresh=0.0):
     vjtrend = coeffs[1] + (jdutcs[good]-t0)*coeffs[0] 
 
     # output text files of JD, rv, rverr
-    f = open(objname + '.dat','w')
+    f = open(objname + '.' + exten + '.dat','w')
     for i in range(len(vj)):
         if np.isfinite(vj[i]):
             f.write('{0:f} {1:f} {2:f} T{3:d} {4:s}'.format(jdutcs[i],vj[i],sigmavj[i],int(telescope[i]),'\n'))
@@ -417,38 +427,49 @@ def vank(objname, weightthresh=10.0, chithresh=1.0, sigmaithresh=0.0):
 
 
 
-def vanktel(vij, tel, sigmaithresh=0.0):
+def vanktel(vij, tel, telescope, sigmaithresh=0.0):
     """
     Sharon X. Wang, vanking vij matrix from a single telescope
 
     :param vij: RV matrix from all telescopes, i-chunk, j-observation
-    :param tel: index of telescope, [0,1,2,3] for the four MINERVA telescopes
+    :param tel: index of telescope, [1,2,3,4] for the four MINERVA telescopes
+    :param telescope: array of telescope index, telling us which telescope each observation comes from
     :param sigmaithresh: sigma/scatter threshold, as in vank()
     :return: vj, sigmavj: RV array and array of internal errors
     """
-    nobs = len(vij[0, :])/4  # total number of observations
     nchunks = len(vij[:, 0])  # total number of chunks
-    indtel = np.arange(0, nobs*4, 4) + tel  # indices for slicing out this telescope
-    vijtel = vij[:, indtel]  # RV matrix for this telescope
+    indtel = np.where(telescope == tel)  # indices for slicing out this telescope
+    nobs = len(indtel)  # total number of observations from this telescope
+    vijtel = vij[:, indtel[0]]  # RV matrix for this telescope
 
     # adjusting zero point of all chunks
     # bad telescope plagues this procedure, so better have this separately!
+    #ipdb.set_trace()
     vijtel -= np.transpose(np.tile(np.nanmean(vijtel, axis=1), (nobs, 1)))
+
+    if len(np.where(np.isnan(vijtel))[0]) == len(vijtel):
+        vj = np.zeros(nobs)
+        vj[:] = np.nan
+        sigmavj = np.zeros(nobs)
+        sigmavj[:] = np.nan
+        return vj, sigmavj
 
     # Below: direct copy from vankA.py
 
     # compute chunk weights (step 6):
     # median velocities for each observation
-    vjmed = np.nanmedian(vijtel, axis=0)  # eq 2.9
+    vjmed = np.nanmedian(vijtel, axis=0)  
 
     # compute the matrix of velocity differences
-    Deltaij = vijtel - np.tile(vjmed, (nchunks, 1))  # eq 2.8
-    sigmai = np.nanstd(Deltaij, axis=1)  # eq 2.6
+    Deltaij = vijtel - np.tile(vjmed, (nchunks, 1))  
+    sigmai = np.nanstd(Deltaij, axis=1) 
 
     # reject the highest sigmai (step 7)
-    bad = np.where(sigmai == 0.0)
+    bad = np.where((sigmai == 0.0) | np.isnan(sigmai))
     sigmai[bad] = np.inf
     hisigma = np.nanpercentile(sigmai, 100.0 - sigmaithresh)
+    if np.isnan(hisigma):
+        hisigma = np.inf
     bad = np.where(sigmai >= hisigma)
     sigmai[bad] = np.inf
 
@@ -462,8 +483,12 @@ def vanktel(vij, tel, sigmaithresh=0.0):
 
     wij = 1.0 / sigmaij ** 2
 
-    vj = np.nansum(vij * wij, axis=0) / np.nansum(wij, axis=0)  # eq 2.10
-    sigmavj = 1.0 / np.sqrt(np.nansum(wij, axis=0))  # eq 2.12
+    #ipdb.set_trace()
+
+    vj = np.nansum(vijtel * wij, axis=0) / np.nansum(wij, axis=0) 
+    sigmavj = 1.0 / np.sqrt(np.nansum(wij, axis=0))  
+    
+    ipdb.set_trace()
 
     return vj,sigmavj
 
@@ -476,7 +501,7 @@ if __name__ == "__main__":
 #    vank(filename)
 #    objnames = ['HD10700','HD9407','HD62613','HD122064','HD191408A','HD185144','HD217107','daytimeSky']
     
-    objnames = ['HD97601']#['HD217107']#['HD142245']#['HD122064']#,'HD185144']#['daytimeSky','HD122064','HD185144'] ['HD97601']#
+    objnames = ['HD217014']#['HD217107']#['HD97601']#['HD142245']#['HD122064']#,'HD185144']#['daytimeSky','HD122064','HD185144'] ['HD97601']#
     for objname in objnames:
         print objnames
         vank(objname)

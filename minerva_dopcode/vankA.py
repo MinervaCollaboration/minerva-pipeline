@@ -27,7 +27,6 @@ def vank(objname, weightthresh=10.0, chithresh=1.0, sigmaithresh=0.0):
 #      filenames = glob.glob('/Data/kiwispec-proc/n20160[5,6]*/*' + objname + '*.chrec' + exten + '.npy')
        filenames = glob.glob('/Data/kiwispec-proc/*/*' + objname + '*.chrec6.npy')
 #       filenames = glob.glob('/Data/kiwispec-proc/n20170409/n20170409.' + objname + '.*.chrec6.npy')
-
        #filenames = '/Data/kiwispec-proc/n20170409/n20170409.'+ objname + '.0022.proc.chrec6.npy'
        print filenames
 
@@ -241,7 +240,7 @@ def vank(objname, weightthresh=10.0, chithresh=1.0, sigmaithresh=0.0):
     period = 7.126816
     for i in range(1,ntel+1):
         match = np.where(telescope == i)
-       # plt.plot((np.mod(jdutcs[match]-2457389, period))/period,vj[match],'o',color=colors[i])
+        #plt.plot((np.mod(jdutcs[match]-2457389, period))/period,vj[match],'o',color=colors[i])
         plt.plot(jdutcs[match]-2457389,vj[match],'o',color=colors[i])
 
     plt.title(objname)
