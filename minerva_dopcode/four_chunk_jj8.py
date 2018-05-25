@@ -201,13 +201,13 @@ class FourChunk(object):
         self.origchunk = obspec
         self.obchunk = obchunk  # Bookkeeping for what was "cleaned" by crclean
 
-<<<<<<< HEAD
+#<<<<<<< HEAD
         self.xip, self.ip = get_ip(spectrum.ipdict,wmin,wmax,order)
         ipdb.set_trace()
 
-=======
+#=======
         self.xip, self.ip = get_ip(spectrum.ipdict, wmin, wmax, order, oversamp=self.oversamp)
->>>>>>> b6d657aee7f3d991bf133d45f534be5be5b2e689
+#>>>>>>> b6d657aee7f3d991bf133d45f534be5be5b2e689
         """ List of Parameters:
         par[0 + N*parspertrace] = zguess for telescope N
         par[1 + N*parspertrace] = w0 for telescope N
@@ -363,6 +363,12 @@ class FourChunk(object):
         #            print "iodine: ", self.wiod.min(), self.wiod.max()
         #            print "wover:  ", wover.min(), wover.max()
         #            print "WLS pars: ", par[1:4]
+
+        try:
+            if np.isnan(model[0,0]): ipdb.set_trace()
+        except:
+            ipdb.set_trace()
+
 
         return model
 
@@ -597,7 +603,7 @@ def grind(obsname, plot=False, printit=False, bstar=False, juststar=False):
             chstart = timer()
             if printit:
                 print '------'
-                print 'Order:', Ord, 'Pixel:', Pix
+                print 'Order:', Ord, 'Pixel:', Pix, 'ival:', i,'j-val:',j
             ch = FourChunk(spectrum, Ord, Pix, dpix)
 
             chind = j + i * npix
@@ -768,13 +774,10 @@ def globgrindall(shuffle=False):
 # ofarr = globgrind('/Data/kiwispec-proc/n20160212/n20160212.HD191408A.0017.proc.fits',bstar=False,returnfile=False,printit=True,plot=False)
 
 
-
-
-"""
-globgrind('/Data/kiwispec-proc/n20160619/n20160619.HD122064.0014.proc.fits',bstar=False, returnfile=False, printit=True, plot=False)
+grind('/Data/kiwispec-proc/n20160626/n20160626.daytimeSkyExpmeter.0047.proc.fits',plot = True, printit=True, bstar= False, juststar= False)
 ipdb.set_trace()
 
-
+"""
 
 globgrindall(shuffle=True)
 ipdb.set_trace()

@@ -5,6 +5,7 @@ import numpy as np
 import corner
 
 obfile = '/Users/xuesongwang/Downloads/minerva_temp/hackweek/n20160619.HD122064.0014.proc.fits'
+obfile = '/Data/kiwispec-proc/n20160619/n20160619.HD122064.0014.proc.fits'
 
 spec = fch.Spectrum(obfile)
 

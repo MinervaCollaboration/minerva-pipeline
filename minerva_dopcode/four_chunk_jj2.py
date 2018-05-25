@@ -573,9 +573,10 @@ def globgrindall(shuffle=False):
 #        ofarr = globgrind(datadir + '/*daytimeSky*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
 #        ofarr = globgrind(datadir + '/*HD*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
 #        ofarr = globgrind(datadir + '/*HR*.proc.fits', bstar=True, returnfile=False, printit=True, plot=False)
-        ofarr = globgrind(datadir + '/*HD122064*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
-        ofarr = globgrind(datadir + '/*HD185144*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
-        ofarr = globgrind(datadir + '/*daytimeSky*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
+        ofarr = globgrind(datadir + '/*HD97601*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
+#        ofarr = globgrind(datadir + '/*HD122064*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
+#        ofarr = globgrind(datadir + '/*HD185144*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
+#        ofarr = globgrind(datadir + '/*daytimeSky*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
 
 #ofarr = globgrind('/Data/kiwispec-proc/n20160212/n20160212.HD191408A.0017.proc.fits',bstar=False,returnfile=False,printit=True,plot=False)
 
@@ -583,6 +584,7 @@ def globgrindall(shuffle=False):
 #ipdb.set_trace()
 
 
+ipdb.set_trace()
 globgrindall(shuffle=True)
 ipdb.set_trace()
 

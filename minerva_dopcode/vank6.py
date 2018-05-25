@@ -39,14 +39,14 @@ def vank(objname, weightthresh=1.0,chithresh=99.0, sigmaithresh=1.0):
 
         # reject chunks with bad DSST (Step 1)
         ipdb.set_trace()
-        bad = np.where(chrec['wt'] == 0)
-        chrec['z'][bad] = np.nan
+        bad = np.where((chrec['wt1'] == 0) | (chrec['wt2'] == 0) | (chrec['wt3'] == 0) | (chrec['wt4'] == 0))
+        chrec['z1'][bad] = chrec['z2'][bad] = chrec['z3'][bad] = chrec['z4'][bad] = np.nan
 
         # reject chunks where fitter failed to converge (rchi2 == 0 or 100)
         # (Step 2)
         bad = np.where(chrec['chi'] == 0.0)
         bad2 = np.where(chrec['chi'] == 100.0)
-        chrec['z'][bad] = np.nan
+        chrec['z1'][bad] = chrec['z2'][bad] = chrec['z3'][bad] = chrec['z4'][bad] = np.nan
         if len(bad2[0]) != 0: ipdb.set_trace()
 
         # reject chunks with the lowest DSST weight (Step 3)

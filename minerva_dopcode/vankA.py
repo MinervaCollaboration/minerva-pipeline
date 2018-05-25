@@ -19,13 +19,16 @@ import socket
 
 exten = '2'
 
-def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
+def vank(objname, weightthresh=10.0, chithresh=1.0, sigmaithresh=0.0):
 
     c = 299792458.0
 
     if socket.gethostname() == 'Main':
 #      filenames = glob.glob('/Data/kiwispec-proc/n20160[5,6]*/*' + objname + '*.chrec' + exten + '.npy')
-       filenames = glob.glob('/Data/kiwispec-proc/n2017[09,10]*/*' + objname + '*.chrec6.npy')
+       filenames = glob.glob('/Data/kiwispec-proc/*/*' + objname + '*.chrec6.npy')
+#       filenames = glob.glob('/Data/kiwispec-proc/n20170409/n20170409.' + objname + '.*.chrec6.npy')
+
+       #filenames = '/Data/kiwispec-proc/n20170409/n20170409.'+ objname + '.0022.proc.chrec6.npy'
        print filenames
 
     else:
@@ -34,9 +37,10 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
             glob.glob('/n/home12/jeastman/minerva/data/n2016060?/*' + objname + '*.chrec' + exten + '.npy') +\
             glob.glob('/n/home12/jeastman/minerva/data/n2016061[0-2]/*' + objname + '*.chrec' + exten + '.npy')
 
+    #filenames = '/Data/kiwispec-proc/n20170409/n20170409.HD97601.0017.proc.chrec6.npy'
     ntel = 4
     nobs = len(filenames)*ntel
-    if nobs <= 3: return
+#    if nobs <= 3: return
 
     vji = []
     wji = []
@@ -47,6 +51,7 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
     slopeji = []
     jdutcs = np.array([])
     telescope = np.array([])
+    nspectra = 0
 
     for filename in filenames:
 
@@ -55,8 +60,11 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
         if (st.st_size == 0.0): 
             nobs -= 4
             continue
+
+        nspectra += 1
  
         chrec = np.load(filename)
+     #   fitsname = '/Data/kiwispec-proc/n20170409/n20170409.HD97601.0017.proc.fits'
         fitsname = os.path.splitext(os.path.splitext(filename)[0])[0] + '.fits'
         h = pyfits.open(fitsname,mode='update')
         
@@ -169,8 +177,15 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
         h.flush()
         h.close()
 
+    if nspectra == 0:
+        print "No good spectra for " + objname
+        sys.exit()
+
     nchunks = len(chrec)
     vij = np.transpose(vji)
+
+    #ipdb.set_trace()
+
     wij = np.transpose(wji)
     chiij = np.transpose(chiji)
     ctsij = np.transpose(ctsji)
@@ -182,10 +197,11 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
 
     # reject chunks with the worst fits (step 4)
     chimed = np.nanmedian(chiij,axis=1)
+    print chimed
     hichi = np.nanpercentile(chimed,100.0-chithresh)
     bad = np.where(chimed >= hichi)
     vij[bad,:] = np.nan  
-
+    
     # adjust all chunks to have the same RV zero points (step 5)
     # subtract the mean velocity of all observations from each chunk
     vij -= np.transpose(np.tile(np.nanmean(vij,axis=1),(nobs,1)))
@@ -222,12 +238,15 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
     
     # plot scatter vs time
     colors = ['','r','g','b','orange']
+    period = 7.126816
     for i in range(1,ntel+1):
         match = np.where(telescope == i)
+       # plt.plot((np.mod(jdutcs[match]-2457389, period))/period,vj[match],'o',color=colors[i])
         plt.plot(jdutcs[match]-2457389,vj[match],'o',color=colors[i])
 
     plt.title(objname)
     plt.xlabel('Days since UT 2016-01-01')
+   # plt.xlabel('Phase')
     plt.ylabel('RV (m/s)')
     plt.savefig(objname + '.' + exten + '.png')
     plt.close()
@@ -241,6 +260,7 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
     # bin per telescope per night
     for jd in range(2457480,2457571):
         for i in range(1,ntel+1):
+            
             match = np.where((jdutcs >= jd) & (jdutcs < (jd+1)) & np.isfinite(vj) & (telescope==i))
             night = np.mean(jdutcs[match])-2457389
             nightlyrv = np.sum(vj[match]/sigmavj[match]**2)/np.sum(1.0/sigmavj[match]**2)
@@ -293,7 +313,10 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
     plt.close()
 
     
-    # plot median sigma as a function of chunk number
+    """ Amber Changed this    # plot median sigma as a function of chunk number
+    sigmawav = []
+    sigmaaall = []
+    sigmatel = []
     for tel in range(1,ntel+1):
         match = np.where(telescope == tel)
         for chunk in range(np.shape(ipsigmaij)[0]):
@@ -307,6 +330,7 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
     plt.ylabel('sigma')
     plt.savefig(objname + '.' + exten + '.sigmavchunk.png')
     plt.close()
+    """
 
     # plot median alpha as a function of chunk number
     for tel in range(1,ntel+1):
@@ -375,7 +399,7 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
     plt.close()
     print objname + " Detrended RMS: " + str(np.nanstd(vj[good]-vjtrend))
 
-    for i in range(1,ntel+1):
+    '''for i in range(1,ntel+1):
         match = np.where((telescope == i) & np.isfinite(vj))
 #        rate = 1.0/(jdutcs[match]-np.roll(jdutcs[match],1))
 #        taus = np.logspace(0, 3, 50)
@@ -402,7 +426,7 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
 
     plt.savefig(objname + '.' + exten + '.allan.png')
     plt.close()
-
+    '''
 
 #    ipdb.set_trace()
 
@@ -418,7 +442,7 @@ if __name__ == "__main__":
 #    vank(filename)
 #    objnames = ['HD10700','HD9407','HD62613','HD122064','HD191408A','HD185144','HD217107','daytimeSky']
     
-    objnames = ['HD185144']#['HD97601']['HD122064']#,'HD185144']#['daytimeSky','HD122064','HD185144'] ['HD97601']#
+    objnames = ['HD97601']#['HD217107']#['HD142245']#['HD122064']#,'HD185144']#['daytimeSky','HD122064','HD185144'] ['HD97601']#
     for objname in objnames:
         print objnames
         vank(objname)

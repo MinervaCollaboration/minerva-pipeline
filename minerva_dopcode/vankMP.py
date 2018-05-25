@@ -25,7 +25,8 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
 
     if socket.gethostname() == 'Main':
 #      filenames = glob.glob('/Data/kiwispec-proc/n20160[5,6]*/*' + objname + '*.chrec' + exten + '.npy')
-       filenames = glob.glob('/Data/kiwispec-proc/n2017[09,10]*/*' + objname + '*.chrec6.npy')
+       filenames = glob.glob('/Data/kiwispec-proc/n20170[3,4,5,6]*/*' + objname + '*.chrec6.npy')
+       #filenames = '/Data/kiwispec-proc/n20170409/n20170409.'+ objname + '.0022.proc.chrec6.npy'
        print filenames
 
     else:
@@ -47,8 +48,11 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
     slopeji = []
     jdutcs = np.array([])
     telescope = np.array([])
+    mp  = np.array([])
+    mn_dist = np.array([])
 
     for filename in filenames:
+        print filename
 
         st = os.stat(filename)
 #        if (st.st_size != 121120): continue
@@ -140,7 +144,8 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
                 if len(np.where(np.isnan(rvs))[0]) == len(rvs): 
                     nobs-=1
                     continue
-
+                mp = np.append(mp,h[0].header['MOONPHAS'])
+                mn_dist = np.append(mn_dist, h[0].header['MOONDIS3'])
                 jdutcs = np.append(jdutcs,midflux)
                 telescope = np.append(telescope,i)
 
@@ -182,6 +187,7 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
 
     # reject chunks with the worst fits (step 4)
     chimed = np.nanmedian(chiij,axis=1)
+    print chimed
     hichi = np.nanpercentile(chimed,100.0-chithresh)
     bad = np.where(chimed >= hichi)
     vij[bad,:] = np.nan  
@@ -293,7 +299,10 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
     plt.close()
 
     
-    # plot median sigma as a function of chunk number
+    """ Amber Changed this    # plot median sigma as a function of chunk number
+    sigmawav = []
+    sigmaaall = []
+    sigmatel = []
     for tel in range(1,ntel+1):
         match = np.where(telescope == tel)
         for chunk in range(np.shape(ipsigmaij)[0]):
@@ -307,7 +316,7 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
     plt.ylabel('sigma')
     plt.savefig(objname + '.' + exten + '.sigmavchunk.png')
     plt.close()
-
+    """
     # plot median alpha as a function of chunk number
     for tel in range(1,ntel+1):
         match = np.where(telescope == tel)
@@ -360,10 +369,10 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
     vjtrend = coeffs[1] + (jdutcs[good]-t0)*coeffs[0] 
 
     # output text files of JD, rv, rverr
-    f = open(objname + '.dat','w')
+    f = open(objname + 'moon.dat','w')
     for i in range(len(vj)):
         if np.isfinite(vj[i]):
-            f.write('{0:f} {1:f} {2:f} T{3:d} {4:s}'.format(jdutcs[i],vj[i],sigmavj[i],int(telescope[i]),'\n'))
+            f.write('{0:f} {1:f} {2:f} {3:f} {4:f} T{5:d} {6:s}'.format(jdutcs[i],vj[i],sigmavj[i],mp[i],mn_dist[i],int(telescope[i]),'\n'))
     f.close()
 
     # plot scatter minus trend vs time
@@ -375,7 +384,7 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
     plt.close()
     print objname + " Detrended RMS: " + str(np.nanstd(vj[good]-vjtrend))
 
-    for i in range(1,ntel+1):
+    '''for i in range(1,ntel+1):
         match = np.where((telescope == i) & np.isfinite(vj))
 #        rate = 1.0/(jdutcs[match]-np.roll(jdutcs[match],1))
 #        taus = np.logspace(0, 3, 50)
@@ -402,7 +411,7 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
 
     plt.savefig(objname + '.' + exten + '.allan.png')
     plt.close()
-
+    '''
 
 #    ipdb.set_trace()
 
@@ -418,7 +427,7 @@ if __name__ == "__main__":
 #    vank(filename)
 #    objnames = ['HD10700','HD9407','HD62613','HD122064','HD191408A','HD185144','HD217107','daytimeSky']
     
-    objnames = ['HD185144']#['HD97601']['HD122064']#,'HD185144']#['daytimeSky','HD122064','HD185144'] ['HD97601']#
+    objnames =['HD97601']#['HD122064']#,'HD185144']#['daytimeSky','HD122064','HD185144'] ['HD97601']#
     for objname in objnames:
         print objnames
         vank(objname)
