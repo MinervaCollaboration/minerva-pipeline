@@ -15,7 +15,7 @@ import scipy.special as sp
 #import scipy.interpolate as si
 import scipy.optimize as opt
 import scipy.integrate as integrate
-#import lmfit
+import lmfit
 import scipy.sparse as sparse
 #import scipy.signal as sig
 #import scipy.linalg as linalg
@@ -865,7 +865,7 @@ def eff2d_lmfit(params, x, y, i, ab=False):
 ################### Various other functions... ###############################
 ##############################################################################
   
-def gauss_residual(params,xvals,zvals,invals):
+def gauss_residual(params,xvals,zvals,invals,flt=None):
     """ Residual function for gaussian with constant background, for use with
         lmfit.minimize()
     """
@@ -883,7 +883,10 @@ def gauss_residual(params,xvals,zvals,invals):
         power = params['power'].value
     except:
         power = 2
-    gauss = gaussian(xvals,sigma,center=mn,height=hght,bg_mean=bg,power=power)
+    if flt is None:
+        gauss = gaussian(xvals,sigma,center=mn,height=hght,bg_mean=bg,power=power)
+    else:
+        gauss = gaussian(xvals,sigma,center=mn,height=hght,bg_mean=bg,power=power)/flt
     residuals = (gauss-zvals)*np.sqrt(invals)
     return residuals
 
@@ -1036,14 +1039,16 @@ def eval_polynomial_coeffs(xarr,poly_coeffs):
     ypoly = np.dot(profile,poly_coeffs)
     return ypoly
 
-def best_linear_gauss(axis,sig,mn,data,invar,power=2):
+def best_linear_gauss(axis,sig,mn,data,invar,power=2,flt=None):
     """ Use linear chi^2 fitting to find height and background estimates
     """
+    if flt is None:
+        flt = np.ones(axis.shape)
 #    t1 = time.time()
     noise = np.diag(invar)
 #    t2 = time.time()
     profile = np.ones((len(axis),2))
-    profile[:,0] = gaussian(axis,sig,mn,1,power=power)
+    profile[:,0] = gaussian(axis,sig,mn,1,power=power)/flt
 #    profile = np.vstack((gaussian(axis,sig,mn,1,power=power),np.ones(len(axis)))).T
 #    t3 = time.time()    
     coeffs, chi = chi_fit(data, profile, noise)
@@ -1054,22 +1059,24 @@ def best_linear_gauss(axis,sig,mn,data,invar,power=2):
 #    time.sleep(2)
     return coeffs[0], coeffs[1]
 
-def best_mean(axis,sig,mn,hght,bg,data,invar,spread,power=2,beta=2,profile='gaussian'):
+def best_mean(axis,sig,mn,hght,bg,data,invar,spread,power=2,beta=2,profile='gaussian',flt=None):
     """ Finds the mean that minimizes squared sum of weighted residuals
         for a given sigma and height (guassian profile)
         Uses a grid-search, then fits around minimum chi^2 regionS
     """
-    def mn_find(axis,mn,spread, params=None, profile='gaussian'):
+    def mn_find(axis,mn,spread, params=None, profile='gaussian',flt=None):
         """ Call with varying sig ranges for coarse vs. fine.
         """
+        if flt is None:
+            flt = np.ones(axis.shape)
         mn_rng = np.linspace(mn-spread,mn+spread,10)
         chis = np.zeros(len(mn_rng))
         ### Find chi^2 at a range of means aroung the best guess
         for i in range(len(mn_rng)):
             if profile == 'gaussian':
-                gguess = gaussian(axis,sig,mn_rng[i],hght,bg,power=power)
+                gguess = gaussian(axis,sig,mn_rng[i],hght,bg,power=power)/flt
             elif profile == 'moffat':
-                gguess = moffat_lmfit(params, axis)
+                gguess = moffat_lmfit(params, axis)/flt
             chis[i] = sum((data-gguess)**2*invar)
         ### Now take a subset of 5 points around the lowest chi^2 for fitting
         chi_min_inds =np.arange(-2,3)+np.argmin(chis)
@@ -1095,9 +1102,9 @@ def best_mean(axis,sig,mn,hght,bg,data,invar,spread,power=2,beta=2,profile='gaus
         ###Coarse find
         ###Tradeoff with coarse sig - too small and initial guess is critical,
         ### too big and more susceptible to comsic ray influence
-        best_mn, best_mn_std = mn_find(axis,mn,spread)
+        best_mn, best_mn_std = mn_find(axis,mn,spread,flt=flt)
         ###Fine find
-        best_mn, best_mn_std = mn_find(axis,best_mn,best_mn_std)
+        best_mn, best_mn_std = mn_find(axis,best_mn,best_mn_std,flt=flt)
         ###Finer find - doesn't seem to change final answer at all
     #    best_mn, best_mn_std = mn_find(axis,best_mn,best_mn_std/100)
     elif profile == 'moffat':
@@ -2542,14 +2549,14 @@ def get_xy_rot(xin, yin, angle, cntr = [0,0]):
     yrot = (xin-xc)*np.sin(angle) + (yin-yc)*np.cos(angle)
     return xrot, yrot
         
-def plot_circle(center,radius,q=1,PA=0,lw=2,color='r'):
+def plot_circle(center,radius,q=1,PA=0,lw=2,color='r', xscale=1):
     """ Plots a circle with defined center and radius (option to turn into
         an ellipse).  Center format is [xc,yc]
     """
     xc = center[0]
     yc = center[1]
-    xvals = np.linspace(xc-radius/np.sqrt(q),xc+radius/np.sqrt(q),600)
-    arc = np.sqrt(q**2*radius**2-q*(xvals-xc)**2)
+    xvals = np.linspace(xc-radius*xscale/np.sqrt(q),xc+radius*xscale/np.sqrt(q),600)
+    arc = np.sqrt(q**2*(radius)**2-q*((xvals-xc)/xscale)**2)
     yup = yc + arc
     ylw = yc - arc
 #    if q != 1 and PA != 0:
@@ -2557,8 +2564,14 @@ def plot_circle(center,radius,q=1,PA=0,lw=2,color='r'):
 #        yprime = 
 #    
 #    print PA/np.pi*180
-    xrot1, yupr = get_xy_rot(xvals, yup, PA, cntr=center)
-    xrot2, ylwr = get_xy_rot(xvals, ylw, PA, cntr=center)
+    if PA != 0:
+        xrot1, yupr = get_xy_rot(xvals, yup, PA, cntr=center)
+        xrot2, ylwr = get_xy_rot(xvals, ylw, PA, cntr=center)
+    else:
+        xrot1 = xvals
+        xrot2 = xvals
+        yupr = yup
+        ylwr = ylw
     plt.plot(xrot1+xc,yupr+yc,color,linewidth=lw)
     plt.plot(xrot2+xc,ylwr+yc,color,linewidth=lw)
 #    xpl = np.linspace(xc-4*radius, xc+4*radius, 100)
@@ -2603,6 +2616,14 @@ def angular_dia_dist(z, z0=0, Om=0.3, Ol=0.7, h=0.7, k=0):
     """
     Da = comoving_dist(z, z0=z0, Om=Om, Ol=Ol, h=h)*(1+z0)/(1+z)
     return Da
+    
+def delta_angular_dia_dist(z1, z2, Om=0.3, Ol=0.7, h=0.7, k=0):
+    Dh = (3*10**9)*h**(-1) #pc
+    DM1 = comoving_dist(z1, Om=Om, Ol=Ol, h=h)
+    DM2 = comoving_dist(z2, Om=Om, Ol=Ol, h=h)
+    Ok = (1-Om-Ol)*k
+    DA12 = (1/(1+z2))*(DM2*np.sqrt(1+Ok*DM1**2/Dh**2) - DM1*np.sqrt(1+Ok*DM2**2/Dh**2))
+    return DA12
     
 def luminosity_dist(z, z0=0, Om=0.3, Ol=0.7, h=0.7, k=0):
     """ Calculates Luminosity Distance for a given cosmology (in pc)
@@ -2684,8 +2705,8 @@ def linear_interp(xnew, xarr, yarr, verbose=False):
     if xnew < xarr[0] or xnew > xarr[1]:
         if verbose:
             print("WARNING: xnew must be on interval [xarr[0],xarr[1]]")
-            print("Returning all zeros")
-        return np.zeros(xnew.shape)
+#            print("Returning all zeros")
+#        return np.zeros(xnew.shape)
     slope = (yarr[1]-yarr[0])/(xarr[1]-xarr[0])
     ynew = yarr[0] + slope*(xnew-xarr[0])
     return ynew
@@ -2696,9 +2717,13 @@ def re_interp(xarr, xc, xorig, fitorig):
     fitout = np.zeros(xarr.shape)
     for i in range(xarr.size):
         idx2 = np.argmax(xorig>xarr[i])
-        if idx2 == 0:
-            idx1 = len(xorig)-1
-            idx2 = int(1.0*idx1)
+        ### If idx2 is on an edge, extrapolate from the closest two points
+        if idx2 == 0 and np.max(xorig>xarr[i]) == 0:
+            idx1 = len(xorig)-2
+            idx2 = int(idx1+1)
+        elif idx2 == 0 and np.max(xorig>xarr[i]) == 1:
+            idx1 = 0
+            idx2 = 1
         else:
             idx1 = idx2 -1
         fitout[i] = linear_interp(xarr[i], [xorig[idx1], xorig[idx2]],[fitorig[idx1],fitorig[idx2]])
