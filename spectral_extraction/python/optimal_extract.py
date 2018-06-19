@@ -76,8 +76,8 @@ parser.add_argument("-s","--fiber_space",help="Minimum spacing (in pixels) betwe
                     type=int,default=13)
 parser.add_argument("-t","--telescopes",help="Number of telescopes feeding spectrograph",
                     type=int,default=4)
-parser.add_argument("-c","--profile",help="Cross-dispersion profile to use for optimal extraction", type=str,default='gaussian')
-parser.add_argument("-F","--fast",help="Fast fitting for extraction (slightly less precise)",
+parser.add_argument("-p","--profile",help="Cross-dispersion profile to use for optimal extraction.  Options: gaussian, gauss_lor, bspline", type=str,default='gaussian')
+parser.add_argument("-a","--fast",help="Fast fitting for extraction (slightly less precise)",
                     action='store_true')
 parser.add_argument("-n","--num_points",help="Number of trace points to fit on each fiberflat",
                     type=int,default=256)#2048)
@@ -88,6 +88,15 @@ parser.add_argument("-z","--testing",help="Runs in test mode (overwrites files, 
 parser.add_argument("-o","--boxcar",help="Do simple boxcar extraction",
                     action='store_true')
 parser.add_argument("-d","--date",help="Date of arc exposure, format nYYYYMMDD",default=None)
+### The next four (capitalized) arguments are to include/exclude various calibration frames
+### By default will use bias, slit flat, and scattered light subtraction (but not dark)
+parser.add_argument("-D","--dark",help="Use dark frames in calibration (default: False)",
+                    action='store_true')
+parser.add_argument("-B","--bias",help="Use bias frames in calibration (default: True)",
+                    action='store_false')
+parser.add_argument("-F","--slit_flat",help="Use slit flat frames in calibration (default: True)", action='store_false')
+parser.add_argument("-S","--scatter",help="Perform scattered light subtraction (default: True)",
+                    action='store_false')
 #parser.add_argument("-T","--tscopes",help="T1, T2, T3, and/or T4 (remove later)",
 #                    type=str,default=['T1','T2','T3','T4'])
 args = parser.parse_args()
@@ -97,20 +106,17 @@ fiber_space = args.fiber_space
 boxcar = args.boxcar
 fast = args.fast
 
-#bias = m_utils.stack_bias(redux_dir,data_dir,'n20161204')
-#print np.mean(bias), np.std(bias)
-#exit(0)
-
 #########################################################
 ########### Load Background Requirments #################
 #########################################################
 
 #hardcode in n20160115 directory
 filename = args.filename#os.path.join(data_dir,'n20160115',args.filename)
-software_vers = 'v0.6.0' #Later grab this from somewhere else
+software_vers = 'v0.6.0' #Must manually update for each new release
 
 gain = 1.3 ### Based on MINERVA_CCD Datasheet
 readnoise = 3.63 ### Based on MINERVA_CCD Datasheet
+rn_eff = 1.0*readnoise*gain ### Effective readnoise (will find empirically if calibration data is available)
 
 ccd, overscan, spec_hdr = m_utils.open_minerva_fits(filename,return_hdr=True)
 actypix = ccd.shape[1]
@@ -125,77 +131,68 @@ except KeyError:
     i2 = False
 
 #########################################################
-########### Load Flat and Bias Frames ###################
+############## Calibrate CCD Exposure ###################
 #########################################################
-#date = 'n20160115' #Fixed for now, later make this dynamic
-#date = 'n20161123' #Fixed for now, later make this dynamic
+
 date = os.path.split(os.path.split(filename)[0])[1]
 ### Load Bias
-bias = m_utils.stack_calib(redux_dir, data_dir, date)
-bias = bias[::-1,0:actypix] #Remove overscan
-#print np.mean(bias)
-#exit(0)
+if args.bias:
+    bias = m_utils.stack_calib(redux_dir, data_dir, date)
+    bias = bias[::-1,0:actypix] #Remove overscan
+    ### Analyze exposure overscan (essentially flat, very minimal correction)
+    overscan_fit = m_utils.overscan_fit(overscan)
+    bias -= np.median(bias) ### give zero mean overall - readjust by overscan
+    bias = m_utils.bias_fit(bias, overscan_fit)
+    if np.mean(bias) < 10: ### If no bias is present, median is a close estimate of background level
+        ccd -= np.median(ccd)
+    else:
+        ccd -= bias #Note, if ccd is 16bit array, this operation can cause problems
+
 ### Load Dark
-dark, dhdr = m_utils.stack_calib(redux_dir, data_dir, date, frame='dark')
-dark = dark[::-1,0:actypix]
-try:
-    dark *= spec_hdr['EXPTIME']/dhdr['EXPTIME'] ### Scales linearly with exposure time
-except:
-    ### if EXPTIMES are unavailable, can't reliably subtract dark, just turn it
-    ### into zeros
-    dark = np.zeros(ccd.shape)
-### Analyze overscan (essentially flat, very minimal correction)
-overscan_fit = m_utils.overscan_fit(overscan)
-bias0 = 1.0*bias
-bias -= np.median(bias) ### give zero mean overall - readjust by overscan
-## Making up this method, so not sure if it's good, but if it works it should reduce ccd noise
-bias = m_utils.bias_fit(bias, overscan_fit)
+### Opting not to do dark subtraction by default.  Can lead to artifacts and
+### does not show appreciable improvement in overall fit (adds noise)
+if args.dark:
+    dark, dhdr = m_utils.stack_calib(redux_dir, data_dir, date, frame='dark')
+    dark = dark[::-1,0:actypix]
+    try:
+        dark *= spec_hdr['EXPTIME']/dhdr['EXPTIME'] ### Scales linearly with exposure time
+    except:
+        ### if EXPTIMES are unavailable, can't reliably subtract dark
+        dark = np.zeros(ccd.shape)
+    ccd -= dark
 
-#sflat_hdu = pyfits.open(os.path.join(redux_dir,date,'slit_approx.fits'),uint=True)
-#slit_coeffs = sflat_hdu[0].data
-#slit_coeffs = slit_coeffs[::-1,:] #Re-order, make sure this is right
-#polyord = sflat_hdu[0].header['POLYORD'] #Order of polynomial for slit fitting
+## Apply Slit Flats (if present)
+if args.slit_flat:
+    sflat = m_utils.stack_flat(redux_dir, data_dir, date)
+    ### If no slit flat, sflat returns all ones, don't do any flat fielding
+    if np.max(sflat) - np.min(sflat) == 0:
+        norm_sflat = np.ones(ccd.shape)
+        sflat_mask = 0.0*norm_sflat
+    else:
+        norm_sflat, sflat_mask = m_utils.make_norm_sflat(sflat, redux_dir, date, spline_smooth=True, keep_blaze=True, plot_results=False, include_edge=False)
+    sflat_mask = sflat_mask.astype(bool)    
+    ## Find new background level (Will overwrite this in scattered light)
+    if (np.max(norm_sflat) == np.min(norm_sflat)):
+        cut = int(10*readnoise)
+        junk, bstd = m_utils.remove_ccd_background(ccd,cut=cut)
+        rn_eff = bstd*gain
+    if not args.scatter:
+        ccd /= norm_sflat
 
-## Make master slitFlats
-sflat = m_utils.stack_flat(redux_dir, data_dir, date)
-### If no slit flat, sflat returns all ones, don't do any flat fielding
-if np.max(sflat) - np.min(sflat) == 0:
-    norm_sflat = np.ones(ccd.shape)
-    sflat_mask = 0.0*norm_sflat
+### Remove scattered light background
+### must have slit flats to do reliable scattered light subtraction
+if args.scatter and args.slit_flat:
+    if np.max(sflat_mask) == 0: ### Cues that there is no slit flat available
+        ccd, bstd = m_utils.remove_ccd_background(ccd)
+    else:
+        ccd, bstd = m_utils.remove_scattered_light(ccd, sflat_mask, redux_dir, date, overwrite=True)
+        ccd /= norm_sflat
 else:
-    norm_sflat, sflat_mask = m_utils.make_norm_sflat(sflat, redux_dir, date, spline_smooth=True, keep_blaze=True, plot_results=False, include_edge=False)
-sflat_mask = sflat_mask.astype(bool)
-    
-### Calibrate ccd
-ccd -= bias #Note, if ccd is 16bit array, this operation can cause problems
-
-### Opting not to do dark subtraction for now.  Can lead to artifacts and does
-### not show appreciable improvement in overall fit (adds noise) and hot/cold
-### pixels are rare
-#ccd -= dark
-if np.mean(bias) < 10: ### If no bias is present, median is a close estimate of background level
-    ccd -= np.median(ccd)
-
-## Find new background level (now more than readnoise because of bias/dark)
-## use bstd instead of readnoise in optimal extraction
-#norm_sflat = np.ones(ccd.shape)
-if (np.max(norm_sflat) == np.min(norm_sflat)):
-    cut = int(10*readnoise)
-    junk, bstd = m_utils.remove_ccd_background(ccd,cut=cut)
-    rn_eff = bstd*gain
-else:
-    bstd = 4.4
-#    ccd, bstd = m_utils.remove_scattered_light(ccd, sflat_mask, redux_dir, date, overwrite=True)
-#    junk, bstd = m_utils.remove_scattered_light(ccd, sflat_mask, redux_dir, date, overwrite=False)
-    rn_eff = bstd*gain
-
-### Use this to find inverse variance:
-#invar = 1/(abs(ccd) + bstd**2)
-
-#norm_sflat = np.ones(norm_sflat.shape)
-### flatten ccd
-#norm_sflat = np.ones(ccd.shape)
-ccd /= norm_sflat
+    if np.max(sflat_mask) == 0: ### Cues that there is no slit flat available
+        ccd, bstd = m_utils.remove_ccd_background(ccd)
+    else:
+        junk, bstd = m_utils.remove_scattered_light(ccd, sflat_mask, redux_dir, date, overwrite=False)
+rn_eff = bstd*gain
 
 ### Apply gain
 ccd *= gain
@@ -205,68 +202,45 @@ ccd *= gain
 ######################################
 
 ### Dynamically search for most recent arc frames (unless a date is supplied)
+### Fiber flats are taken with arcs (so far...)
 if args.date is None:
     arc_date = m_utils.find_most_recent_frame_date('arc', data_dir)
 else:
     arc_date = args.date
     
-#multi_coeffs = pyfits.open(os.path.join(redux_dir,'n20170406','trace_{}_{}.fits'.format('gaussian', 'n20170406')))[0].data    
-    
-daytime_sky = m_utils.stack_daytime_sky(date, data_dir, redux_dir, bias)
-daytime_sky, sky_std = m_utils.remove_scattered_light(daytime_sky, sflat_mask, redux_dir, date, overwrite=True)
-#sky_std = bstd
 
-### Precise peak finding with a modified gaussian profile - save
-#if os.path.isfile(os.path.join(redux_dir,date,'trace_{}_{}.fits'.format('gaussian', date))) and not args.testing:
-#    multi_coeffs = pyfits.open(os.path.join(redux_dir,date,'trace_{}_{}.fits'.format('gaussian', date)))[0].data
-#else:
-#    multi_coeffs = m_utils.find_trace_coeffs(daytime_sky,6,fiber_space,rn=sky_std*gain,num_points=num_points,num_fibers=num_fibers,skip_peaks=1, profile='gaussian')
-#    hdu1 = pyfits.PrimaryHDU(multi_coeffs)
-#    hdulist = pyfits.HDUList([hdu1])
-#    hdu1.header.append(('PROFILE','gaussian','Cross-dispersion profile used for trace fitting'))
-#    hdulist.writeto(os.path.join(redux_dir,date,'trace_{}_{}.fits'.format('gaussian', date)),clobber=True)
+#arc_date = 'n20161123'
+trace_dir = os.path.join(redux_dir,"sky_trace")
+trace_fits = pyfits.open(os.path.join(trace_dir,'trace_gaussian.fits'))
+#hdr = trace_fits[0].header
+#profile = hdr['PROFILE']
+multi_coeffs = trace_fits[0].data  
 
-#if os.path.isfile(os.path.join(redux_dir,date,'trace_{}_{}.fits'.format('gauss_lor', date))) and not args.testing:
-#    multi_coeffs = pyfits.open(os.path.join(redux_dir,date,'trace_{}_{}.fits'.format('gauss_lor', date)))[0].data
-#else:
-#    multi_coeffs = m_utils.find_trace_coeffs(daytime_sky,12,fiber_space,rn=sky_std*gain,num_points=int(num_points/5),num_fibers=num_fibers,skip_peaks=1, profile='gauss_lor')
-#    hdu1 = pyfits.PrimaryHDU(multi_coeffs)
-#    hdulist = pyfits.HDUList([hdu1])
-#    hdu1.header.append(('PROFILE','gauss_lor','Cross-dispersion profile used for trace fitting'))
-#    hdulist.writeto(os.path.join(redux_dir,date,'trace_{}_{}.fits'.format('gauss_lor', date)),clobber=True)
-
-if os.path.isfile(os.path.join(redux_dir,date,'trace_{}_{}.fits'.format('bspline', date))) and not args.testing:
-    multi_coeffs = pyfits.open(os.path.join(redux_dir,date,'trace_{}_{}.fits'.format('bspline', date)))[0].data
-else:
-    multi_coeffs = m_utils.find_trace_coeffs(daytime_sky,12,fiber_space,rn=sky_std*gain,num_points=int(num_points/5),num_fibers=num_fibers,skip_peaks=1, profile='bspline')
-    hdu1 = pyfits.PrimaryHDU(multi_coeffs)
-    hdulist = pyfits.HDUList([hdu1])
-    hdu1.header.append(('PROFILE','bspline','Cross-dispersion profile used for trace fitting'))
-    hdulist.writeto(os.path.join(redux_dir,date,'trace_{}_{}.fits'.format('bspline', date)),clobber=True)
-#
-#print "Done with Gauss-Lor Test"
-#exit(0)
-
-### Old traces for comparison
+### Fiber flat traces from Nov 23, 2016 - use as a backup if other fitting fails
 #arc_date = 'n20161123'
 #trace_fits = pyfits.open(os.path.join(redux_dir,arc_date,'trace_{}.fits'.format(arc_date)))
 #hdr = trace_fits[0].header
 #profile = hdr['PROFILE']
 #multi_coeffs = trace_fits[0].data
+#  
+    
+#multi_coeffs = pyfits.open(os.path.join(redux_dir,'n20170406','trace_{}_{}.fits'.format('gaussian', 'n20170406')))[0].data    
+    
 
-#plt.figure('Trace Check')
-#plt.imshow(np.log(ccd),interpolation='none')
-#ypix = ccd.shape[1]
-#t_coeffs = multi_coeffs[0]
-#for i in range(num_fibers):
-#    if i < 0 or i > 110:
-#        continue
-#    ys = (np.arange(ypix)-ypix/2)/ypix
-#    xs = np.poly1d(t_coeffs[:,i])(ys)
-#    yp = np.arange(ypix)
-#    plt.plot(yp,xs, 'b', linewidth=2)
-#plt.show()
-#plt.close() 
+
+plt.figure('Trace Check')
+plt.imshow(np.log(ccd),interpolation='none')
+ypix = ccd.shape[1]
+t_coeffs = multi_coeffs[0]
+for i in range(num_fibers):
+    if i < 0 or i > 110:
+        continue
+    ys = (np.arange(ypix)-ypix/2)/ypix
+    xs = np.poly1d(t_coeffs[:,i])(ys)
+    yp = np.arange(ypix)
+    plt.plot(yp,xs, 'b', linewidth=2)
+plt.show()
+plt.close() 
     
 ### Now find bspline profiles using the gaussian trace centers (this is saved to disk)
 skip_fibs = [0, 111, 112, 113, 114, 115]
@@ -375,7 +349,8 @@ else:
 #norm_sflat = np.ones(ccd.shape)
 profile = args.profile
 #profile = 'bspline'
-spec, spec_invar, spec_mask, image_model, image_mask, chi2_array = m_utils.extract_1D(ccd, norm_sflat, multi_coeffs, profile, date=date, readnoise=rn_eff, gain=gain, return_model=True, verbose=True, boxcar=boxcar, fast=fast)
+px_shift = 0
+spec, spec_invar, spec_mask, image_model, image_mask, chi2_array = m_utils.extract_1D(ccd, norm_sflat, multi_coeffs, profile, date=date, readnoise=rn_eff, gain=gain, px_shift=px_shift, return_model=True, verbose=True, boxcar=boxcar, fast=fast, trace_dir=trace_dir)
 ### Evaluate fit
 invar = (1/(abs(ccd)*gain + (rn_eff)**2))
 resid = (ccd-image_model)*np.sqrt(invar)
@@ -435,49 +410,60 @@ for j in range(4):
 ###############################################################
 ########### Stack extracted values into 3D arrays #############
 ###############################################################
-### Would like to automate this (how?) right now, here's the fiber arrangement:
-###    1st (0) - T4 from order "2" (by my minerva csv accounting)
-###    2nd (1) - T1 from order "3"
-###    3rd (2) - T2 from order "3"
-### etc.  continues T1 through T4 and ascending orders
-### right now I don't have wavelength soln for order 2, so I just eliminate
-### that fiber and keep moving forward (fiber "0" isn't used)
-#spec3D = np.zeros((args.telescopes,args.num_fibers,actypix))
-#spec3D[0,:,:] = spec[np.arange(1,num_fibers,4),:]
-#spec3D[1,:,:] = spec[np.arange(2,num_fibers,4),:]
-#spec3D[2,:,:] = spec[np.arange(3,num_fibers,4),:]
-#spec3D[3,:,:] = np.vstack((spec[np.arange(4,num_fibers,4),:],np.ones(actypix)))
-#
-#spec_invar3D = np.zeros((args.telescopes,args.num_fibers,actypix))
-#spec_invar3D[0,:,:] = spec_invar[np.arange(1,num_fibers,4),:]
-#spec_invar3D[1,:,:] = spec_invar[np.arange(2,num_fibers,4),:]
-#spec_invar3D[2,:,:] = spec_invar[np.arange(3,num_fibers,4),:]
-#spec_invar3D[3,:,:] = np.vstack((spec_invar[np.arange(4,num_fibers,4),:],np.zeros(actypix)))
-#
-#spec_mask3D = np.zeros((args.telescopes,args.num_fibers,actypix))
-#spec_mask3D[0,:,:] = spec_mask[np.arange(1,num_fibers,4),:]
-#spec_mask3D[1,:,:] = spec_mask[np.arange(2,num_fibers,4),:]
-#spec_mask3D[2,:,:] = spec_mask[np.arange(3,num_fibers,4),:]
-#spec_mask3D[3,:,:] = np.vstack((spec_mask[np.arange(4,num_fibers,4),:],np.zeros(actypix)))
-
-
+## Would like to automate this (how?) right now, here's the fiber arrangement:
+##    1st (0) - T4 from order "2" (by my minerva csv accounting)
+##    2nd (1) - T1 from order "3"
+##    3rd (2) - T2 from order "3"
+## etc.  continues T1 through T4 and ascending orders
+## right now I don't have wavelength soln for order 2, so I just eliminate
+## that fiber and keep moving forward (fiber "0" isn't used)
 spec3D = np.zeros((args.telescopes,args.num_fibers,actypix))
-spec3D[0,:,:] = spec[np.arange(0,num_fibers,4),:]
-spec3D[1,:,:] = spec[np.arange(1,num_fibers,4),:]
-spec3D[2,:,:] = spec[np.arange(2,num_fibers,4),:]
-spec3D[3,:,:] = spec[np.arange(3,num_fibers,4),:]
+spec3D[0,:,:] = spec[np.arange(1,num_fibers,4),:]
+spec3D[1,:,:] = spec[np.arange(2,num_fibers,4),:]
+spec3D[2,:,:] = spec[np.arange(3,num_fibers,4),:]
+spec3D[3,:,:] = np.vstack((spec[np.arange(4,num_fibers,4),:],np.ones(actypix)))
 
 spec_invar3D = np.zeros((args.telescopes,args.num_fibers,actypix))
-spec_invar3D[0,:,:] = spec_invar[np.arange(0,num_fibers,4),:]
-spec_invar3D[1,:,:] = spec_invar[np.arange(1,num_fibers,4),:]
-spec_invar3D[2,:,:] = spec_invar[np.arange(2,num_fibers,4),:]
-spec_invar3D[3,:,:] = spec_invar[np.arange(3,num_fibers,4),:]
+spec_invar3D[0,:,:] = spec_invar[np.arange(1,num_fibers,4),:]
+spec_invar3D[1,:,:] = spec_invar[np.arange(2,num_fibers,4),:]
+spec_invar3D[2,:,:] = spec_invar[np.arange(3,num_fibers,4),:]
+spec_invar3D[3,:,:] = np.vstack((spec_invar[np.arange(4,num_fibers,4),:],np.zeros(actypix)))
 
 spec_mask3D = np.zeros((args.telescopes,args.num_fibers,actypix))
-spec_mask3D[0,:,:] = spec_mask[np.arange(0,num_fibers,4),:]
-spec_mask3D[1,:,:] = spec_mask[np.arange(1,num_fibers,4),:]
-spec_mask3D[2,:,:] = spec_mask[np.arange(2,num_fibers,4),:]
-spec_mask3D[3,:,:] = spec_mask[np.arange(3,num_fibers,4),:]
+spec_mask3D[0,:,:] = spec_mask[np.arange(1,num_fibers,4),:]
+spec_mask3D[1,:,:] = spec_mask[np.arange(2,num_fibers,4),:]
+spec_mask3D[2,:,:] = spec_mask[np.arange(3,num_fibers,4),:]
+spec_mask3D[3,:,:] = np.vstack((spec_mask[np.arange(4,num_fibers,4),:],np.zeros(actypix)))
+
+
+#spec3D = np.zeros((args.telescopes,args.num_fibers,actypix))
+#spec3D[0,:,:] = spec[np.arange(0,num_fibers,4),:]
+#spec3D[1,:,:] = spec[np.arange(1,num_fibers,4),:]
+#spec3D[2,:,:] = spec[np.arange(2,num_fibers,4),:]
+#spec3D[3,:,:] = spec[np.arange(3,num_fibers,4),:]
+#
+#spec_invar3D = np.zeros((args.telescopes,args.num_fibers,actypix))
+#spec_invar3D[0,:,:] = spec_invar[np.arange(0,num_fibers,4),:]
+#spec_invar3D[1,:,:] = spec_invar[np.arange(1,num_fibers,4),:]
+#spec_invar3D[2,:,:] = spec_invar[np.arange(2,num_fibers,4),:]
+#spec_invar3D[3,:,:] = spec_invar[np.arange(3,num_fibers,4),:]
+#
+#spec_mask3D = np.zeros((args.telescopes,args.num_fibers,actypix))
+#spec_mask3D[0,:,:] = spec_mask[np.arange(0,num_fibers,4),:]
+#spec_mask3D[1,:,:] = spec_mask[np.arange(1,num_fibers,4),:]
+#spec_mask3D[2,:,:] = spec_mask[np.arange(2,num_fibers,4),:]
+#spec_mask3D[3,:,:] = spec_mask[np.arange(3,num_fibers,4),:]
+
+plt.plot(wavelength_soln[0,2,:][spec_mask3D[0,2,:]==2],spec3D[0,2,:][spec_mask3D[0,2,:]==2],'b')
+plt.plot(wavelength_soln[0,3,:][spec_mask3D[0,3,:]==2],spec3D[0,3,:][spec_mask3D[0,3,:]==2],'b--')
+plt.plot(wavelength_soln[1,2,:][spec_mask3D[1,2,:]==2],spec3D[1,2,:][spec_mask3D[1,2,:]==2],'k')
+plt.plot(wavelength_soln[1,3,:][spec_mask3D[1,3,:]==2],spec3D[1,3,:][spec_mask3D[1,3,:]==2],'k--')
+plt.plot(wavelength_soln[2,2,:][spec_mask3D[2,2,:]==2],spec3D[2,2,:][spec_mask3D[2,2,:]==2],'g')
+plt.plot(wavelength_soln[2,3,:][spec_mask3D[2,3,:]==2],spec3D[2,3,:][spec_mask3D[2,3,:]==2],'g--')
+plt.plot(wavelength_soln[3,2,:][spec_mask3D[3,2,:]==2],spec3D[3,2,:][spec_mask3D[3,2,:]==2],'r')
+plt.plot(wavelength_soln[3,3,:][spec_mask3D[3,3,:]==2],spec3D[3,3,:][spec_mask3D[3,3,:]==2],'r--')
+plt.show()
+plt.close()
 
 
 #############################################################
@@ -567,6 +553,9 @@ for i in range(4):
 lf.write("\n")
 lf.write("Mean photon count > {} on {}/4 telescopes\n".format(moderate_cut,np.sum(good==2)))
 lf.write("Mean photon count > {} on {}/4 telescopes\n".format(low_cut,np.sum(good>=1)))
+lf.write("Median counts per telescope (across all orders):\n")
+lf.write("{} {} {} {}\n".format(np.median(T_cnts[0]), np.median(T_cnts[1]), np.median(T_cnts[2]), np.median(T_cnts[3])))
+lf.write("Signal Count Status (2=good, 1=low, 0=negligible):\n")
 lf.write("{} {} {} {}".format(good[0], good[1], good[2], good[3]))
 lf.close()
 

@@ -25,6 +25,31 @@ def get_t_statuses(fl):
     status = line.split(" ")
     return np.array((status))
 
+def get_t_medians(fl, lines=15):
+    """ Returns array with good flags for each telescope """
+    lcnt = 0
+    for line in fl:
+        if (lcnt == lines-2):
+            break
+        lcnt += 1
+        pass
+    ### Good flags are just the last line of the file, in an array
+    medians = line.split(" ")
+    m_arr = np.array((medians))
+    if len(m_arr) != 4:
+        print "ERROR: Problem checking medians from log file!"
+        print m_arr
+        exit(0)
+    return m_arr
+    
+def get_star(fl):
+    """ assumes fl is a full path with file as the last part
+    """
+    fl_name = os.path.split(fl)[1]
+    star_plus = fl_name[10:]
+    star = star_plus[0:star_plus.find('.')]
+    return star
+
 parser = argparse.ArgumentParser()
 parser.add_argument("-d","--date",help="Date to run log_file check in 'nYYYYMMDD' format (default is current day)")
 parser.add_argument("-n","--dry_run",help="Run without sending emails", action="store_true")
@@ -123,7 +148,10 @@ if script != "" and not args_in.dry_run:
     
 ### Send report on low signal files
 all_clear = True
-if np.min(exp_status) <= 1: ##Flags zero and low exposures
+if len(raw_data) == 0:
+    print "No data on {}".format(date)
+    exit(0)
+elif np.min(exp_status) <= 1: ##Flags zero and low exposures
     all_clear = False
 ignore = np.array(([1, 1, 1, 1])) ## Set 0 to ignore one or more telescopes
 escript = "Warning - Low/Zero Exposures found on {}\n\n".format(date)
@@ -136,7 +164,53 @@ for l in range(4):
 escript += "\nList of files with no-signal exposures:\n"
 for i in range(len(logged)):
     if min(exp_status[i]) == 0:
-        escript += "  " + raw_data[i] + "\n"
+        star = get_star(raw_data[i])
+        escript += "  " + star + "\n"
 
 if not all_clear and not args_in.dry_run:
     sendmail(escript, "MINERVA Low Exposure Report: {}".format(date))
+    
+### Check past median values to flag a gross change in throughput
+    
+tpscript = "Check on throughputs for {}\n\n".format(date)
+Tarr = np.array((['T1', 'T2', 'T3', 'T4']))
+low_cnt = 0
+for raw in raw_data:
+    star = get_star(raw)
+    ### Compare to the last few days
+    days_to_check = 7
+    past_logs = []
+    today = datetime.datetime(*(time.strptime(date, 'n%Y%m%d')[0:6]))
+    for i in range(days_to_check):
+        days_back = datetime.timedelta(i+1)
+        dnew = (today - days_back).strftime('n%Y%m%d')
+        past_logs += glob.glob(os.path.join(redux_dir, dnew, '*{}*.log'.format(star)))
+    if len(past_logs) == 0:
+        print "No log files in last {} days for star {}".format(days_to_check, star)
+    else:
+        m_arr = np.zeros((len(past_logs),4))
+        idxm = 0
+        for log in past_logs:
+            with open(log) as lf:
+                m_arr[idxm] = get_t_medians(lf)
+            idxm += 1
+        m_arr = np.median(m_arr, axis=0) #Take median across available files
+        rlog = raw[0:-4] + 'log'
+        rlog = rlog.replace("/data/","/redux/")
+        try:
+            with open(rlog) as rd:
+                m_arr_new = get_t_medians(rd)
+            low_cut_pcnt = 0.5 ### Flag if new is below 50% of old median - can change this threshold as desired
+            good = np.ones((4), dtype=bool)
+            for k in range(4):
+                if m_arr_new[k] < low_cut_pcnt*m_arr[k]:
+                    good[k] = False
+            if np.sum(good) < 4:
+                Tlow = Tarr[good==False]
+                tpscript += "File {} low on telescopes {}\n".format(raw, Tlow)
+                low_cnt += 1
+        except:
+            print "Log file {} does not exist".format(rlog)
+
+if low_cnt > 0:
+    sendmail(tpscript, "MINERVA Past Throughput Check: {}".format(date))

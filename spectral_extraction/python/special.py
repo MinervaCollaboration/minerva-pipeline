@@ -2631,9 +2631,10 @@ def luminosity_dist(z, z0=0, Om=0.3, Ol=0.7, h=0.7, k=0):
     Dl = angular_dia_dist(z, z0=z0, Om=Om, Ol=Ol, h=h)*(1+z)**2/(1+z0)**2
     return Dl
     
-def combine(images,method='median'):
+def combine(images,method='median',masks=None):
     """ Input is an array or list of 2D images to median combine.
         All images must be the same size...
+        Option to include masks for various images (for CR rejection, etc.)
         Methods can be:
             - median
             - mean or average
@@ -2641,23 +2642,33 @@ def combine(images,method='median'):
     """
     if type(images) is list:
         images_tmp = np.array((len(images),images.shape[0],images.shape[1]))
+        masks_tmp = np.zeros(images_tmp.shape,dtype=bool)
         try:
             for i in range(len(images)):
                 images_tmp[i] = images[i]
+                if masks is not None:
+                    masks_tmp[i] = masks[i]
         except:
             print("All images must be the same dimension")
             exit(0)
         images = images_tmp
+        masks = masks_tmp
+        ma_images = np.ma.array(images, mask=masks)
+    else:
+        if masks is None:
+            masks = np.zeros(images.shape, dtype=bool)
+        ma_images = np.ma.array(images, mask=masks)
     if method == 'median':
-        comb_image = np.median(images,axis=0)
+        comb_image = np.ma.median(ma_images,axis=0)
     elif method == 'mean' or method == 'average':
-        comb_image = np.mean(images,axis=0)
+        comb_image = np.ma.mean(ma_images,axis=0)
     elif method == 'sum':
-        comb_image = np.sum(images,axis=0)
+        comb_image = np.ma.sum(ma_images,axis=0)
     else:
         print("Invalid input method.  Must be one of:")
         print(" median\n mean (or average)\n sum")
         exit(0)
+    comb_image = np.ma.getdata(comb_image)
     return comb_image
     
 def correlation_coeff(x,y,mode='pearson',high_moments=None):
