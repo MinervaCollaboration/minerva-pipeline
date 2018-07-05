@@ -112,7 +112,7 @@ fast = args.fast
 
 #hardcode in n20160115 directory
 filename = args.filename#os.path.join(data_dir,'n20160115',args.filename)
-software_vers = 'v0.6.0' #Must manually update for each new release
+software_vers = 'v1.0.0' #Must manually update for each new release
 
 gain = 1.3 ### Based on MINERVA_CCD Datasheet
 readnoise = 3.63 ### Based on MINERVA_CCD Datasheet
@@ -210,37 +210,49 @@ else:
     
 
 #arc_date = 'n20161123'
-trace_dir = os.path.join(redux_dir,"sky_trace")
-trace_fits = pyfits.open(os.path.join(trace_dir,'trace_gaussian.fits'))
-#hdr = trace_fits[0].header
-#profile = hdr['PROFILE']
-multi_coeffs = trace_fits[0].data  
+#trace_dir = os.path.join(redux_dir,"sky_trace")
+#trace_fits = pyfits.open(os.path.join(trace_dir,'trace_gaussian.fits'))
+##hdr = trace_fits[0].header
+##profile = hdr['PROFILE']
+#multi_coeffs = trace_fits[0].data  
 
 ### Fiber flat traces from Nov 23, 2016 - use as a backup if other fitting fails
+#trace_dir = None
 #arc_date = 'n20161123'
 #trace_fits = pyfits.open(os.path.join(redux_dir,arc_date,'trace_{}.fits'.format(arc_date)))
-#hdr = trace_fits[0].header
-#profile = hdr['PROFILE']
+##hdr = trace_fits[0].header
+##profile = hdr['PROFILE']
 #multi_coeffs = trace_fits[0].data
+
+### New Fiber flats
+trace_dir = os.path.join(redux_dir,'flat_trace')
+trace_fits = pyfits.open(os.path.join(trace_dir,'trace_{}.fits'.format(args.profile)))
+### These are packaged as full arrays by extension.  Reload into multi_coeffs
+info = {}
+numexts = len(trace_fits.info(info))
+multi_coeffs = np.zeros((numexts,)+trace_fits[0].data.shape)
+for i in range(numexts):
+    multi_coeffs[i] = trace_fits[i].data
+    
 #  
     
 #multi_coeffs = pyfits.open(os.path.join(redux_dir,'n20170406','trace_{}_{}.fits'.format('gaussian', 'n20170406')))[0].data    
     
 
 
-plt.figure('Trace Check')
-plt.imshow(np.log(ccd),interpolation='none')
-ypix = ccd.shape[1]
-t_coeffs = multi_coeffs[0]
-for i in range(num_fibers):
-    if i < 0 or i > 110:
-        continue
-    ys = (np.arange(ypix)-ypix/2)/ypix
-    xs = np.poly1d(t_coeffs[:,i])(ys)
-    yp = np.arange(ypix)
-    plt.plot(yp,xs, 'b', linewidth=2)
-plt.show()
-plt.close() 
+#plt.figure('Trace Check')
+#plt.imshow(np.log(ccd),interpolation='none')
+#ypix = ccd.shape[1]
+#t_coeffs = multi_coeffs[0]
+#for i in range(num_fibers):
+#    if i < 0 or i > 110:
+#        continue
+#    ys = (np.arange(ypix)-ypix/2)/ypix
+#    xs = np.poly1d(t_coeffs[:,i])(ys)
+#    yp = np.arange(ypix)
+#    plt.plot(yp,xs, 'b', linewidth=2)
+#plt.show()
+#plt.close() 
     
 ### Now find bspline profiles using the gaussian trace centers (this is saved to disk)
 skip_fibs = [0, 111, 112, 113, 114, 115]
@@ -350,7 +362,7 @@ else:
 profile = args.profile
 #profile = 'bspline'
 px_shift = 0
-spec, spec_invar, spec_mask, image_model, image_mask, chi2_array = m_utils.extract_1D(ccd, norm_sflat, multi_coeffs, profile, date=date, readnoise=rn_eff, gain=gain, px_shift=px_shift, return_model=True, verbose=True, boxcar=boxcar, fast=fast, trace_dir=trace_dir)
+spec, spec_invar, spec_mask, image_model, image_mask, chi2_array, med_pix_shift = m_utils.extract_1D(ccd, norm_sflat, multi_coeffs, profile, date=date, readnoise=rn_eff, gain=gain, px_shift=px_shift, return_model=True, verbose=True, boxcar=boxcar, fast=fast, trace_dir=trace_dir)
 ### Evaluate fit
 invar = (1/(abs(ccd)*gain + (rn_eff)**2))
 resid = (ccd-image_model)*np.sqrt(invar)
@@ -366,13 +378,15 @@ print("Reduced chi^2 of ccd vs. model is {}".format(chi2total))
 #plt.show()
 #plt.close()
 
-image_mask = (image_mask == 0) #Invert T/F
+#image_mask = (image_mask == 0) #Invert T/F
+#bg_cr_mask = (image_mask == 0) #Invert T/F
+bg_cr_mask = 1.0*image_mask
 #bg_cr_mask = m_utils.simple_sig_clip((ccd-image_model)*image_mask, sig=7) != 0
 
-bg_cr_mask = m_utils.simple_sig_clip((ccd-image_model)*np.sqrt(invar), sig=7) != 0
+#bg_cr_mask = m_utils.simple_sig_clip((ccd-image_model)*np.sqrt(invar), sig=7) != 0
 
 chi2tot = np.sum(((ccd-image_model)**2*invar)*bg_cr_mask)
-dof = ccd.size - np.sum(bg_cr_mask==0)
+dof = ccd.size - np.sum(bg_cr_mask==0) - (num_fibers + 12)*ccd.shape[1]
 print "Chi2/dof = {}/{}".format(chi2tot, dof)
 
 
@@ -383,14 +397,21 @@ if save_model:
 #plt.imshow(np.hstack((ccd,image_model,ccd-image_model)), interpolation='none', cmap=cm.hot)
 #plt.show()
 #plt.close()
-resid = (ccd-image_model)*np.sqrt(invar)
-plt.imshow(resid*bg_cr_mask, vmin=-np.max(resid*bg_cr_mask), interpolation='none', cmap=cm.hot)
-plt.show()
-plt.close()
+#resid = (ccd-image_model)*np.sqrt(invar)
+#plt.imshow(resid*bg_cr_mask, vmax=1, vmin=-1, interpolation='none', cmap=cm.hot)
+#plt.show()
+#plt.close()
 #plt.plot(resid[:,1000])
 #plt.show()
 #plt.close()
 #exit(0)
+
+nnresid = (ccd-image_model)
+rsec = nnresid[1650:1667,1000]
+xsec = np.arange(1650, 1667)
+insec = 1/(abs(ccd[1650:1667,1000])+rn_eff**2)
+np.save('test_res.npy', np.hstack((rsec, xsec, insec)))
+new_pars = sf.fit_damped_cos(xsec, rsec, insec)
 
 ############################################################
 ######### Import wavelength calibration ####################        
@@ -454,17 +475,25 @@ spec_mask3D[3,:,:] = np.vstack((spec_mask[np.arange(4,num_fibers,4),:],np.zeros(
 #spec_mask3D[2,:,:] = spec_mask[np.arange(2,num_fibers,4),:]
 #spec_mask3D[3,:,:] = spec_mask[np.arange(3,num_fibers,4),:]
 
-plt.plot(wavelength_soln[0,2,:][spec_mask3D[0,2,:]==2],spec3D[0,2,:][spec_mask3D[0,2,:]==2],'b')
-plt.plot(wavelength_soln[0,3,:][spec_mask3D[0,3,:]==2],spec3D[0,3,:][spec_mask3D[0,3,:]==2],'b--')
-plt.plot(wavelength_soln[1,2,:][spec_mask3D[1,2,:]==2],spec3D[1,2,:][spec_mask3D[1,2,:]==2],'k')
-plt.plot(wavelength_soln[1,3,:][spec_mask3D[1,3,:]==2],spec3D[1,3,:][spec_mask3D[1,3,:]==2],'k--')
-plt.plot(wavelength_soln[2,2,:][spec_mask3D[2,2,:]==2],spec3D[2,2,:][spec_mask3D[2,2,:]==2],'g')
-plt.plot(wavelength_soln[2,3,:][spec_mask3D[2,3,:]==2],spec3D[2,3,:][spec_mask3D[2,3,:]==2],'g--')
-plt.plot(wavelength_soln[3,2,:][spec_mask3D[3,2,:]==2],spec3D[3,2,:][spec_mask3D[3,2,:]==2],'r')
-plt.plot(wavelength_soln[3,3,:][spec_mask3D[3,3,:]==2],spec3D[3,3,:][spec_mask3D[3,3,:]==2],'r--')
-plt.show()
-plt.close()
+#plt.plot(wavelength_soln[0,2,:][spec_mask3D[0,2,:]==2],spec3D[0,2,:][spec_mask3D[0,2,:]==2],'b')
+#plt.plot(wavelength_soln[0,3,:][spec_mask3D[0,3,:]==2],spec3D[0,3,:][spec_mask3D[0,3,:]==2],'b--')
+#plt.plot(wavelength_soln[1,2,:][spec_mask3D[1,2,:]==2],spec3D[1,2,:][spec_mask3D[1,2,:]==2],'k')
+#plt.plot(wavelength_soln[1,3,:][spec_mask3D[1,3,:]==2],spec3D[1,3,:][spec_mask3D[1,3,:]==2],'k--')
+#plt.plot(wavelength_soln[2,2,:][spec_mask3D[2,2,:]==2],spec3D[2,2,:][spec_mask3D[2,2,:]==2],'g')
+#plt.plot(wavelength_soln[2,3,:][spec_mask3D[2,3,:]==2],spec3D[2,3,:][spec_mask3D[2,3,:]==2],'g--')
+#plt.plot(wavelength_soln[3,2,:][spec_mask3D[3,2,:]==2],spec3D[3,2,:][spec_mask3D[3,2,:]==2],'r')
+#plt.plot(wavelength_soln[3,3,:][spec_mask3D[3,3,:]==2],spec3D[3,3,:][spec_mask3D[3,3,:]==2],'r--')
+#plt.show()
+#plt.close()
 
+#print "Percent of masked points:", np.sum(spec_mask3D<2)/np.size(spec3D)*100
+#for ff in range(28):
+#    for tt in range(4):
+#        plt.plot(spec3D[tt,ff,:])
+#        plt.plot(spec3D[tt,ff,:]*(spec_mask3D[tt,ff,:]>=1))
+#        plt.plot(spec3D[tt,ff,:]*(spec_mask3D[tt,ff,:]==2))
+#        plt.show()
+#        plt.close()
 
 #############################################################
 ########### And finally, save spectrum ######################
@@ -475,6 +504,7 @@ junk, savedate = os.path.split(root)
 if not os.path.isdir(root):
     os.mkdir(root)
 
+active = np.ones((4), dtype=int) ### Array for whether telescopes are active or inactive
 if not args.nosave:
     hdu1 = pyfits.PrimaryHDU(spec3D)
     hdu2 = pyfits.PrimaryHDU(spec_invar3D)
@@ -498,11 +528,24 @@ if not args.nosave:
     hdu3.header.append(('UNITS','Wavelength','Wavelength solution lambda (Angstroms) vs px'))
     hdu4.header.append(('UNITS','Mask','True (1) or False (0) good data point'))
     hdu1.header.append(('VERSION',software_vers,'Reduction software version'))
+    ### Check if telescopes are inactive for photometry
+    for i in range(4):
+        try:
+            if spec_hdr['FAUSTAT{}'.format(i+1)] != 'GUIDING':
+                active[i] = 0
+        except:
+            active[i] = 0 #Inactive if header is not present
     #### Include all old header values in new header for hdu1
     ### As usual, probably a better way, but I think this will work
     for key in spec_hdr.keys():
         if key not in hdu1.header and key != 'BSCALE' and key != 'BZERO' and key != 'COMMENT':
-            hdu1.header.append((key,spec_hdr[key],spec_hdr.comments[key]))              
+            try:
+                spec_hdr.comments[key].decode('ascii')
+            except:
+                new_key = ''.join([i if ord(i) < 128 else ' ' for i in spec_hdr.comments[key]])
+                hdu1.header.append((key,spec_hdr[key],new_key))
+            else:
+                hdu1.header.append((key,spec_hdr[key],spec_hdr.comments[key]))        
     hdulist = pyfits.HDUList([hdu1])
     hdulist.append(hdu2)
     hdulist.append(hdu3)
@@ -519,6 +562,7 @@ try:
     barycentric = True
 except:
     barycentric = False
+#barycentric = False
 
 
 #############################################################
@@ -537,10 +581,20 @@ if barycentric:
 else:
     lf.write("WARNING: Barycentric corrections not applied")
 lf.write("\n\n")
+lf.write("Pixel shift relative to trace frame is {}\n".format(med_pix_shift))
+lf.write("{}\n\n".format(med_pix_shift>1))
+lf.write("Telescopes active (1=active, 0=inactive)\n")
+lf.write("{} {} {} {}\n\n".format(active[0], active[1], active[2], active[3]))
 lf.write("Photon count check:\n")
 for i in range(4):
     Tnum = 'T{}'.format(i+1)
-    T_cnts[i] = np.mean(spec3D[i,:,:][spec_mask3D[i,:,:]==2])
+    if active[i] == 0:
+        T_cnts[i] = 0
+        good[i] = 0
+        lf.write("  {}: Not Guiding".format(Tnum))
+        lf.write("\n")
+        continue
+    T_cnts[i] = np.nanmean(spec3D[i,:,:][spec_mask3D[i,:,:]==1])
     if np.mean(T_cnts[i]) < low_cut:
         good[i] = 0 #Bad exposure on this telescope
         lf.write("  {}: WARNING - very low counts".format(Tnum))

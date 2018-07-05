@@ -20,6 +20,7 @@ import scipy.sparse as sparse
 #import scipy.signal as sig
 #import scipy.linalg as linalg
 #import astropy.stats as stats
+from astropy.modeling.models import Voigt1D
 
 """
 #!/usr/bin/env python 2.7
@@ -44,7 +45,7 @@ def gaussian(axis, sigma, center=0, height=None,bg_mean=0,bg_slope=0,power=2,ask
     if height is None:
         height = 1/(np.sqrt(2*np.pi*sigma**2))
         ### For more general expression can switch to the following:
-        gen_norm = False
+        gen_norm = (power!=2)
         if gen_norm:
             norm = (2*sigma**power)**(1/power)*(2/power)*sp.gamma(1/power)
             height = 1/norm
@@ -859,8 +860,129 @@ def eff2d_lmfit(params, x, y, i, ab=False):
     rarr = make_rarr(x,y,xc,yc,q=q,PA=PA)
     image = eff(rarr,Io,scl,gam)
     return image
+
+def damped_cos(params, x):
+    """
+    Function to try to fit MINERVA profile residuals
+    """
+    if type(params) == tuple:
+        A, center, tau, phi, bg = params
+    else:
+        A = params['A'].value
+        center = params['center'].value
+        tau = params['tau'].value
+        phi = params['phi'].value
+        bg = params['bg'].value
+    prof = np.exp(-((x-center)/tau)**2)*np.cos(phi*(x-center))
+    prof /= np.sum(prof) #Normalize
+    return A*prof+bg
     
+def damped_cos_res(params, x, y, invar):
+    model = damped_cos(params, x)
+    return (y-model)*np.sqrt(invar)
+    
+def fit_damped_cos(x, y, invar, fit_bg=True, method='regular'):
+    args = (x, y, invar)
+    params = lmfit.Parameters()
+    params.add('A', value = np.max(abs(y)), max=1.5*np.max(abs(y)), min=-1.5*np.max(abs(y)))
+    params.add('center', value = np.mean(x), min=np.mean(x)-1.5, max=np.mean(x)+1.5)
+    params.add('tau', value=3, max=5, min=0.5)
+    params.add('phi', value=3, max=6, min=2)
+    params.add('bg', value=0, vary=fit_bg, min=-20, max=20)
+    if method == 'regular':
+        results = lmfit.minimize(damped_cos_res, params, args=args)
+    else:
+        results = lmfit.minimize(damped_cos_res, params, args=args, method=method)
+    A = results.params['A'].value
+    center = results.params['center'].value
+    tau = results.params['tau'].value
+    phi = results.params['phi'].value
+    bg = results.params['bg'].value
+#    model = damped_cos(results.params, x)
+#    plt.plot(x, y, x, model)
+#    plt.show()
+#    plt.close()
+    return (A, center, tau, phi, bg)
+
+def voigt_eval(params, xvals, model):
+    if type(params) == tuple:
+        try:
+            (xc, hlor, sigg, sigl, hght, bg) = params
+        except:
+            (xc, hlor, sigg, sigl, hght) = params
+            bg = 0
+    else:
+        xc = params['xc'].value
+        hlor = params['hlor'].value
+        sigg = params['sigg'].value
+        sigl = params['sigl'].value
+        hght = params['hght'].value
+        try:
+            bg = params['bg'].value
+        except:
+            bg = 0
+    model.x_0 = xc
+    model.amplitude_L = hlor
+    model.fwhm_L = sigl
+    model.fwhm_G = sigg
+    return hght*model(xvals) + bg
+
+def voigt_res(params, xvals, zvals, invar, model):
+    vmodel = voigt_eval(params, xvals, model)
+    res = (zvals-vmodel)*np.sqrt(invar)
+#    print np.sum(res**2)
+    return res
   
+def voigt_fit(xvals, zvals, invar, model, fit_bg=True):
+    params = lmfit.Parameters()
+    params.add('xc', value=xvals[np.argmax(zvals)], min=xvals[np.argmax(zvals)]-1.5, max=xvals[np.argmax(zvals)]+1.5)
+    h0 = np.max(zvals)-np.min(zvals)
+    bg_m0 = min(zvals[0], zvals[-1])
+    params.add('hght', value=h0, min=0)
+    params.add('hlor', value=0)
+    #sigma guess - difference between first point and last point below 1/2 max
+    idx1 = 0
+    idx2 = 1
+    for i in range(len(xvals)-1):
+        if zvals[i+1]>(h0/2+bg_m0) and zvals[i+1]>zvals[i]:
+            idx1 = i
+            break
+    for i in range(idx1,len(xvals)-1):
+        if zvals[i+1]<(h0/2+bg_m0) and zvals[i+1]<zvals[i]:
+            idx2 = i
+            break
+    sig0 = (xvals[idx2]-xvals[idx1])/2.355*2
+    params.add('sigg', value=sig0, min=0)
+    params.add('sigl', value=sig0, min=0)
+    if fit_bg:
+        params.add('bg', value=bg_m0)
+    args = (xvals, zvals, invar, model)
+    results = lmfit.minimize(voigt_res, params, args=args)
+    params = results.params
+    if fit_bg:
+        return (params['xc'].value, params['hlor'].value, params['sigg'].value, params['sigl'].value, params['hght'].value, params['bg'].value)
+    else:
+        return (params['xc'].value, params['hlor'].value, params['sigg'].value, params['sigl'].value, params['hght'].value)
+ 
+def gauss_lor(params, xarr):
+    if type(params) == tuple:
+        (xc, sig, hght, ratio, sigl, bg, power) = params
+    else:
+        xc = params['xc'].value
+        sig = params['sig'].value
+        hght = params['hght'].value
+        ratio = params['rat'].value
+        sigl = params['sigl'].value
+        bg = params['bg'].value
+    #            bg_slp = params['bg_slp'].value
+        try:
+            power = params['power'].value
+        except:
+            power = 2
+    gauss = hght*ratio*np.exp(-abs(xarr-xc)**power/(2*(abs(sig)**power))) 
+    lorentz = hght*(1-ratio)/(1+(xarr-xc)**2/sigl**2)
+    return gauss+lorentz+bg#+bg_slp*xarr
+ 
 ##############################################################################
 ################### Various other functions... ###############################
 ##############################################################################
@@ -928,7 +1050,7 @@ def sigma_clip(residuals,sigma=3,max_iters=1):
 #    right = height*0.5*(1+sp.erf(-(zr-center-width/2)/width))
 #    return np.append(left,right)
 
-def chi_fit(d,P,N,return_errors=False):
+def chi_fit(d,P,N,return_errors=False, calc_chi=True, use_sparse=False):
     """Routine to find parameters c for a model using chi-squared minimization.
        Note, all calculations are done using numpy matrix notation.
        Inverse is calculated using the matrix SVD.
@@ -941,32 +1063,84 @@ def chi_fit(d,P,N,return_errors=False):
            c = coefficients (parameters)
            chi_min = value of chi-squared for coefficients
     """
-    Pm = np.matrix(P)
-    Pmt = np.transpose(P)
-    dm = np.transpose(np.matrix(d))
-    if min(N.shape) == 1 or N.ndim == 1:
-        N = np.diag(N)
-    Nm = np.matrix(N)
-    PtNP = Pmt*Nm*Pm
-    try:
-        U, s, V = np.linalg.svd(PtNP)
-    except np.linalg.linalg.LinAlgError:
-        return nan*np.ones((len(d))), nan
-    else:
-        s[s==0]=0.001
-        S = np.matrix(np.diag(1/s))
-        PtNPinv = np.transpose(V)*S*np.transpose(U)
-        PtN = Pmt*Nm
-        err_matrix = PtNPinv*PtN
-        c = err_matrix*dm
-        chi_min = np.transpose(dm - Pm*c)*Nm*(dm - Pm*c)
-        chi_min = np.asarray(chi_min)[0]
-        c = np.asarray(c)[:,0]
-        #chi_min2 = np.transpose(dm)*Nm*dm - np.transpose(c)*(np.transpose(Pm)*Nm*Pm)*c
+    if use_sparse:
+        if min(N.shape) == 1 or N.ndim == 1:
+            N = np.diag(N)
+        dm = np.reshape(d,(len(d),1))
+        PtNP = np.dot(P.T,np.dot(N,P))
+        U, s, Vt = sparse.linalg.svds(sparse.csc_matrix(PtNP),k=int(np.min(PtNP.shape)/2))
+        S = 1/s
+        S[s==0] = 0
+        S = np.diag(S)
+        PtNPinv = np.dot(Vt.T, np.dot(S, U.T))
+        PtN = np.dot(P.T,N)
+        err_matrix = np.dot(PtNPinv, PtN)
+        c = np.dot(err_matrix, dm)
+        if calc_chi:
+            dfit = np.dot(P, c)
+            chi_min = np.dot((dm-dfit).T,np.dot(N,dm-dfit))
+        else:
+            chi_min = 1
+        c = np.reshape(c, (len(c),))
         if return_errors:
-            return c, np.sqrt(np.diag(abs(err_matrix)))
+            return c, np.sqrt(np.diag(abs(err_matrix.todense())))
         else:
             return c, abs(chi_min)
+    else:
+#        t0 = time.time()
+#        Pm = np.matrix(P)
+#        Pmt = np.transpose(P)
+#        dm = np.transpose(np.matrix(d))
+        if min(N.shape) == 1 or N.ndim == 1:
+            N = np.diag(N)
+#        Nm = np.matrix(N)
+#        PtNP = Pmt*Nm*Pm
+        dm = np.reshape(d,(len(d),1))
+        PtNP = np.dot(P.T,np.dot(N,P))
+#        t1 = time.time()
+        try:
+            U, s, V = np.linalg.svd(np.matrix(PtNP))
+        except np.linalg.linalg.LinAlgError:
+            return np.nan*np.ones((P.shape[1])), np.nan
+        else:
+#            t2 = time.time()
+#            s[s==0]=0.001
+#            S = np.matrix(np.diag(1/s))
+            S = 1/s
+            S[s==0] = 0
+            S = np.diag(S)
+            t1 = time.time()
+            V = np.asarray(V)
+            U = np.asarray(U)
+#            PtNPinv = np.transpose(V)*S*np.transpose(U)
+            PtNPinv = np.dot(V.T, np.dot(S, U.T))
+#            PtN = Pmt*Nm
+            PtN = np.dot(P.T,N)
+#            err_matrix = PtNPinv*PtN
+            err_matrix = np.dot(PtNPinv, PtN)
+#            c = err_matrix*dm
+            c = np.dot(err_matrix, dm)
+#            dfit = Pm*c
+            if calc_chi:
+                dfit = np.dot(P, c)
+    #            chi_min = np.transpose(dm - dfit)*Nm*(dm - dfit)
+                chi_min = np.dot((dm-dfit).T,np.dot(N,dm-dfit))
+            else:
+                chi_min = 1
+#            chi_min = np.asarray(chi_min)[0]
+#            c = np.asarray(c)[:,0]
+            c = np.reshape(c, (len(c),))
+#            print type(c)
+#            print c.shape
+#            t3= time.time()
+#            print "  ", t1-t0
+#            print "  ", t2-t1
+#            print "  ", t3-t2
+            #chi_min2 = np.transpose(dm)*Nm*dm - np.transpose(c)*(np.transpose(Pm)*Nm*Pm)*c
+            if return_errors:
+                return c, np.sqrt(np.diag(abs(err_matrix)))
+            else:
+                return c, abs(chi_min)
 
 def get_std(xarr, chiarr, sigma=1, plot_results=False):
     """ Assumes you are looking at chi2 as a fct of xarr and are near
@@ -1039,7 +1213,7 @@ def eval_polynomial_coeffs(xarr,poly_coeffs):
     ypoly = np.dot(profile,poly_coeffs)
     return ypoly
 
-def best_linear_gauss(axis,sig,mn,data,invar,power=2,flt=None):
+def best_linear_gauss(axis,sig,mn,data,invar,power=2,rat=None,sigl=None,flt=None):
     """ Use linear chi^2 fitting to find height and background estimates
     """
     if flt is None:
@@ -1048,7 +1222,13 @@ def best_linear_gauss(axis,sig,mn,data,invar,power=2,flt=None):
     noise = np.diag(invar)
 #    t2 = time.time()
     profile = np.ones((len(axis),2))
-    profile[:,0] = gaussian(axis,sig,mn,1,power=power)/flt
+    if rat is not None and sigl is not None:
+        params = (mn, sig, 1, rat, sigl, 0, power)
+        _gltmp = gauss_lor(params, axis)/flt
+        _gltmp /= np.sum(_gltmp)
+        profile[:,0] = _gltmp
+    else:
+        profile[:,0] = gaussian(axis,sig,mn,1,power=power)/flt
 #    profile = np.vstack((gaussian(axis,sig,mn,1,power=power),np.ones(len(axis)))).T
 #    t3 = time.time()    
     coeffs, chi = chi_fit(data, profile, noise)
@@ -1059,7 +1239,7 @@ def best_linear_gauss(axis,sig,mn,data,invar,power=2,flt=None):
 #    time.sleep(2)
     return coeffs[0], coeffs[1]
 
-def best_mean(axis,sig,mn,hght,bg,data,invar,spread,power=2,beta=2,profile='gaussian',flt=None):
+def best_mean(axis,sig,mn,hght,bg,data,invar,spread,power=2,beta=2,rat=None, sigl=None,profile='gaussian',flt=None):
     """ Finds the mean that minimizes squared sum of weighted residuals
         for a given sigma and height (guassian profile)
         Uses a grid-search, then fits around minimum chi^2 regionS
@@ -1077,6 +1257,8 @@ def best_mean(axis,sig,mn,hght,bg,data,invar,spread,power=2,beta=2,profile='gaus
                 gguess = gaussian(axis,sig,mn_rng[i],hght,bg,power=power)/flt
             elif profile == 'moffat':
                 gguess = moffat_lmfit(params, axis)/flt
+            elif profile == 'gauss_lor':
+                gguess = gauss_lor(params, axis)
             chis[i] = sum((data-gguess)**2*invar)
         ### Now take a subset of 5 points around the lowest chi^2 for fitting
         chi_min_inds =np.arange(-2,3)+np.argmin(chis)
@@ -1107,6 +1289,12 @@ def best_mean(axis,sig,mn,hght,bg,data,invar,spread,power=2,beta=2,profile='gaus
         best_mn, best_mn_std = mn_find(axis,best_mn,best_mn_std,flt=flt)
         ###Finer find - doesn't seem to change final answer at all
     #    best_mn, best_mn_std = mn_find(axis,best_mn,best_mn_std/100)
+    elif profile == 'gauss_lor':
+        glparams = (mn, sig, hght, rat, sigl, bg, power)
+        ###Coarse find
+        best_mn, best_mn_std = mn_find(axis,mn,spread,params=glparams,profile=profile)
+        ###Fine find
+        best_mn, best_mn_std = mn_find(axis,best_mn,best_mn_std,params=glparams,profile=profile)
     elif profile == 'moffat':
         params0 = lmfit.Parameters()
         params0.add('xc', value = mn)

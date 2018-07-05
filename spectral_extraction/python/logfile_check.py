@@ -17,6 +17,34 @@ import datetime
 import numpy as np
 import argparse
 
+def get_num_lines(fl):
+    lcnt = 0
+    for line in fl:
+        lcnt+=1
+    return lcnt
+
+def get_t_shift(fl, line=5):
+    lcnt = 0
+    for line in fl:
+        if (lcnt == line):
+            break
+        lcnt += 1
+        pass
+    shift = bool(line=='True')
+    return shift
+
+def get_t_ignore(fl, line=8):
+    lcnt = 0
+    for line in fl:
+        if (lcnt == line):
+            break
+        lcnt += 1
+        pass
+    ignore = line.split(" ")
+    ignore = np.array((ignore))
+    ignore = ignore.astype(int)
+    return ignore
+    
 def get_t_statuses(fl):
     """ Returns array with good flags for each telescope """
     for line in fl:
@@ -25,7 +53,7 @@ def get_t_statuses(fl):
     status = line.split(" ")
     return np.array((status))
 
-def get_t_medians(fl, lines=15):
+def get_t_medians(fl, lines=22):
     """ Returns array with good flags for each telescope """
     lcnt = 0
     for line in fl:
@@ -49,6 +77,23 @@ def get_star(fl):
     star_plus = fl_name[10:]
     star = star_plus[0:star_plus.find('.')]
     return star
+
+def sendmail(script, subject, recipients=['m.cornachione@utah.edu']):
+    msg = MIMEMultipart()
+    msg['Subject'] = subject
+    msg['From'] = 'minerva.eprv@gmail.com'
+    msg['To'] = recipients[0]
+    msg.attach(MIMEText(script))
+    
+    s = smtplib.SMTP('smtp.gmail.com', 587)
+    s.ehlo()
+    s.starttls()
+    s.ehlo()
+    s.login('minerva.eprv@gmail.com','Lali!Polt80cms')
+    s.sendmail('minerva.eprv@gmail.com', recipients, msg.as_string())
+    s.quit()
+    
+##############Input Arguments###########################3
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-d","--date",help="Date to run log_file check in 'nYYYYMMDD' format (default is current day)")
@@ -92,11 +137,14 @@ raw_data = np.array((raw_data))[raw_keep]
 processed = np.zeros((len(raw_data)))
 logged = np.zeros((len(raw_data)))
 exp_status = np.zeros((len(raw_data),4))
+ignore = np.zeros((len(raw_data),4), dtype=bool)
+tshift = np.zeros((len(raw_data)))
 idx = 0
 
 for frame in raw_data:
     name = split(frame)[1][:-5]
     t_statuses = np.zeros((4))
+    _ignore = np.zeros((4), dtype=bool)
     for k in range(len(proc_data)):
         if name in proc_data[k]:
             processed[idx] = 1
@@ -106,24 +154,16 @@ for frame in raw_data:
             logged[idx] = 1
             with open(log_files[l], "r") as fl:
                 t_statuses = get_t_statuses(fl)
+            with open(log_files[l], "r") as fl:
+                _ignore = get_t_ignore(fl)
+            with open(log_files[l], "r") as fl:
+                tshift[idx] = get_t_shift(fl)
             break
     exp_status[idx] = t_statuses
+    ignore[idx] = _ignore
     idx += 1
     
-def sendmail(script, subject, recipients=['m.cornachione@utah.edu']):
-    msg = MIMEMultipart()
-    msg['Subject'] = subject
-    msg['From'] = 'minerva.eprv@gmail.com'
-    msg['To'] = recipients[0]
-    msg.attach(MIMEText(script))
-    
-    s = smtplib.SMTP('smtp.gmail.com', 587)
-    s.ehlo()
-    s.starttls()
-    s.ehlo()
-    s.login('minerva.eprv@gmail.com','Lali!Polt80cms')
-    s.sendmail('minerva.eprv@gmail.com', recipients, msg.as_string())
-    s.quit()
+
     
 ### Send report on unprocessed files
 script = ""
@@ -153,14 +193,14 @@ if len(raw_data) == 0:
     exit(0)
 elif np.min(exp_status) <= 1: ##Flags zero and low exposures
     all_clear = False
-ignore = np.array(([1, 1, 1, 1])) ## Set 0 to ignore one or more telescopes
+
 escript = "Warning - Low/Zero Exposures found on {}\n\n".format(date)
 tzeros = np.sum(exp_status==0, axis=0)
 tones = np.sum(exp_status==1, axis=0)
 ttwos = np.sum(exp_status==2, axis=0)
 escript += "Telescope Summaries:\n"
 for l in range(4):
-    escript += "  T{t}: {n}/{tot} Normal, {l}/{tot} Low, {z}/{tot} Zero\n".format(t=l+1,n=ttwos[l], l=tones[l], z=tzeros[l], tot=len(raw_data))
+    escript += "  T{t}: {n}/{tot} Normal, {l}/{tot} Low, {z}/{tot} Zero\n".format(t=l+1,n=ttwos[l], l=tones[l], z=tzeros[l], tot=np.sum(ignore[:,i]))
 escript += "\nList of files with no-signal exposures:\n"
 for i in range(len(logged)):
     if min(exp_status[i]) == 0:
@@ -191,15 +231,19 @@ for raw in raw_data:
         m_arr = np.zeros((len(past_logs),4))
         idxm = 0
         for log in past_logs:
+            with open(log, "r") as fl:
+                num_lines = get_num_lines(fl)
             with open(log) as lf:
-                m_arr[idxm] = get_t_medians(lf)
+                m_arr[idxm] = get_t_medians(lf, lines=num_lines)
             idxm += 1
         m_arr = np.median(m_arr, axis=0) #Take median across available files
         rlog = raw[0:-4] + 'log'
         rlog = rlog.replace("/data/","/redux/")
         try:
+            with open(rlog, "r") as fl:
+                num_lines = get_num_lines(fl)
             with open(rlog) as rd:
-                m_arr_new = get_t_medians(rd)
+                m_arr_new = get_t_medians(rd, lines=num_lines)
             low_cut_pcnt = 0.5 ### Flag if new is below 50% of old median - can change this threshold as desired
             good = np.ones((4), dtype=bool)
             for k in range(4):
@@ -214,3 +258,15 @@ for raw in raw_data:
 
 if low_cnt > 0:
     sendmail(tpscript, "MINERVA Past Throughput Check: {}".format(date))
+    
+### Check for trace shifts
+tsscript = "WARNING - trace shifts greater that 1px (relative to reference\n"
+tsscript += "fiber flats (n20161123)) detected in the following exposures:\n"
+ts_idx = 0
+for raw in raw_data:
+    if tshift[ts_idx]:
+        tsscript += "  {}\n".format(raw)
+    ts_idx += 1
+    
+if np.sum(tshift) > 0:
+    sendmail(tsscript, "Trace shift found in MINERVA data on {}".format(date))

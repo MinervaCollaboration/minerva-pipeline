@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 #import scipy.stats as stats
 #import scipy.special as sp
 #import scipy.interpolate as si
+from scipy.interpolate import interp1d
 #import scipy.optimize as opt
 #import scipy.sparse as sparse
 #import scipy.signal as signal
@@ -842,6 +843,39 @@ def fit_spline_psf(raw_img,hcenters,vcenters,sigmas,powers,readnoise,
     centers, ellipse = params_to_array(params_min)
     results = np.hstack((np.ravel(coeff_matrix_min),np.ravel(ellipse)))    
     return results
+
+def fixed_psf(hcent, vcent, cpad, redux_dir, ratio=0.7):
+    """ makes a fixed PSF with GHL in variable GH/(GHL) ratios
+        Use for simulation/testing only
+    """
+    psf_hdu = pyfits.open(os.path.join(redux_dir,'psf','ghl_psf_coeffs_{ts}_{fnum:03d}.fits'.format(ts='T1',fnum=10)))
+    weights = psf_hdu[0].data.ravel()
+    lorentz_fits = psf_hdu[1].data
+    s_coeffs = psf_hdu[2].data
+    p_coeffs = psf_hdu[3].data
+    hcenters_dummy = psf_hdu[4].data
+    vcenters_dummy = psf_hdu[5].data
+    pord = len(s_coeffs)-1
+    params = init_params(hcenters_dummy, vcenters_dummy, s_coeffs, p_coeffs, pord, r_guess=lorentz_fits[:,1], s_guess = lorentz_fits[:,0])
+    params1 = convert_params(params, 0, pord, hscale=0)
+    params1['xc'].value = hcent
+    params1['yc'].value = vcent
+    params1['bg'].value = 0
+    params1['ratio'].value = ratio
+    icent = np.array(([hcent],[vcent]))
+    gh_model = get_ghl_profile(icent, params1, weights, pord, cpad, return_model=True, no_convert=True)[0]
+    params = lmfit.Parameters()
+    params.add('xc', value=hcent)
+    params.add('yc', value=hcent)
+    params.add('sigl', value=2)
+    params.add('ratio', value=params1['ratio'].value)
+    params.add('q', value=0.7)
+    params.add('PA', value=np.pi/4)
+    center_ref = icent
+    lorentz = sf.lorentz_ellipse(center_ref, cpad, params)
+    psf_fixed = gh_model+lorentz
+    psf_fixed /= np.sum(psf_fixed)
+    return psf_fixed
     
 def get_fitting_arrays(arc, hcenters, vcenters, pord, cpad, readnoise, scale_arr=None, return_scale_arr=False):
     data = np.zeros((len(hcenters),2*cpad+1,2*cpad+1))
@@ -858,16 +892,17 @@ def get_fitting_arrays(arc, hcenters, vcenters, pord, cpad, readnoise, scale_arr
                 new_scale[i] = scl
         else:
             scl = scale_arr[i]#np.sum(data[i])/scale_arr[i]
-        invar[i] = scl/(abs(data[i]) + readnoise**2/scl)
         data[i] /= scl
+        invar[i] = scl/(abs(data[i]) + readnoise**2/scl)
     if return_scale_arr:
         return data, invar, new_scale
     else:
         return data, invar
     
-def convert_params(params, idx, pord):
+def convert_params(params, idx, pord, hscale=None):
     params_out = lmfit.Parameters()
-    hscale = (params['xc{}'.format(idx)].value-1024)/2048
+    if hscale is None:
+        hscale = (params['xc{}'.format(idx)].value-1024)/2048
     params_out.add('xc', value = params['xc{}'.format(idx)].value)#, min=params['xc{}'.format(idx)].value-0.5, max=params['xc{}'.format(idx)].value+0.5)
     params_out.add('yc', value = params['yc{}'.format(idx)].value)#, min=params['yc{}'.format(idx)].value-0.5, max=params['yc{}'.format(idx)].value+0.5)
     params_out.add('bg', value = params['bg{}'.format(idx)].value)
@@ -889,6 +924,8 @@ def convert_params(params, idx, pord):
 
 def init_params(hcenters, vcenters, s_coeffs, p_coeffs, pord, r_guess=None, s_guess=None, bg_arr=None):
     params_in = lmfit.Parameters()
+    if len(hcenters) == 0:
+        hcenters, vcenters = [hcenters], [vcenters]
     for i in range(len(hcenters)):
         params_in.add('xc{}'.format(i), value = hcenters[i])#, min=hcenters[i]-1.0, max=hcenters[i]+1.0)
         params_in.add('yc{}'.format(i), value = vcenters[i])#, min=vcenters[i]-1.0, max=vcenters[i]+1.0)
@@ -920,6 +957,10 @@ def get_ghl_profile(icenters, params, weights, pord, cpad, return_model=False, n
         yarr = np.arange(vc-cpad,vc+cpad+1)
         ### Assign nonlinear parameters
         if no_convert:
+            hc = int(icenters[0][i])
+            vc = int(icenters[1][i])
+            xarr = np.arange(hc-cpad,hc+cpad+1)
+            yarr = np.arange(vc-cpad,vc+cpad+1)
             params1 = params
         else:
             params1 = convert_params(params, i, pord)
@@ -1027,7 +1068,7 @@ def fit_ghl_psf(arc, hcenters, vcenters, s_coeffs, p_coeffs, readnoise, gain, po
     chi2 = 0
     chi2r = 0
     chi2old = 1
-    chi2_min = 1000
+    chi2_min = 9999999
     mx_iter = 200
     itr = 0
     params = init_params(hcenters, vcenters, s_coeffs, p_coeffs, pord)
@@ -1081,6 +1122,7 @@ def fit_ghl_psf(arc, hcenters, vcenters, s_coeffs, p_coeffs, readnoise, gain, po
                 all_params[o,0] = params['sigl{}'.format(o)].value
                 all_params[o,1] = params['ratio{}'.format(o)].value
             chi2r = chi2_min/(data.size-3*len(hcenters)-6-12*(pord+1))
+            print "  Reduced chi2", chi2r
         itr += 1
     tf = time.time()
     if verbose:
@@ -1114,64 +1156,444 @@ def fit_ghl_psf(arc, hcenters, vcenters, s_coeffs, p_coeffs, readnoise, gain, po
             gh_model = get_ghl_profile(icenters, params, weights, pord, cpad, return_model=True, force_norm=True)[i]
             model = gh_model + lorentzs[i] + params['bg{}'.format(i)].value
             plt.imshow(np.hstack((data[i], model, data[i]-model)), interpolation='none')
-            plt.show()
-            plt.close()
+            ax = plt.gca()
+            ax.get_xaxis().set_visible(False)
+            ax.get_yaxis().set_visible(False)
+#            plt.savefig('/home/matt/Documents/Research/Thesis/latex/mattthesis/thar_psf.pdf', bbox_inches='tight')
+#            plt.show()
+#            plt.close()
     if return_centers:
         return other_weights, all_params, hcenters, vcenters, chi2r
     else:
         return other_weights, all_params, chi2r
+  
+#########################################################################
+################ Functions for fitting 1D PSF ###########################
+#########################################################################
+def get_tc_box(ccd,t_coeffs,trace,width,h0,h1):
+    """
+    Cips a section of CCD for analysis
+    Returns a box of +/- 2*width around the center of trace.
+    Box is slanted in native CCD pixel coordinates based on trace curvature.
+    Limits to horizonal coordinates between h0 and h1.
+    """
+    hpix = ccd.shape[1]
+    hparr = np.arange(h0,h1)
+    harr = (hparr - hpix/2)/hpix
+    vtr = np.poly1d(t_coeffs[:,trace])(harr)
+    if trace != 0:
+        vtr1 = np.poly1d(t_coeffs[:,trace-1])(harr)
+    vtr2 = np.poly1d(t_coeffs[:,trace+1])(harr)
+    v0 = int(np.round(vtr[0]))
+    if (h1-h0) < 20:
+        voffset = (v0 - int(np.round(vtr[int((h1-h0)/2)])))*np.ones((h1-h0))
+    else:
+        voffset = np.round(v0-vtr).astype(int)
+    ### Restrict range for traces that are extremely close together
+    from minerva_utils import get_xlims
+    vl0, vh0 = get_xlims(trace)
+    if trace == 0:
+        vl1 = -8
+    else:
+        vl1, vh1 = get_xlims(trace-1)
+    vl2, vh2 = get_xlims(trace+1)
+    low_off = 8+vl0+8+vl1
+    high_off = 8-vh0+8-vh2
+    data = np.zeros((4*width + 1 - low_off - high_off,h1-h0))
+    for i in range(h1-h0):
+        vli = max(0,v0-voffset[i]-2*width+low_off)
+        vhi = min(ccd.shape[0],v0-voffset[i]+2*width+1-high_off)
+        data[:,i] = ccd[vli:vhi,hparr[i]]
+    ### Get coordinates for the 3 (or two if trace==0) traces in the 
+    ### modified data coordinates
+    vl_arr = v0-voffset-2*width+low_off
+    vl_arr[vl_arr<0] = 0
+    mod_traces = np.zeros((3,len(hparr)))
+    ### Set off-box traces to -1
+    mod_traces[0] = vtr1-vl_arr
+    if trace == 0:
+        mod_traces[0] = -1*np.ones(vtr1.shape)
+    mod_traces[1] = vtr-vl_arr
+    mod_traces[2] = vtr2-vl_arr
+    ### Re-write with constant mod_trace
+#    mod_traces[0] = vtr1[int((h1-h0)/2)]-vl_arr[int((h1-h0)/2)]
+#    mod_traces[1] = vtr[int((h1-h0)/2)]-vl_arr[int((h1-h0)/2)]
+#    mod_traces[2] = vtr2[int((h1-h0)/2)]-vl_arr[int((h1-h0)/2)]
+    mod_traces -= 0.5 ### Best with half pixel shift, but I'm not sure why...
+    m1msk = (mod_traces[0] < 0)
+    mod_traces[0][m1msk] = -100
+    m2msk = (mod_traces[2] >= data.shape[0])
+    mod_traces[2][m2msk] = -100
+    return data, mod_traces
+
+def get_1D_box_params0(data, width, num_poly, mod_traces, linfit=False, bgconst=False, fittrace=False):
+    """
+    Gets initial parameter estimates
+    """
+    params = lmfit.Parameters()
+    hc = int(data.shape[1]/2)
+    if mod_traces.shape[0] != 3:
+        print "Need to modify psf_utils.get_1D_box_params0 to allow for traces on the edge of the ccd"
+        exit(0)
+    vc = int(np.round(mod_traces[1,hc]))
+    ### Initial profile guess
+    p0g = np.median(data[vc-width:vc+width+1,hc-2:hc+3], axis=1)
+    p0g[np.arange(2*width+1) < width/2] = 0
+    p0g[np.arange(2*width+1) > 3*width/2] = 0
+    pinterp = interp1d(np.arange(2*width+1),p0g)
+    pgrid = np.arange(2*width+1)-(mod_traces[1,hc]-vc)
+    pmask = (pgrid >= 0) * (pgrid < 2*width)
+    pgrid = pgrid[pmask]
+    p0g[pmask] = pinterp(pgrid)
+    p0g[pmask ==0] = 0
+    p0g /= np.sum(p0g)
+    phg = np.zeros(p0g.shape)
+    ### Initial background and heights
+    bgg = np.zeros((3,data.shape[1]))
+    hgg = np.zeros((3,data.shape[1]))
+    cgg = np.zeros((3,data.shape[1]))
+    for i in range(data.shape[1]):
+        for l in range(3):
+            if mod_traces[l,i] == -100:
+                bgg[l,i] = 0
+                hgg[l,i] = 0
+                cgg[l,i] = 0
+            else:
+                idx1 = max(0,int(np.round(mod_traces[l,i])-max(5,width/2)))
+                idx2 = min(data.shape[0],int(np.round(mod_traces[l,i])+max(5,width/2)))
+                if idx1 >= data.shape[0]:
+                    bgg[l,i] = 0
+                    hgg[l,i] = 1
+                    cgg[l,i] = idx1
+                else:
+                    bgg[l,i] = min(data[idx1,i],data[idx2,i])
+                    hgg[l,i] = np.sum(data[idx1:idx2,i] - bgg[l,i])
+                    cgg[l,i] = np.argmax(data[idx1:idx2,i]) + idx1
+    ### Put profile guesses into lmfit.Parameters object
+    for m in range(2*width+1):
+        for n in range(num_poly):
+            if n == 0:
+                params.add('p{}_{}'.format(n,m), value=p0g[m], min=0)
+            else:
+                params.add('p{}_{}'.format(n,m), value=phg[m])
+    ### Put backgrounds and heights into lmfit.Parameters object
+    ### If using linear fitting, heights and bgs don't vary
+    for k in range(data.shape[1]):
+        for j in range(3):
+            if not bgconst:
+                params.add('bg_{}_{}'.format(j,k), value = bgg[j,k], vary=((linfit==False)or(mod_traces[j,k] == -100)))
+            params.add('hght_{}_{}'.format(j,k), value = hgg[j,k], vary=((linfit==False) or(mod_traces[j,k] == -100)))
+            if fittrace:
+                params.add('tr_{}_{}'.format(j,k), value = cgg[j,k], min=cgg[j,k]-1.5, max=cgg[j,k]+1.5, vary=(linfit==False))
+    if bgconst:
+        params.add('bg', value=np.median(bgg), vary=(linfit==False))
+    return params
+
+def params_to_pix_arr(params, width, num_poly):
+    parrs = np.zeros((num_poly, 2*width+1))
+    for i in range(num_poly):
+        for j in range(2*width+1):
+            try:
+                parrs[i,j] = params['p{}_{}'.format(i,j)].value
+            except:
+                print params
+    return parrs
+    
+def pix_arr_to_prof_arr(parrs, length, num_poly, norm=False):
+    prof_arr = np.zeros((parrs.shape[1], length))
+    for k in range(length):
+        prof_k = np.zeros((parrs.shape[1]))
+        for j in range(num_poly):
+            prof_k += parrs[j]*(j-int(length/2))**j
+        if norm:
+            prof_k /= np.sum(prof_k)
+        prof_arr[:,k] = prof_k
+    return prof_arr
+    
+def update_h_bg(params, h_bg_arr, length, bgconst=False):
+    for i in range(length):
+        for j in range(3): #3 traces in each fitting box
+            params['hght_{}_{}'.format(j,i)].value = h_bg_arr[(2-bgconst)*j+(6-3*bgconst)*i]
+            if not bgconst:
+                params['bg_{}_{}'.format(j,i)].value = h_bg_arr[2*j+1+6*i]
+    if bgconst:
+        params['bg'].value = h_bg_arr[-1]
+    return params
+
+def make_profile(params, data, mod_traces, num_poly, width, bgconst=False):
+    Prof = np.zeros((data.shape[0]*data.shape[1],(6-3*bgconst)*data.shape[1]+bgconst))
+    hc = int(data.shape[1]/2)
+    vparr = np.arange(2*width+1)
+    Parr = np.zeros((2*width+1,data.shape[1]))
+    parrs = params_to_pix_arr(params, width, num_poly)
+    ### Get spline interpolation of profile
+    splf = dict()
+    for i in range(data.shape[1]):
+        Ptmp = np.zeros((2*width+1))
+        for j in range(num_poly):
+            Ptmp += parrs[j]*(i-hc)**j
+        Parr[:,i] = Ptmp
+        splf[i] = interp1d(vparr, Ptmp)
+#    paramsn = lmfit.Parameters()
+#    paramsn = params
+#    for k in range(data.shape[1]):
+#        for j in range(3):
+#            paramsn['bg_{}_{}'.format(j,k)].value = 0
+#            paramsn['hght_{}_{}'.format(j,k)].value = 1
+#            print params['hght_{}_{}'.format(j,k)].value
+#    for i in range(data.shape[1]):
+#        Pi = box_model_1D(paramsn, data, mod_traces, num_poly, width):
+#        Prof[data.shape[0]*i:data.shape[0]*(i+1),6] = Pi
+    for j in range(data.shape[1]):
+        for k in range(mod_traces.shape[0]):
+            vc = mod_traces[k,j]
+            vint = int(np.round(vc))
+            vl = max(0, vint-width)
+            vh = min(data.shape[0], vint+width+1)
+            sparr = vparr-(vc-vint)
+            sparr = sparr[vl-vint+width:vh-vint+width]
+            if len(sparr) == 0:
+                continue
+            if sparr[0] < 0:
+                sparr = sparr[1:]
+                vl += 1
+            if sparr[-1] > 2*width:
+                sparr = sparr[:-1]
+                vh -= 1
+            spinterp = splf[j](sparr)
+#            spinterp -= np.min(spinterp) #Set minimum to zero
+            spinterp /= np.sum(spinterp) #Must be normalized
+            Prof[vl+j*data.shape[0]:vh+j*data.shape[0],(2-bgconst)*k+(6-3*bgconst)*j] = spinterp
+            if not bgconst:
+                Prof[vl+j*data.shape[0]:vh+j*data.shape[0],(2-bgconst)*k+1+(6-3*bgconst)*j] = np.ones(spinterp.shape)
+    if bgconst:
+        Prof[:,-1] = np.ones(Prof.shape[0])
+    return Prof
+
+def box_model_1D(params, data, mod_traces, num_poly, width, bgconst=False, fittrace=False, verbose=False):
+    """
+    Builds residuals for lmfit.minimize
+    Takes a profile and the profile slope, builds the profile at each cross-
+    section.  Then using scipy spline interpolation, shift this to match the
+    trace centroid.
+    This profile is used for adjacent traces as well which are each multiplied
+    by a height and added to a background level for the model
+    """
+    model = np.zeros(data.shape)
+    hc = int(data.shape[1]/2)
+    vparr = np.arange(2*width+1)
+    Parr = np.zeros((2*width+1,data.shape[1]))
+    parrs = params_to_pix_arr(params, width, num_poly)
+    ### Get spline interpolation of profile
+    splf = dict()
+    for i in range(data.shape[1]):
+        Ptmp = np.zeros((2*width+1))
+        for j in range(num_poly):
+            Ptmp += parrs[j]*(i-hc)**j
+        Parr[:,i] = Ptmp
+        splf[i] = interp1d(vparr, Ptmp)
+    ### Using heights, background, trace centers, and interpolated
+    ### profile, build the model
+    for j in range(data.shape[1]):
+        for k in range(mod_traces.shape[0]):
+            if fittrace:
+                vc = params['tr_{}_{}'.format(k,j)].value
+            else:
+                vc = mod_traces[k,j]
+                ### Don't build profile for off-box traces
+                if vc == -100:
+                    pass
+            vint = int(np.round(vc))
+            if vint >= data.shape[0] or vint < 0:
+                pass
+            vl = max(0, vint-width)
+            vh = min(data.shape[0], vint+width+1)         
+            sparr = vparr-(vc-vint)
+            sparr = sparr[vl-vint+width:vh-vint+width]
+            if len(sparr) == 0:
+                continue
+            if sparr[0] < 0:
+                sparr = sparr[1:]
+                vl += 1
+            if sparr[-1] > 2*width:
+                sparr = sparr[:-1]
+                vh -= 1
+            spinterp = splf[j](sparr)
+#            spinterp -= np.min(spinterp) #Set minimum to zero
+            spinterp /= np.sum(spinterp) #Must be normalized
+            if bgconst:
+                model[vl:vh,j] += params['hght_{}_{}'.format(k,j)].value*spinterp
+            else:
+                model[vl:vh,j] += params['hght_{}_{}'.format(k,j)].value*spinterp + params['bg_{}_{}'.format(k,j)].value
+    if bgconst:
+        model += params['bg'].value
+#        print mod_traces[:,j]
+#        sf.plt_deltas(mod_traces[:,j], np.ones((3))*np.max(model[:,j]))
+#        plt.plot(model[:,j])
+#        plt.show()
+#        plt.close()
+    return model
+
+def results_to_pix_arr(results, width, num_poly):
+    parrs = np.zeros((num_poly))
+    return parrs
+
+def box_res_1D(params, data, invar, mod_traces, num_poly, width, bgconst=False, fittrace=False):
+    model = box_model_1D(params, data, mod_traces, num_poly, width, bgconst=bgconst, fittrace=fittrace)
+#    for j in range(data.shape[1]):
+#        print mod_traces[:,j]
+#        plt.plot(data[:,j],'k',linewidth=2)
+#        plt.plot(model[:,j],'g',linewidth=2)
+#        plt.show()
+#        plt.close()
+    big_res = (data-model)*np.sqrt(invar)
+    ### Only fit the central trace, just use the others to model cross-talk
+    vc = mod_traces[1,int(data.shape[1]/2)]
+    vint = int(np.round(vc))
+    vl = max(0, vint-width-5)
+    vh = min(data.shape[0], vint+width+6)
+    small_res = big_res[vl:vh,:]
+#    small_res = big_res
+    ### Enforce a positive profile (with tolerance for a little below zero)
+#    parrs = params_to_pix_arr(params, width, num_poly)
+#    prof_arr = pix_arr_to_prof_arr(parrs, data.shape[1], num_poly)
+#    if np.min(prof_arr) < -0.001:
+#        small_res = abs(small_res)*1e300
+    return np.ravel(small_res)
+    
+def lin_nonlin_1D(params, data, invar, mod_traces, num_poly, width, bgconst=False, plot=False):
+    """
+    Iterates between linear and non-linear fitting for parameters in box_res
+    """
+    delta_chi_min = 1e-2 ## Set minimum threshold for subsequent delta chi^2
+    delta_chi = 10
+    chi_min = 1e10
+    chi = 1e10
+    max_iters = 24
+    cnt = 0
+    best_params = lmfit.Parameters()
+    while (delta_chi > delta_chi_min) and (cnt < max_iters):
+        print "starting iter {}".format(cnt)
+        chi_old = 1.0*chi
+        ### Do nonlinear fit (for profile shapes)
+        fit_args = (data,invar, mod_traces, num_poly, width)
+        kws = {'bgconst':bgconst}
+        results = lmfit.minimize(box_res_1D,params,args=fit_args, kws=kws)
+        params = results.params
+        model = box_model_1D(params, data, mod_traces, num_poly, width, bgconst=bgconst, verbose=True)
+        big_res = (data-model)**2*invar
+        vc = mod_traces[1,int(data.shape[1]/2)]
+        vint = int(np.round(vc))
+        vl = max(0, vint-width-2)
+        vh = min(data.shape[0], vint+width+3)
+        small_res = big_res[vl:vh,:]
+        chi = np.sum(small_res)
+#        print "  Chi^2 reduced:", chi/np.size(small_res)
+#        print "  Chi^2 big:", np.sum(big_res)
+        if plot:
+            print "After nonlinear fit"
+            for i in range(1):#data.shape[1]):
+                plt.plot(data[width:3*width,i], 'b', linewidth=2)
+                plt.plot(model[width:3*width,i], 'k', linewidth=2)
+            plt.show()
+            plt.close()
+        ### Do linear fit (for height and background)
+#        h_bg_arr = h_bg_from_params(params, data.shape[1], bgconst=bgconst)
+        Profile = make_profile(params, data, mod_traces, num_poly, width, bgconst=bgconst)
+        hbga = np.zeros((3*data.shape[1]+1))
+        for i in range(data.shape[1]):
+            for j in range(3):
+                hbga[j + 3*i] = params['hght_{}_{}'.format(j,i)].value
+        hbga[-1] = params['bg'].value
+        mprof = np.dot(Profile, hbga)
+#        mprof = np.resize(mprof, (1, len(mprof)))
+        mprof = mprof.reshape((data.shape[1],data.shape[0])).T
+        chi2 = np.sum((mprof-data)**2*invar)
+        h_bg_new, junk_chi = sf.chi_fit(np.ravel(data.T),Profile,np.diag(np.ravel(invar.T)))
+        mprof = np.dot(Profile, h_bg_new)
+#        mprof = np.resize(mprof, (1, len(mprof)))
+        mprof = mprof.reshape((data.shape[1],data.shape[0])).T
+        params = update_h_bg(params, h_bg_new, data.shape[1], bgconst=bgconst)
+        model = box_model_1D(params, data, mod_traces, num_poly, width, bgconst=bgconst)
+        big_res = (data-model)**2*invar
+        big_res2 = (data-mprof)**2*invar
+        vc = mod_traces[1,int(data.shape[1]/2)]
+        vint = int(np.round(vc))
+        vl = max(0, vint-width-2)
+        vh = min(data.shape[0], vint+width+3)
+        small_res = big_res[vl:vh,:]
+        chi = np.sum(big_res)
+        print "  Chi^2 reduced:", chi/np.size(small_res)
+#        print "  Chi^2 big:", np.sum(big_res), np.sum(big_res2)
+        if plot:
+            print "After linear fit:"
+            for i in range(1):#data.shape[1]):
+                plt.plot(data[width:3*width,i], 'b', linewidth=2)
+                plt.plot(model[width:3*width,i], 'k', linewidth=2)
+#                plt.plot(((data-model)*np.sqrt(invar))[12:28,i], 'k', linewidth=2)
+            plt.show()
+            plt.close()
+            plt.imshow(np.hstack((data, model, data-model)), interpolation='none')
+            plt.show()
+            plt.close()
+            plt.imshow(small_res, interpolation='none')
+            plt.show()
+            plt.close()
+        delta_chi = chi_old-chi
+        if chi < chi_min:
+            chi_min = chi
+            best_params = params
+        cnt += 1
+    return best_params
+    
+def interp_res(params, spinterp, sparr, data, invar):
+    model = params['hght'].value*spinterp(sparr-params['cent'].value) + params['bg'].value
+    return (data-model)*np.sqrt(invar)
+    
+def find_trace(spinterp, sparr, data, invar):
+    params = lmfit.Parameters()
+    params.add('cent', value = 0, min=-1.5, max=1.5)
+    params.add('hght', value = np.max(data))
+    params.add('bg', value = 0)
+    args = (spinterp, sparr, data, invar)
+    results = lmfit.minimize(interp_res, params, args=args)
+    model = results.params['hght'].value*spinterp(sparr-results.params['cent'].value) + results.params['bg'].value
+    chi2 = np.sum(((data-model)*np.sqrt(invar))**2)
+    print chi2/(len(sparr)-2)
+    return results.params['cent'].value
         
-'''
-#Old way, fitting to each individual peak, rather than enforcing smoothness
-sm_arc = arc[int(vcenters[i])-cpad:int(vcenters[i])+cpad+1, int(hcenters[i])-cpad:int(hcenters[i])+cpad+1]
-sm_invar = 1/(abs(sm_arc) + readnoise**2)
-params = lmfit.Parameters()
-params.add('xc', value = np.modf(hcenters[i])[0]+cpad, min=cpad-1, max=cpad+1)#-int(hcenters[0]) + cpad)
-params.add('yc', value = np.modf(vcenters[i])[0]+cpad, min=cpad-1, max=cpad+1)#-int(np.floor(vcenters[0])) + cpad -1)
-params.add('sig', value = sigmas[i])
-params.add('power', value = powers[i])
-params.add('sigl', value = 2*sigmas[i], min=0.5*sigmas[i])
-params.add('ratio', value = 0.95, min = 0.9, max = 1.0)
-params.add('bg', value = 0)
-weights = np.zeros(12)
-weights[0] = np.sum(sm_arc)
-chi2 = 0
-chi2old = 1
-mx_iter = 200
-itr = 0
-#            if i < 5:
-#                continue
-while abs(chi2-chi2old) > 0.01 and itr < mx_iter:
-    chi2old = chi2
-    params = sf.ghl_nonlin_fit(sm_arc, sm_invar, params, weights)
-    model = sf.gh_lorentz(np.arange(sm_arc.shape[1]), np.arange(sm_arc.shape[0]), params, weights)
-    chi2 = np.sum((sm_arc-model)**2*sm_invar)
-#                if i == 5:
-#                    print weights[0]
-#                    print chi2
-#                    plt.imshow(np.hstack((sm_arc,model,(sm_arc-model))),interpolation='none')
-#                    plt.show()
-#                    plt.close()
-    weights = sf.ghl_linear_fit(sm_arc, sm_invar, params, weights)
-    ### Enforce positivity in magnitude
-    weights[0] = abs(weights[0])
-    ### prevent runaway magnitudes
-    if weights[0] > 1.5*np.sum(sm_arc):
-        print "runaway"
-        weights /= (weights[0]/np.sum(sm_arc))
-    model = sf.gh_lorentz(np.arange(sm_arc.shape[1]), np.arange(sm_arc.shape[0]), params, weights)
-    chi2 = np.sum((sm_arc-model)**2*sm_invar)
-#                if i == 5:
-#                    print weights[0]
-#                    print chi2
-#                    plt.imshow(np.hstack((sm_arc,model,(sm_arc-model))),interpolation='none')
-#                    plt.show()
-#                    plt.close()
-    itr += 1
-print "Iter {}, arc/model diff = {}, Chi^2 reduced = {}, weights[0]={}".format(i, np.sum(sm_arc-model), chi2/(sm_arc.size-len(params)-weights.size),weights[0])
-all_weights[i] = weights/weights[0]
-all_params[i] = [params['sigl'].value, params['ratio'].value]
-plt.imshow(np.hstack((sm_arc,model,(sm_arc-model))),interpolation='none')
-plt.show()
-plt.close()
-#'''
+    
+def update_mod_traces(data, invar, params, mod_traces, width, num_poly):
+    new_traces = np.zeros((mod_traces.shape))
+    hc = int(data.shape[1]/2)
+    parrs = params_to_pix_arr(params, width, num_poly)
+    for i in range(data.shape[1]):
+        for j in range(3):
+            if mod_traces[j,i] == -100:
+                new_traces[j,i] = -100
+                continue
+            Ptmp = np.zeros((2*width+1))
+            for k in range(num_poly):
+                Ptmp += parrs[k]*(i-hc)**k
+            pad = 7
+            if width < pad:
+                print "Width too small to re-fit traces"
+                exit(0)
+            else:
+                sparr = np.arange(-width, width+1)
+                spinterp = interp1d(sparr, Ptmp)
+                sparr = np.arange(-pad,pad, dtype=int)
+                vc = int(mod_traces[j,i])
+                spm = ((sparr+vc)>=0)*((sparr+vc)<data.shape[0])
+                sparr = sparr[spm]
+                spdat = data[sparr+vc, i]
+                spinv = invar[sparr+vc, i]
+                new_traces[j,i] = vc+find_trace(spinterp, sparr, spdat, spinv)
+#    plt.imshow(data)
+#    for i in range(3):
+#        if new_traces[i,0] != -100:
+#            plt.plot(new_traces[i], 'b', linewidth = 2)
+#    plt.show()
+#    plt.close()
+    return new_traces
+            
