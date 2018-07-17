@@ -1,6 +1,11 @@
 #!/usr/bin/env python
 
-#Code to implement B-splines, both in 1D and 2D
+'''
+# Code to implement B-splines, both in 1D and 2D
+# Sort of slow and messy and scipy does most of it better
+# I'm leaving this in here just in case someone wants to work with it
+# (not recommended...)
+'''
 
 #Import all of the necessary packages
 from __future__ import division
@@ -57,10 +62,10 @@ def basic_spline(t,breakpoints,order=4):
     ### Pad linearly, other options available if desired
     pad = order-1#int(np.ceil(order/2))
     d_bpt = np.mean(np.ediff1d(breakpoints))
-    bpt_pad = np.pad(breakpoints,pad,mode='linear_ramp',end_values=np.array((breakpoints[0]-pad*d_bpt,breakpoints[-1]+pad*d_bpt),))
+    bpt_pad = np.pad(breakpoints,pad,mode='linear_ramp',end_values=((breakpoints[0]-pad*d_bpt,breakpoints[-1]+pad*d_bpt)))
     dt = np.mean(np.ediff1d(t))
     t_per_bpts = int(np.floor(len(t)/len(breakpoints)))
-    t_pad = np.pad(t,t_per_bpts*pad,mode='linear_ramp',end_values=np.array((t[0]-pad*dt*t_per_bpts,t[-1]+pad*dt*t_per_bpts),))
+    t_pad = np.pad(t,t_per_bpts*pad,mode='linear_ramp',end_values=((t[0]-pad*dt*t_per_bpts,t[-1]+pad*dt*t_per_bpts)))
     ### Now calculate the spline matrix
     B_spline = np.zeros((len(breakpoints)-1+pad,len(t)))
     for i in range(pad-order+1,pad+len(breakpoints)-1):
@@ -85,7 +90,7 @@ def get_spline_1D_fit(xarr, yarr, breakpoints, coeffs, order=4, return_matrix=Fa
         return spline_interp
 
 ### 1D case, nothing complex
-def spline_1D(xarr,yarr,breakpoints,invar=None,order=4, window=100, pad=20, return_coeffs=False, incoeffs=None, inalign=None):
+def spline_1D(xarr,yarr,breakpoints,invar=None,order=4, window=100, pad=20, return_coeffs=False, incoeffs=None, inalign=None, fit_bg=False):
     """ Returns the spline fit to xarr, yarr with inverse variance invar for
         the specified breakpoint array (and optionally spline order)
         
@@ -99,6 +104,8 @@ def spline_1D(xarr,yarr,breakpoints,invar=None,order=4, window=100, pad=20, retu
     ### Break up to increase speed for large matrices
     if len(yarr) < window:
         B_spline_matrix = basic_spline(xarr,breakpoints,order=order)
+        if fit_bg:
+            B_spline_matrix = np.concatenate((B_spline_matrix,np.ones((1,len(xarr)))))
         if incoeffs is None:
             if invar is None:
                 coeffs = np.linalg.lstsq(B_spline_matrix.T, yarr)
@@ -152,7 +159,8 @@ def spline_1D(xarr,yarr,breakpoints,invar=None,order=4, window=100, pad=20, retu
 #                m2 == len(yarr)
                 continue
             B_spline_matrix = basic_spline(xsub,bkpts,order=order)
-#            print B_spline_matrix.shape
+            if fit_bg:
+                B_spline_matrix = np.concatenate((B_spline_matrix,np.ones((1,len(xarr)))))
             if incoeffs is None:
                 if invar is None:
                     coeffs = np.linalg.lstsq(B_spline_matrix.T, ysub)
@@ -180,43 +188,10 @@ def spline_1D(xarr,yarr,breakpoints,invar=None,order=4, window=100, pad=20, retu
         return spline_interp
 
 
-### 2D case using method described in Bolton, et. al, SLACS I
-### Need more information to make this one work
-'''
-xpix = 20
-ypix = 20
-xgauss = np.reshape(sf.gaussian(np.arange(xpix),3,center=xpix/2),(1,xpix))
-ygauss = np.reshape(sf.gaussian(np.arange(ypix),3,center=ypix/2),(1,ypix))
-truth = np.dot(xgauss.T,ygauss)
-signal = truth + 0.1*np.median(truth)*np.random.randn(xpix,ypix)
-#plt.imshow(truth,interpolation='none')
-#plt.ion()
-#plt.show()
-
-xc = xpix/2
-yc = ypix/2
-m = [0,2]
-multiples = 2*len(m)-1 #0th order only need one coefficient
-total_points = ypix*xpix
-profile_matrix = np.zeros((total_points,total_points*multiples))
-R_array = np.zeros(total_points)
-Theta_array = np.zeros(total_points)
-data_array = np.zeros(total_points)
-for i in range(xpix):
-    for j in range(ypix):
-        R_array[i*ypix+j] = np.sqrt((i-xc)**2+(j-yc)**2)
-        if j == 0:
-            Theta_array[i*ypix+j] = 0
-        else:
-            Theta_array[i*ypix+j] = np.arctan(i/j)
-        data_array[i*ypix+j] = signal[i,j]
-
-
-fR_matrix = basic_spline()
-#R_array = np.sqrt((np.arange(xpix)-xc)**2+(np.arange(ypix)-yc)**2)
-'''
 
 ### 2D case using my own method - use outer product of two 1D splines as bases
+### Also have a 2D radial spline option
+'''
 def spline_2D(img_matrix,invar_matrix,h_breakpoints,v_breakpoints,order=4,return_coeffs=False):
     """ Returns a 2D spline interpolation of an image.  Option to also return scaled spline_coeffs
     
@@ -302,7 +277,7 @@ def spline_2D_eval(coeffs,scale,img_matrix,h_breakpoints,v_breakpoints,order=4):
     spline_fit *= scale
     return spline_fit
 
-def build_rarr_thetaarr(img_matrix,params,pts_per_px=1):
+def build_rarr_thetaarr(img_matrix,params,hlims=None,vlims=None,pts_per_px=1):
     """ Part of profile matrix building for splines.  Slightly more general -
         can be used in any elliptical coordinate system.
         INPUTS:
@@ -315,16 +290,25 @@ def build_rarr_thetaarr(img_matrix,params,pts_per_px=1):
             dim1 - #of pixels in img_matrix
             r_inds - sorting array for raveling r_arr
     """
-    hc = params['hc'].value
-    vc = params['vc'].value
-    q = params['q'].value
-    q = abs(q)
-    PA = params['PA'].value
+    ### Accepts lmfit.Parameters object or array [hc, vc, q, PA]
+    try:
+        hc = params['hc'].value
+        vc = params['vc'].value
+        q = params['q'].value
+        q = abs(q)
+        PA = params['PA'].value
+    except:
+        hc, vc, q, PA = params
+        q = abs(q)
     hpix = np.shape(img_matrix)[1] #horizontal pixels
     vpix = np.shape(img_matrix)[0] #vertical pixels
     dim1 = vpix*hpix*pts_per_px**2
-    h_matrix = np.tile(np.arange(0,hpix,1/pts_per_px),(vpix*pts_per_px,1))
-    v_matrix = np.tile(np.arange(0,vpix,1/pts_per_px),(hpix*pts_per_px,1)).T
+    if hlims is None and vlims is None:
+        h_matrix = np.tile(np.arange(0,hpix,1/pts_per_px),(vpix*pts_per_px,1))
+        v_matrix = np.tile(np.arange(0,vpix,1/pts_per_px),(hpix*pts_per_px,1)).T
+    else:
+        h_arr, v_arr = np.linspace(hlims[0], hlims[1], hpix*pts_per_px), np.linspace(vlims[0], vlims[1], vpix*pts_per_px)
+        h_matrix, v_matrix = np.meshgrid(h_arr, v_arr)
     x_ell = (v_matrix-vc)*cos(PA) + (h_matrix-hc)*sin(PA)
     y_ell = (h_matrix-hc)*cos(PA) - (v_matrix-vc)*sin(PA)
     r_matrix = np.sqrt((x_ell)**2*q + (y_ell)**2/q)
@@ -340,7 +324,7 @@ def build_rarr_thetaarr(img_matrix,params,pts_per_px=1):
     theta_arr = np.ravel(theta_matrix)[r_inds]
     return r_arr, theta_arr, dim1, r_inds
     
-def build_radial_profile(r_arr,theta_arr,r_breakpoints,theta_orders,dim1,order=4,fit_bg=False):
+def build_radial_profile(r_arr,theta_arr,r_breakpoints,theta_orders,dim1,order=4, fit_bg=False):
     """ Builds the profile matrix for spline fitting.
         INPUTS:
             r_arr - 2D array with radius to each pixel
@@ -373,7 +357,7 @@ def build_radial_profile(r_arr,theta_arr,r_breakpoints,theta_orders,dim1,order=4
             profile_matrix[:,i] = r_splines[spline_dim,:]*cos(theta_i*theta_arr)
     return profile_matrix
     
-def spline_2D_radial(img_matrix,invar_matrix,r_breakpoints,params,theta_orders=[0],order=4,return_coeffs=False,spline_coeffs=None,sscale=None,fit_bg=False, pts_per_px=1):
+def spline_2D_radial(img_matrix,invar_matrix,r_breakpoints,params,theta_orders=[0],order=4,return_coeffs=False,spline_coeffs=None,sscale=None,fit_bg=False, hlims=None, vlims=None,  pts_per_px=1):
     """ Follows Bolton et. al. 2005 (and similar) to implement radial splines
         Here I use vertical(v) and horizontal(h).  Usually v=x, h=y in Cartesian.
         INPUTS:
@@ -399,7 +383,7 @@ def spline_2D_radial(img_matrix,invar_matrix,r_breakpoints,params,theta_orders=[
     hpix = np.shape(img_matrix)[1]*pts_per_px #horizontal pixels
     vpix = np.shape(img_matrix)[0]*pts_per_px #vertical pixels
     dim1 = vpix*hpix*pts_per_px
-    r_arr, theta_arr, dim1, r_inds = build_rarr_thetaarr(img_matrix,params,pts_per_px=pts_per_px)
+    r_arr, theta_arr, dim1, r_inds = build_rarr_thetaarr(img_matrix,params,hlims=hlims,vlims=vlims,pts_per_px=pts_per_px)
     ### Given h, v arrays and breakpoints, find splines along both directions
     ### Use the h and v splines to construct a 2D profile matrix for linear fitting
     profile_matrix = build_radial_profile(r_arr,theta_arr,r_breakpoints,theta_orders,dim1,order=order,fit_bg=fit_bg)
@@ -418,16 +402,16 @@ def spline_2D_radial(img_matrix,invar_matrix,r_breakpoints,params,theta_orders=[
         noise = np.diag(np.ravel(invar_matrix)[r_inds])
         #noise = np.ravel(invar_matrix)[r_inds]
         #Chi^2 fit
-        #a_coeffs, chi = sf.chi_fit(data,profile_matrix,noise)
-        try:
-            a_coeffs = sf.extract_2D(data,profile_matrix,noise,return_no_conv=False)
-        except:
-            plt.plot(r_arr)
-            plt.show()
-            plt.close()
-            plt.imshow(profile_matrix,interpolation='none')
-            plt.show()
-            plt.close()
+        a_coeffs, chi = sf.chi_fit(data,profile_matrix,noise)
+#        try:
+#            a_coeffs = sf.extract_2D(data,profile_matrix,noise,return_no_conv=False)
+#        except:
+#            plt.plot(r_arr)
+#            plt.show()
+#            plt.close()
+#            plt.imshow(profile_matrix,interpolation='none')
+#            plt.show()
+#            plt.close()
         spline_fit = np.dot(profile_matrix,a_coeffs)
         resort_inds = np.argsort(r_inds)
         spline_fit = np.reshape(spline_fit[resort_inds],(vpix,hpix))
@@ -583,3 +567,4 @@ def make_spline_model(params,coeff_matrix,center,hpoint,img_shape,r_breakpoints,
 #    plt.show()
 #    plt.close()
     return model
+#'''

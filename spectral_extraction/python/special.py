@@ -1,7 +1,15 @@
+#!/usr/bin/env python 2.7
+
+"""
+# This code holds special functions that I've built that I've had a recurring
+# need to use for various scientific applications
+
+# Import all of the necessary packages
+"""
+
 from __future__ import division
 import pyfits
 import os
-#import math
 import time
 import numpy as np
 from numpy import *
@@ -17,19 +25,6 @@ import scipy.optimize as opt
 import scipy.integrate as integrate
 import lmfit
 import scipy.sparse as sparse
-#import scipy.signal as sig
-#import scipy.linalg as linalg
-#import astropy.stats as stats
-from astropy.modeling.models import Voigt1D
-
-"""
-#!/usr/bin/env python 2.7
-
-#This code holds special functions that I've built that I've had a recurring
-#need to use.
-
-#Import all of the necessary packages
-"""
 
 #'''
 #######################################################################
@@ -41,7 +36,6 @@ def gaussian(axis, sigma, center=0, height=None,bg_mean=0,bg_slope=0,power=2,ask
        and height.  Center defaults to zero and height to 1.  Can also
        tweak the exponent parameter if desired."""
     #Height scale factor*(1/(sqrt(2*pi*sigma**2)))
-#    print sigma, center, height
     if height is None:
         height = 1/(np.sqrt(2*np.pi*sigma**2))
         ### For more general expression can switch to the following:
@@ -56,8 +50,6 @@ def gaussian(axis, sigma, center=0, height=None,bg_mean=0,bg_slope=0,power=2,ask
     if np.min(abs(divisor)) == 0:
         divisor += 0.001
     gaussian /= divisor
-#    print sigma, center, height, bg_mean,bg_slope,power
-#    print gaussian
     return gaussian
     
 def gaussian_2d(axisx,axisy,meanx,meany,sigmax,sigmay,height=1):
@@ -175,7 +167,6 @@ def inv_power_lmfit(params, x, idx=0):
     cp = params['cp{}'.format(idx)].value
     x -= cp
     x[x==0] = 0.0001 # To remove inf behavior
-#    print "Params:", pwr, cp
     x = abs(x) ### make always positive...
     return x**(-pwr)
     
@@ -202,8 +193,6 @@ def cauchy(x,xc,a,lims=None):
         denom = (1/np.pi)*(np.arctan((lims[1]-xc)/a) - np.arctan((lims[0]-xc)/a))
     num = 1/(np.pi*a*(1+((x-xc)/a)**2))
     return num/denom
-#    A = 1/(a*(np.arctan((high-xc)/a)-np.arctan((low-xc)/a)))
-#    return A*(1/(1+((x-xc)/a)**2))
     
 def cauchy_lmfit(params, x, idx=0):
     """ For use with lmfit params
@@ -232,12 +221,6 @@ def cauchy_lmfit_trunc(params, x, idx=0):
         xl = 0.1
     else:
         xl = np.min(x)
-#    xarr = np.linspace(0.1, 0.9, 100)
-#    cf = cauchy(xarr, xc, a, lims=[xl, np.max(x)])
-#    plt.hist(x.T, bins=9, normed=True)
-#    plt.plot(xarr,cf,'k',linewidth=2)
-#    plt.show()
-#    plt.close()
     return cauchy(x, xc, a, lims=[xl, np.max(x)])
     
 def cauchy_2d(x,y,xc,yc,a1,a2,gam,low=0,high=np.inf):
@@ -250,18 +233,8 @@ def cauchy_nd(X, c0, s0, c1, s1, c2, s2, gam0):
         X = np.asarray(X)
     ndim = X.shape[0]
     ndim = 3
-    denom = (1+((X[0]-c0)/s0)**2+((X[1]-c1)/s1)**2+((X[2]-c2)/s2)**2)*gam
-##    print X[0].shape
-#    denom = np.ones(X[0].shape)
-##    print denom.shape
-#    idx = range(ndim)
-##    if idx is None:
-##        idx = range(ndim)
-##    else:
-##        idx = idx*np.ones((ndim),dtype=int)
-#    for i in range(ndim):
-#        denom += ((X[i]-params['c{}'.format(idx[i])].value) / params['s{}'.format(idx[i])].value)**2
-#    denom *= params['gam0'].value
+    denom = (1+((X[0]-c0)/s0)**2+((X[1]-c1)/s1)**2+((X[2]-c2)/s2)**2)*gam0
+
     if np.sum(denom==0) > 0:
         print("Cannot divide by zero")
         exit(0)
@@ -279,14 +252,8 @@ def cauchy_nd_lmfit(params, X, idx=None):
         X = np.asarray(X)
     ndim = X.shape[0]
     ndim = 3
-#    print X[0].shape
     denom = np.ones(X[0].shape)
-#    print denom.shape
     idx = range(ndim)
-#    if idx is None:
-#        idx = range(ndim)
-#    else:
-#        idx = idx*np.ones((ndim),dtype=int)
     for i in range(ndim):
         denom += ((X[i]-params['c{}'.format(idx[i])].value) / params['s{}'.format(idx[i])].value)**2
     denom == denom**params['gam0'].value
@@ -358,10 +325,6 @@ def weibull_lmfit(params, x, idx=0):
     else:
         k = params['s{}'.format(idx)].value
         lam = params['c{}'.format(idx)].value
-#        print "using lmfit for sf.weibull!"
-#        exit(0)
-#        k = params['k{}'.format(idx)].value
-#        lam = params['lam{}'.format(idx)].value
     return weibull(x, k, lam)
     
 def weibull_residual(params,x,y,inv):
@@ -418,11 +381,7 @@ def exponential_ie_lmfit(params, X, idx=0):
     taui = params['taui'].value
     tausn = params['tausn'].value
     tau = taui + tausn*nsers
-#    plt.plot(nsers,tau,'k.')
-#    plt.show()
-#    plt.close()
     return tau*np.exp(-ie/tau)
-#    return 0.2*np.exp(-ie/0.2)
     
 def gaussian_re_lmfit(params, X, idx=0):
     if X.shape[0] != 3:
@@ -510,19 +469,10 @@ def gauss3_irn(params, X, idx=0):
     ie = ie0 - mni
     nsers = nsers0 - mnn
     ### two rotations
-#    re_pr = re*np.cos(th2) + ie*np.sin(th1)*np.sin(th2) + nsers*np.cos(th1)*np.sin(th2)
-#    ie_pr = ie*np.cos(th1) - nsers*np.sin(th1)
-#    ns_pr = -re*np.sin(th2) + ie*np.cos(th2)*np.sin(th1) + nsers*np.cos(th1)*np.cos(th2)
     ### Three rotations    
     re_pr = re*np.cos(th2)*np.cos(th3) + ie*(np.cos(th3)*np.sin(th1)*np.sin(th2) - np.cos(th1)*np.sin(th3)) + nsers*(np.cos(th3)*np.cos(th1)*np.sin(th2) + np.sin(th3)*np.sin(th1))
     ie_pr = re*np.sin(th3)*np.cos(th2) + ie*(np.cos(th1)*np.cos(th3) + np.sin(th1)*np.sin(th2)*np.sin(th3)) + nsers*(np.cos(th1)*np.sin(th2)*np.sin(th3)-np.cos(th3)*np.sin(th1))
     ns_pr = -re*np.sin(th2) + ie*np.cos(th2)*np.sin(th1) + nsers*np.cos(th1)*np.cos(th2)
-#    re_pr = Xn[0]
-#    ie_pr = Xn[0]
-#    ns_pr = Xn[0]
-#    Nr = gaussian(re_pr, scr, center=mnr)
-#    Ni = gaussian(ie_pr, sci, center=mni)
-#    Nn = gaussian(ns_pr, scn, center=mnn)
     Nr = cauchy(re_pr, 0, scr, lims=[np.min(re_pr), np.max(re_pr)])
     Ni = cauchy(ie_pr, 0, sci, lims=[np.min(ie_pr), np.max(ie_pr)])
     Nn = cauchy(ns_pr, 0, scn, lims=[np.min(ns_pr), np.max(ns_pr)])
@@ -569,12 +519,6 @@ def cauchy3_irq(params, X, idx=0, lims=None, normalized=True):
     re_pr = re*np.cos(th2)*np.cos(th3) + ie*(np.cos(th3)*np.sin(th1)*np.sin(th2) - np.cos(th1)*np.sin(th3)) + qs*(np.cos(th3)*np.cos(th1)*np.sin(th2) + np.sin(th3)*np.sin(th1))
     ie_pr = re*np.sin(th3)*np.cos(th2) + ie*(np.cos(th1)*np.cos(th3) + np.sin(th1)*np.sin(th2)*np.sin(th3)) + qs*(np.cos(th1)*np.sin(th2)*np.sin(th3)-np.cos(th3)*np.sin(th1))
     qs_pr = -re*np.sin(th2) + ie*np.cos(th2)*np.sin(th1) + qs*np.cos(th1)*np.cos(th2)
-#    re_pr = Xn[0]
-#    ie_pr = Xn[0]
-#    ns_pr = Xn[0]
-#    Nr = gaussian(re_pr, scr, center=mnr)
-#    Ni = gaussian(ie_pr, sci, center=mni)
-#    Nn = gaussian(ns_pr, scn, center=mnn)
     if lims is None:
         limsr = [np.min(re_pr), np.max(re_pr)]
         limsi = [np.min(ie_pr), np.max(ie_pr)]
@@ -636,7 +580,6 @@ def gen_central2d(params, X, idx=0, lims=None, rots=False, normalized=False, dis
         sx = params['s{}'.format(idx1)].value
         sy = params['s{}'.format(idx2)].value
         th = params['th{}'.format(idx3)].value
-#    if rots:
     ## boolean to rotate around centers (gaussian, cauchy) or 0 (weibull)
     if len(dists) == 1 and dists[0] == 'lorentz':
         return lorentz(X[0], X[1], params)
@@ -670,12 +613,6 @@ def gen_central2d(params, X, idx=0, lims=None, rots=False, normalized=False, dis
             ### set k = sx, lamda = xo
             ydist = (sy/yo)*(ypr/yo)**(sy-1)*np.exp(-(ypr/yo)**(sy))
         return xdist*ydist
-#    return np.exp(-(xpr**2/(2*sx**2) + ypr**2/(2*sy**2)))
-#    else:
-#        a = np.cos(th)**2/(2*sx**2) + np.sin(th)**2/(2*sy**2)
-#        b = -np.sin(2*th)/(4*sx**2) + np.sin(2*th)/(4*sy**2)
-#        c = np.sin(th)**2/(2*sx**2) + np.cos(th)**2/(2*sy**2)
-#        return np.exp(-(a*(x-xo)**2-2*b*(x-xo)*(y-yo)+c*(y-yo)**2))
 
 def gen_central3d(params, X, idx=0, lims=None, normalized=False, dists=['cauchy','gaussian','gaussian']):    
     if X.shape[0] != 3:
@@ -898,10 +835,6 @@ def fit_damped_cos(x, y, invar, fit_bg=True, method='regular'):
     tau = results.params['tau'].value
     phi = results.params['phi'].value
     bg = results.params['bg'].value
-#    model = damped_cos(results.params, x)
-#    plt.plot(x, y, x, model)
-#    plt.show()
-#    plt.close()
     return (A, center, tau, phi, bg)
 
 def voigt_eval(params, xvals, model):
@@ -1040,15 +973,6 @@ def sigma_clip(residuals,sigma=3,max_iters=1):
         iter_count += 1
     return residual_mask
                 
-#def cladding(axis,width,center=0,height=1):
-#    """Function ONLY for rough use on preliminary MINERVA data.  This is to
-#       give a VERY rough estimate for the cladding profile.
-#    """
-#    zl = axis[axis<=center]
-#    zr = axis[axis>center]
-#    left = height*0.5*(1+sp.erf((zl-center+width/2)/width))
-#    right = height*0.5*(1+sp.erf(-(zr-center-width/2)/width))
-#    return np.append(left,right)
 
 def chi_fit(d,P,N,return_errors=False, calc_chi=True, use_sparse=False):
     """Routine to find parameters c for a model using chi-squared minimization.
@@ -1087,56 +1011,30 @@ def chi_fit(d,P,N,return_errors=False, calc_chi=True, use_sparse=False):
         else:
             return c, abs(chi_min)
     else:
-#        t0 = time.time()
-#        Pm = np.matrix(P)
-#        Pmt = np.transpose(P)
-#        dm = np.transpose(np.matrix(d))
         if min(N.shape) == 1 or N.ndim == 1:
             N = np.diag(N)
-#        Nm = np.matrix(N)
-#        PtNP = Pmt*Nm*Pm
         dm = np.reshape(d,(len(d),1))
         PtNP = np.dot(P.T,np.dot(N,P))
-#        t1 = time.time()
         try:
             U, s, V = np.linalg.svd(np.matrix(PtNP))
         except np.linalg.linalg.LinAlgError:
             return np.nan*np.ones((P.shape[1])), np.nan
         else:
-#            t2 = time.time()
-#            s[s==0]=0.001
-#            S = np.matrix(np.diag(1/s))
             S = 1/s
             S[s==0] = 0
             S = np.diag(S)
-            t1 = time.time()
             V = np.asarray(V)
             U = np.asarray(U)
-#            PtNPinv = np.transpose(V)*S*np.transpose(U)
             PtNPinv = np.dot(V.T, np.dot(S, U.T))
-#            PtN = Pmt*Nm
             PtN = np.dot(P.T,N)
-#            err_matrix = PtNPinv*PtN
             err_matrix = np.dot(PtNPinv, PtN)
-#            c = err_matrix*dm
             c = np.dot(err_matrix, dm)
-#            dfit = Pm*c
             if calc_chi:
                 dfit = np.dot(P, c)
-    #            chi_min = np.transpose(dm - dfit)*Nm*(dm - dfit)
                 chi_min = np.dot((dm-dfit).T,np.dot(N,dm-dfit))
             else:
                 chi_min = 1
-#            chi_min = np.asarray(chi_min)[0]
-#            c = np.asarray(c)[:,0]
             c = np.reshape(c, (len(c),))
-#            print type(c)
-#            print c.shape
-#            t3= time.time()
-#            print "  ", t1-t0
-#            print "  ", t2-t1
-#            print "  ", t3-t2
-            #chi_min2 = np.transpose(dm)*Nm*dm - np.transpose(c)*(np.transpose(Pm)*Nm*Pm)*c
             if return_errors:
                 return c, np.sqrt(np.diag(abs(err_matrix)))
             else:

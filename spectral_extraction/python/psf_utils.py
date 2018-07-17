@@ -1,6 +1,10 @@
 #!/usr/bin/env python
 
-#Functions for PSF fitting
+'''
+# Functions for PSF fitting of MINERVA Data
+# This includes 1-D and 2-D profiles
+# Most of the utilities are for Spectro-perfectionism 2D PSF fitting
+'''
 
 #Import all of the necessary packages
 from __future__ import division
@@ -9,25 +13,12 @@ import os
 import math
 import time
 import numpy as np
-from numpy import pi, sin, cos, random, zeros, ones, ediff1d
-#from numpy import *
+from numpy import zeros, ediff1d
 import matplotlib.pyplot as plt
-#from matplotlib import cm
-#import scipy
-#import scipy.stats as stats
-#import scipy.special as sp
-#import scipy.interpolate as si
 from scipy.interpolate import interp1d
-#import scipy.optimize as opt
-#import scipy.sparse as sparse
-#import scipy.signal as signal
-import scipy.linalg as linalg
-#import solar
 import special as sf
 import bsplines as spline
-import argparse
 import lmfit
-
 
 ########################################################
 #########  Find peaks along arc frame ##################

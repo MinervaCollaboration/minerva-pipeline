@@ -1,29 +1,29 @@
 #!/usr/bin/env python
 
-#Optimal Extraction code for MINERVA pipeline
+'''
+# MINERVA's optimal extraction code.  This does the primary extraction work
+# and draws heavily on minerva_utils.py
+
+INPUTS:
+    Several options.  Most defaults are fine.  Only need:
+    -f (--filename): full path to fits file to extract
+    
+OUTPUTS:
+    Saves a fits file in $MINERVA_REDUX_DIR/date/*.proc.fits of extracted spectra
+    - extension 0: signal (3D array, [Tscope#, trace#, pixel column])
+    - extension 1: inverse variance of array
+    - extension 2: wavelength solution (drawn from arc_calibrate, same for all input files)
+    - extension 3: cosmic ray mask (1.0 = keep, 0.0 = masked)
+    .log text file with information about relative throughput per telescope
+'''
 
 #Import all of the necessary packages
 from __future__ import division
 import pyfits
 import os
-import sys
-import glob
-#import math
 import time
 import numpy as np
-#from numpy import *
 import matplotlib.pyplot as plt
-from matplotlib import cm
-from mpl_toolkits.mplot3d import Axes3D
-#import scipy
-#import scipy.stats as stats
-#import scipy.special as sp
-import scipy.interpolate as si
-#import scipy.optimize as opt
-#import scipy.sparse as sparse
-#import scipy.signal as signal
-#import scipy.linalg as linalg
-#import solar
 import special as sf
 import argparse
 import minerva_utils as m_utils
@@ -55,10 +55,6 @@ except KeyError:
     print("Must set MINERVA_SIM_DIR")
     exit(0)
 #    sim_dir = "/uufs/chpc.utah.edu/common/home/bolton_data0/minerva/sim"
-    
-#try:
-#    tag_dir = os.environ['MINERVA_TAG_DIR']
-#except KeyError:
     
     
 #########################################################
@@ -97,8 +93,6 @@ parser.add_argument("-B","--bias",help="Use bias frames in calibration (default:
 parser.add_argument("-F","--slit_flat",help="Use slit flat frames in calibration (default: True)", action='store_false')
 parser.add_argument("-S","--scatter",help="Perform scattered light subtraction (default: True)",
                     action='store_false')
-#parser.add_argument("-T","--tscopes",help="T1, T2, T3, and/or T4 (remove later)",
-#                    type=str,default=['T1','T2','T3','T4'])
 args = parser.parse_args()
 num_fibers = args.num_fibers*args.telescopes
 num_points = args.num_points
@@ -110,8 +104,7 @@ fast = args.fast
 ########### Load Background Requirments #################
 #########################################################
 
-#hardcode in n20160115 directory
-filename = args.filename#os.path.join(data_dir,'n20160115',args.filename)
+filename = args.filename
 software_vers = 'v1.0.0' #Must manually update for each new release
 
 gain = 1.3 ### Based on MINERVA_CCD Datasheet
@@ -207,14 +200,6 @@ if args.date is None:
     arc_date = m_utils.find_most_recent_frame_date('arc', data_dir)
 else:
     arc_date = args.date
-    
-
-#arc_date = 'n20161123'
-#trace_dir = os.path.join(redux_dir,"sky_trace")
-#trace_fits = pyfits.open(os.path.join(trace_dir,'trace_gaussian.fits'))
-##hdr = trace_fits[0].header
-##profile = hdr['PROFILE']
-#multi_coeffs = trace_fits[0].data  
 
 ### Fiber flat traces from Nov 23, 2016 - use as a backup if other fitting fails
 #trace_dir = None
@@ -234,133 +219,10 @@ multi_coeffs = np.zeros((numexts,)+trace_fits[0].data.shape)
 for i in range(numexts):
     multi_coeffs[i] = trace_fits[i].data
     
-#  
-    
-#multi_coeffs = pyfits.open(os.path.join(redux_dir,'n20170406','trace_{}_{}.fits'.format('gaussian', 'n20170406')))[0].data    
-    
-
-
-#plt.figure('Trace Check')
-#plt.imshow(np.log(ccd),interpolation='none')
-#ypix = ccd.shape[1]
-#t_coeffs = multi_coeffs[0]
-#for i in range(num_fibers):
-#    if i < 0 or i > 110:
-#        continue
-#    ys = (np.arange(ypix)-ypix/2)/ypix
-#    xs = np.poly1d(t_coeffs[:,i])(ys)
-#    yp = np.arange(ypix)
-#    plt.plot(yp,xs, 'b', linewidth=2)
-#plt.show()
-#plt.close() 
-    
-### Now find bspline profiles using the gaussian trace centers (this is saved to disk)
-skip_fibs = [0, 111, 112, 113, 114, 115]
-#skip_fibs = np.arange(116)
-#skip_fibs = np.delete(skip_fibs,3)
-#m_utils.bspline_pre(daytime_sky, multi_coeffs[0], redux_dir, date, rn=rn_eff, window=10, skip_fibs=skip_fibs)
-
-''' # Trace finding with fiber flats
-### Assumes fiber flats are taken on same date as arcs
-fiber_flat_files = glob.glob(os.path.join(data_dir,'*'+arc_date,'*[fF]iber*[fF]lat*'))
-
-if os.path.isfile(os.path.join(redux_dir,arc_date,'trace_{}_{}.fits'.format(args.profile,arc_date))):
-    print "Loading Trace Frames" 
-    trace_fits = pyfits.open(os.path.join(redux_dir,arc_date,'trace_{}_{}.fits'.format(args.profile,arc_date)))
-    hdr = trace_fits[0].header
-    profile = hdr['PROFILE']
-    multi_coeffs = trace_fits[0].data
-else:
-    ### Combine four fiber flats into one image
-    profile = args.profile
-    if profile == 'moffat' or profile == 'gaussian' or profile == 'gauss_lor' or profile == 'bspline':
-        pass
-    else:
-        print("Invalid profile choice ({})".format(profile))
-        print("Available choices are:\n  moffat\n  gaussian\n  gauss_lor\n bspline")
-        exit(0)
-    if arc_date == 'n20161123':
-        backup_files = ['a']*4
-        for i in range(4):
-            backup_files[i] = os.path.join(redux_dir,'n20161123','combined_flat_T{}.fits'.format(int(i+1)))
-        backup_fiberflat = m_utils.build_trace_ccd(backup_files, ccd.shape, reverse_y=False)
-        trace_ccd = 1.0*backup_fiberflat
-    else:
-        trace_ccd = m_utils.build_trace_ccd(fiber_flat_files, ccd.shape)
-    ### Find traces and label for the rest of the code
-    ### Pre-process trace frame
-#    try:
-#        t_bias = m_utils.stack_calib(redux_dir, data_dir, arc_date)
-#        t_bias = t_bias[::-1,0:actypix] #Remove overscan
-#        t_bias = m_utils.bias_fit(t_bias, np.zeros(t_bias.shape[0]))
-#        trace_ccd -= t_bias
-#
-#        t_sflat = m_utils.stack_flat(redux_dir, data_dir, arc_date)
-#        ### If no slit flat, sflat returns all ones, don't do any flat fielding
-#        if np.max(t_sflat) - np.min(t_sflat) == 0:
-#            t_norm_sflat = np.ones(trace_ccd.shape)
-#        else:
-#            t_norm_sflat = m_utils.make_norm_sflat(t_sflat, redux_dir, arc_date, spline_smooth=True, plot_results=False, include_edge=False)        
-#        
-#        t_bg = trace_ccd[t_norm_sflat==1]
-#        cut = np.median(t_bg)
-#        if cut < 15:
-#            cut = 15 ### enforce minimum
-#        junk, tbstd = m_utils.remove_ccd_background(t_bg,cut=cut)
-#        rn_t = tbstd*gain # effective/empirical readnoise (including effects of bias/dark subtraction)
-#        trace_ccd -= cut
-#    except:
-    trace_ccd -= np.median(trace_ccd)
-    rn_t = 3.63
-#    trace_ccd = pyfits.open(os.path.join(redux_dir,'n20161123','simulated_trace.fits'))[0].data
-    print("Searching for Traces")
-#    for i in np.arange(0,2000,100):
-#        plt.plot(trace_ccd[i,:])
-#        plt.show()
-#        plt.close()
-    if profile == 'bspline':
-        ### Need first guess at trace from somewhere...
-#        trace_ccd /= norm_sflat
-        if os.path.isfile(os.path.join(redux_dir,arc_date,'trace_gaussian_{}.fits'.format(arc_date))):
-            trace_fits = pyfits.open(os.path.join(redux_dir,arc_date,'trace_gaussian_{}.fits'.format(arc_date)))
-            t_coeffs = trace_fits[0].data[0]
-        else:
-            num_pts_tmp = 100
-            multi_coeffs = m_utils.find_trace_coeffs(trace_ccd,6,fiber_space,num_points=num_pts_tmp,num_fibers=num_fibers,skip_peaks=1, profile='gaussian')
-            hdu1 = pyfits.PrimaryHDU(multi_coeffs)
-            hdulist = pyfits.HDUList([hdu1])
-            hdu1.header.append(('PROFILE',profile,'Cross-dispersion profile used for trace fitting'))
-            hdulist.writeto(os.path.join(redux_dir,arc_date,'trace_gaussian_{}.fits'.format(arc_date)),clobber=True)
-            t_coeffs = multi_coeffs[0]
-#        m_utils.bspline_pre(trace_ccd, t_coeffs, redux_dir, arc_date, rn=rn_t, window=5)
-        num_points = actypix
-        
-    multi_coeffs = m_utils.find_trace_coeffs(trace_ccd,12,fiber_space,num_points=num_points,num_fibers=num_fibers,skip_peaks=1, profile=profile)
-#    trace_coeffs = multi_coeffs[0]
-#    trace_intense_coeffs = multi_coeffs[1]
-#    trace_sig_coeffs = multi_coeffs[2]
-#    trace_pow_coeffs = multi_coeffs[3]
-#    ### Save for future use
-#    hdu1 = pyfits.PrimaryHDU(trace_coeffs)
-#    hdu2 = pyfits.PrimaryHDU(trace_intense_coeffs)
-#    hdu3 = pyfits.PrimaryHDU(trace_sig_coeffs)
-#    hdu4 = pyfits.PrimaryHDU(trace_pow_coeffs)
-#    hdulist = pyfits.HDUList([hdu1])
-#    hdulist.append(hdu2)
-#    hdulist.append(hdu3)
-#    hdulist.append(hdu4)
-    hdu1 = pyfits.PrimaryHDU(multi_coeffs)
-    hdulist = pyfits.HDUList([hdu1])
-    hdu1.header.append(('PROFILE',profile,'Cross-dispersion profile used for trace fitting'))
-    hdulist.writeto(os.path.join(redux_dir,arc_date,'trace_{}_{}.fits'.format(profile, arc_date)),clobber=True)
-#'''
 ##############################
 #### Do optimal extraction ###
 ##############################
-#spec, spec_invar, spec_mask, image_model = m_utils.extract_1D(ccd, norm_sflat, trace_coeffs,i_coeffs=trace_intense_coeffs,s_coeffs=trace_sig_coeffs,p_coeffs=trace_pow_coeffs,readnoise=bstd*gain,gain=gain,return_model=True,verbose=True)
-#norm_sflat = np.ones(ccd.shape)
 profile = args.profile
-#profile = 'bspline'
 px_shift = 0
 spec, spec_invar, spec_mask, image_model, image_mask, chi2_array, med_pix_shift = m_utils.extract_1D(ccd, norm_sflat, multi_coeffs, profile, date=date, readnoise=rn_eff, gain=gain, px_shift=px_shift, return_model=True, verbose=True, boxcar=boxcar, fast=fast, trace_dir=trace_dir)
 ### Evaluate fit
@@ -370,41 +232,15 @@ chi2tot = np.sum((ccd-image_model)**2*invar)/(np.size(ccd-actypix*num_fibers*3))
 chi2total = np.sum((image_model[image_model != 0]-ccd[image_model != 0])**2*(1/(ccd[image_model != 0]+readnoise**2)))/(np.size(ccd[image_model != 0])-actypix*num_fibers*3)
 print("Reduced chi^2 of ccd vs. model is {}".format(chi2total))
 
-#chir = np.ravel(chi2_array)#/7#(fiber_space+1-5) #[itest,:]
-#print np.nanmedian(chir[chir!=0])
-#msk = (abs(chir) < 100)*(~np.isnan(chir))*(chir > 0)
-#print np.sum(msk)/len(chir)*100, "% good"
-#plt.hist(chir[msk], bins=50)                
-#plt.show()
-#plt.close()
-
-#image_mask = (image_mask == 0) #Invert T/F
-#bg_cr_mask = (image_mask == 0) #Invert T/F
 bg_cr_mask = 1.0*image_mask
-#bg_cr_mask = m_utils.simple_sig_clip((ccd-image_model)*image_mask, sig=7) != 0
-
-#bg_cr_mask = m_utils.simple_sig_clip((ccd-image_model)*np.sqrt(invar), sig=7) != 0
-
 chi2tot = np.sum(((ccd-image_model)**2*invar)*bg_cr_mask)
 dof = ccd.size - np.sum(bg_cr_mask==0) - (num_fibers + 12)*ccd.shape[1]
 print "Chi2/dof = {}/{}".format(chi2tot, dof)
 
 
-save_model = False
+save_model = False # Can add as an input option later if desired
 if save_model:
     np.save(os.path.join(redux_dir,'n20170307','n20170307.HR3799.0015.1dproc.npy'), image_model)
-### Evaluate plots
-#plt.imshow(np.hstack((ccd,image_model,ccd-image_model)), interpolation='none', cmap=cm.hot)
-#plt.show()
-#plt.close()
-#resid = (ccd-image_model)*np.sqrt(invar)
-#plt.imshow(resid*bg_cr_mask, vmax=1, vmin=-1, interpolation='none', cmap=cm.hot)
-#plt.show()
-#plt.close()
-#plt.plot(resid[:,1000])
-#plt.show()
-#plt.close()
-#exit(0)
 
 nnresid = (ccd-image_model)
 rsec = nnresid[1650:1667,1000]
@@ -455,45 +291,6 @@ spec_mask3D[0,:,:] = spec_mask[np.arange(1,num_fibers,4),:]
 spec_mask3D[1,:,:] = spec_mask[np.arange(2,num_fibers,4),:]
 spec_mask3D[2,:,:] = spec_mask[np.arange(3,num_fibers,4),:]
 spec_mask3D[3,:,:] = np.vstack((spec_mask[np.arange(4,num_fibers,4),:],np.zeros(actypix)))
-
-
-#spec3D = np.zeros((args.telescopes,args.num_fibers,actypix))
-#spec3D[0,:,:] = spec[np.arange(0,num_fibers,4),:]
-#spec3D[1,:,:] = spec[np.arange(1,num_fibers,4),:]
-#spec3D[2,:,:] = spec[np.arange(2,num_fibers,4),:]
-#spec3D[3,:,:] = spec[np.arange(3,num_fibers,4),:]
-#
-#spec_invar3D = np.zeros((args.telescopes,args.num_fibers,actypix))
-#spec_invar3D[0,:,:] = spec_invar[np.arange(0,num_fibers,4),:]
-#spec_invar3D[1,:,:] = spec_invar[np.arange(1,num_fibers,4),:]
-#spec_invar3D[2,:,:] = spec_invar[np.arange(2,num_fibers,4),:]
-#spec_invar3D[3,:,:] = spec_invar[np.arange(3,num_fibers,4),:]
-#
-#spec_mask3D = np.zeros((args.telescopes,args.num_fibers,actypix))
-#spec_mask3D[0,:,:] = spec_mask[np.arange(0,num_fibers,4),:]
-#spec_mask3D[1,:,:] = spec_mask[np.arange(1,num_fibers,4),:]
-#spec_mask3D[2,:,:] = spec_mask[np.arange(2,num_fibers,4),:]
-#spec_mask3D[3,:,:] = spec_mask[np.arange(3,num_fibers,4),:]
-
-#plt.plot(wavelength_soln[0,2,:][spec_mask3D[0,2,:]==2],spec3D[0,2,:][spec_mask3D[0,2,:]==2],'b')
-#plt.plot(wavelength_soln[0,3,:][spec_mask3D[0,3,:]==2],spec3D[0,3,:][spec_mask3D[0,3,:]==2],'b--')
-#plt.plot(wavelength_soln[1,2,:][spec_mask3D[1,2,:]==2],spec3D[1,2,:][spec_mask3D[1,2,:]==2],'k')
-#plt.plot(wavelength_soln[1,3,:][spec_mask3D[1,3,:]==2],spec3D[1,3,:][spec_mask3D[1,3,:]==2],'k--')
-#plt.plot(wavelength_soln[2,2,:][spec_mask3D[2,2,:]==2],spec3D[2,2,:][spec_mask3D[2,2,:]==2],'g')
-#plt.plot(wavelength_soln[2,3,:][spec_mask3D[2,3,:]==2],spec3D[2,3,:][spec_mask3D[2,3,:]==2],'g--')
-#plt.plot(wavelength_soln[3,2,:][spec_mask3D[3,2,:]==2],spec3D[3,2,:][spec_mask3D[3,2,:]==2],'r')
-#plt.plot(wavelength_soln[3,3,:][spec_mask3D[3,3,:]==2],spec3D[3,3,:][spec_mask3D[3,3,:]==2],'r--')
-#plt.show()
-#plt.close()
-
-#print "Percent of masked points:", np.sum(spec_mask3D<2)/np.size(spec3D)*100
-#for ff in range(28):
-#    for tt in range(4):
-#        plt.plot(spec3D[tt,ff,:])
-#        plt.plot(spec3D[tt,ff,:]*(spec_mask3D[tt,ff,:]>=1))
-#        plt.plot(spec3D[tt,ff,:]*(spec_mask3D[tt,ff,:]==2))
-#        plt.show()
-#        plt.close()
 
 #############################################################
 ########### And finally, save spectrum ######################
@@ -562,11 +359,10 @@ try:
     barycentric = True
 except:
     barycentric = False
-#barycentric = False
 
 
 #############################################################
-######### Log files and email alerts for low counts #########
+###### Log files to allow email alerts for low counts #######
 #############################################################
 
 T_cnts = dict()
@@ -614,12 +410,4 @@ lf.write("{} {} {} {}".format(good[0], good[1], good[2], good[3]))
 lf.close()
 
 tf = time.time()
-dws = np.ediff1d(wavelength_soln[0,1,:])
-dws = np.append(dws, dws[-1])
-a1p = spec3D[0,1,:]/dws
-errs = 1/np.sqrt(spec_invar3D[0,0,:])
-xsxn = np.sum(ccd, axis=0)
-#plt.plot(wavelength_soln[0,1,:],a1p,wavelength_soln[0,1,:],xsxn/dws)
-#plt.show()
-#plt.close()
 print("Total extraction time = {}s".format(tf-t0))

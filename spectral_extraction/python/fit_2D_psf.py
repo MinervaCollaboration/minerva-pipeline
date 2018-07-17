@@ -25,22 +25,9 @@ from __future__ import division
 import pyfits
 import os
 import glob
-import math
 import time
 import numpy as np
-from numpy import pi, sin, cos, random, zeros, ones, ediff1d
-#from numpy import *
 import matplotlib.pyplot as plt
-#from matplotlib import cm
-#import scipy
-#import scipy.stats as stats
-#import scipy.special as sp
-#import scipy.interpolate as si
-import scipy.optimize as opt
-#import scipy.sparse as sparse
-#import scipy.signal as signal
-import scipy.linalg as linalg
-#import solar
 import special as sf
 import bsplines as spline
 import argparse
@@ -55,9 +42,6 @@ redux_dir = os.environ['MINERVA_REDUX_DIR']
 ########### Allow input arguments #######################
 #########################################################
 parser = argparse.ArgumentParser()
-#parser.add_argument("-f","--filename",help="Name of arc file (.fits) to use for PSF fitting")
-                    #default=os.path.join(data_dir,'n20160216','n20160216.HR2209.0025.fits'))
-#                    default=os.path.join(data_dir,'n20160115','n20160115.daytimeSky.0006.fits'))
 parser.add_argument("-fib","--num_fibers",help="Number of fibers to extract",
                     type=int,default=29)
 parser.add_argument("-bs","--bundle_space",help="Minimum spacing (in pixels) between fiber bundles",
@@ -68,7 +52,7 @@ parser.add_argument("-ts","--telescope",help="Telescope to analyze",
                     type=str,default='T1') 
 parser.add_argument("-np","--num_points",help="Number of trace points to fit on each fiber",
                     type=int,default=20)
-parser.add_argument("-p","--psf",help="Type of model to be used for PSF fitting.",
+parser.add_argument("-p","--psfmodel",help="Type of model to be used for PSF fitting.",
                     type=str,default='ghl')
 parser.add_argument("-par","--parallel",help="Run in parallel mode",action='store_true')
 parser.add_argument("--par_index",help="Fiber index for parallel mode",
@@ -113,9 +97,9 @@ else:
     arc = pyfits.open(os.path.join(redux_dir,date,'combined_arc_{}.fits'.format(ts)))[0].data
     arc = arc[::-1,:]
 
-if os.path.isfile(os.path.join(redux_dir,date,'trace_{}.fits'.format(date))):
+if os.path.isfile(os.path.join(redux_dir,date,'trace_{}_2.fits'.format(date))):
     print "Loading Trace Frames" 
-    trace_fits = pyfits.open(os.path.join(redux_dir,date,'trace_{}.fits'.format(date)))
+    trace_fits = pyfits.open(os.path.join(redux_dir,date,'trace_{}_2.fits'.format(date)))
     hdr = trace_fits[0].header
     profile = hdr['PROFILE']
     multi_coeffs = trace_fits[0].data
@@ -133,6 +117,7 @@ pos_d, wl_d, mx_it_d, stddev_d, chi_d, err_d = psf.arc_peaks(data,wvln,invar,ts=
 for i in range(len(pos_d)):
     ### slot pos_d from each telescope into master dictionary for use
     arc_pos[i] = pos_d[i]
+    print "fiber {}, good peaks = {}".format(i,len(arc_pos[i]))
 
 actypix = arc.shape[1]
 ### Remove bias from frame
@@ -167,7 +152,7 @@ if not args.parallel:
         if args.verbose:
             print("Running PSF Fitting on trace {}".format(idx))
         
-        if args.psf is 'bspline':
+        if args.psfmodel is 'bspline':
             if idx == 0:
                 tmp_psf_coeffs = psf.fit_spline_psf(arc,hcenters,
                              vcenters,sigmas,powers,pix_err,gain,verbose=args.verbose)
@@ -178,7 +163,7 @@ if not args.parallel:
                 fitted_psf_coeffs[idx,:] = psf.fit_spline_psf(arc,hcenters,
                              vcenters,sigmas,powers,pix_err,gain,verbose=args.verbose)
                              
-        elif args.psf is 'ghl':
+        elif args.psfmodel is 'ghl':
             print("Non-parallel version not yet set up for GHL psf")
             exit(0)
         else:
@@ -189,8 +174,8 @@ if not args.parallel:
             exit(0)
             
     hdu1 = pyfits.PrimaryHDU(fitted_psf_coeffs)
-    hdu1.header.append(('PSFTYPE',args.psf,'Model used for finding PSF'))
-    if args.psf is 'bspline':   
+    hdu1.header.append(('PSFTYPE',args.psfmodel,'Model used for finding PSF'))
+    if args.psfmodel is 'bspline':   
         hdu1.header.comments['NAXIS1'] = 'Coefficients (see key - not yet made)'
         hdu1.header.comments['NAXIS2'] = 'Fiber (of those actually used)'
                 
@@ -228,7 +213,7 @@ else:
         idx -= 1 ### shift index back so it matches other telescope formats
     if args.verbose:
         print("Running PSF Fitting on trace {}".format(idx))
-    if args.psf is 'bspline':
+    if args.psfmodel is 'bspline':
         r_breakpoints = np.hstack(([0, 1.5, 2.4, 3],np.arange(3.5,8.6,1))) #For cpad=6
         #r_breakpoints = np.hstack(([0, 1.2, 2.3, 3],np.arange(3.5,10,0.5))) #For cpad=8
         theta_orders = [0]
@@ -246,20 +231,15 @@ else:
         params.add('q', value = fit_params[0,0])
         params.add('PA', value = fit_params[1,0])
         spline_fit = spline.spline_2D_radial(sm_arc, sm_invar, r_breakpoints, params, theta_orders=[0], order=4, return_coeffs=False, spline_coeffs=spline_coeffs.T, sscale=scale_fit, fit_bg=False, pts_per_px=1)
-#        print spline_fit
-#        print scale_fit
-#        spline_fit *= np.sum(sm_arc)/np.sum(spline_fit)
         print np.sum((sm_arc-spline_fit)**2*sm_invar)/(np.size(sm_arc-len(spline_coeffs)-4))
         plt.imshow(np.hstack((sm_arc,spline_fit,(sm_arc-spline_fit)*25)),interpolation='none')
-#        plt.imshow(sm_arc, interpolation='none')
-#        sf.plot_3D(np.hstack((sm_arc,spline_fit,(sm_arc-spline_fit)*25)))
         plt.figure('Residuals')
         plt.imshow((sm_arc-spline_fit)*sm_invar, interpolation='none')
         plt.show()
         plt.close()
         psf_coeffs = psf.fit_spline_psf(arc,hcenters,vcenters,sigmas,powers,pix_err,gain,verbose=args.verbose, plot_results=args.plot_fitted)
         hdu1 = pyfits.PrimaryHDU(psf_coeffs)
-        hdu1.header.append(('PSFTYPE',args.psf,'Model used for finding PSF'))
+        hdu1.header.append(('PSFTYPE',args.psfmodel,'Model used for finding PSF'))
         hdu1.header.comments['NAXIS1'] = 'Coefficients (see key - not yet made)'
         hdu1.header.append(('FIBERNUM',idx,'Fiber number (starting with 0)'))
         hdulist = pyfits.HDUList([hdu1])
@@ -269,13 +249,13 @@ else:
         if not os.path.isdir(os.path.join(redux_dir,psf_dir)):
             os.makedirs(os.path.join(redux_dir,psf_dir))
         hdulist.writeto(os.path.join(redux_dir,psf_dir,filename+'.fits'),clobber=True)
-    elif args.psf == 'ghl':
+    elif args.psfmodel == 'ghl':
         invar = 1/(abs(arc) + pix_err**2)
         ### can change cpad, pord to input arguments if desired
         cpad = 4 ### padding from center of array (makes 2*cpad+1^2 box)
         pord = 2 ### polynomial order for GHL interpolation
         return_centers = True ### Use only for testing, centers don't matter later
-        other_weights, lor_params, hcenters, vcenters, chi2r = psf.fit_ghl_psf(arc, hcenters, vcenters, s_coeffs, p_coeffs, pix_err, gain, pord=2, cpad=cpad, plot_results=False, verbose=True, return_centers=return_centers)
+        other_weights, lor_params, hcenters, vcenters, chi2r = psf.fit_ghl_psf(arc, hcenters, vcenters, s_coeffs, p_coeffs, pix_err, gain, pord=2, cpad=cpad, plot_results=True, verbose=True, return_centers=return_centers)
 #        hdu1 = pyfits.PrimaryHDU(norm_weights)
         hdu1 = pyfits.PrimaryHDU(other_weights)
         hdu2 = pyfits.PrimaryHDU(lor_params)
@@ -284,7 +264,7 @@ else:
         if return_centers:
             hdu5 = pyfits.PrimaryHDU(hcenters)
             hdu6 = pyfits.PrimaryHDU(vcenters)
-        hdu1.header.append(('PSFTYPE',args.psf,'Model used for finding PSF'))
+        hdu1.header.append(('PSFTYPE',args.psfmodel,'Model used for finding PSF'))
 #        hdu1.header.comments['NAXIS1'] = 'GH normalization weights'
         hdu1.header.comments['NAXIS1'] = 'GH shape weights'
         hdu2.header.comments['NAXIS1'] = 'Lorentz width and ratio'
@@ -306,183 +286,13 @@ else:
             hdulist.append(hdu6)
         redux_dir = os.environ['MINERVA_REDUX_DIR']
         psf_dir = 'psf'
-        filename = '{}_psf_coeffs_{}_{:03d}.fits'.format(args.psf,ts,idx)
+        filename = '{}_psf_coeffs_{}_{:03d}.fits'.format(args.psfmodel,ts,idx)
         if not os.path.isdir(os.path.join(redux_dir,psf_dir)):
             os.makedirs(os.path.join(redux_dir,psf_dir))
         hdulist.writeto(os.path.join(redux_dir,psf_dir,filename),clobber=True)
     else:
-        print("Invalid PSF selection {}".format(args.psf))
+        print("Invalid PSF selection {}".format(args.psfmodel))
         print("Choose from the following:")
         print("  bspline")
         print("  ghl")
         exit(0)
-        
-   
-'''
-## Remove when done - testing how well these can be loaded and re-used
-idx = args.par_index
-#hcenters = arc_pos[idx].astype(float)
-#hcenters[0] = 35.193330142114498
-#hscale = (hcenters-actypix/2)/(actypix)
-shft = int(np.mod(ts_num+1,4))
-#vcenters = np.poly1d(trace_coeffs[:,4*idx+shft])(hscale) + 2 ##have some mistake messing up vcenters, need offset of 2, but don't know why :(
-#vcenters[0] = 638.82966131049409
-#sigmas = np.poly1d(trace_sig_coeffs[:,4*idx+shft])(hscale)
-#powers = np.poly1d(trace_pow_coeffs[:,4*idx+shft])(hscale)
-s_coeffs = trace_sig_coeffs[:,4*idx+shft]
-p_coeffs = trace_pow_coeffs[:,4*idx+shft]
-cpad = 4
-#hcenters += 0.15
-#vcenters += 0.15
-
-
-f_vals = pyfits.open('/home/matt/software/minerva/redux/psf/ghl_psf_coeffs_T1_010.fits')
-#norm_weights = f_vals[0].data
-weights = f_vals[0].data.ravel()
-lorentz_fits = f_vals[1].data
-hcenters = f_vals[4].data
-vcenters = f_vals[5].data
-pord = 2
-params = psf.init_params(hcenters, vcenters, s_coeffs, p_coeffs, pord, r_guess=lorentz_fits[:,1], s_guess = lorentz_fits[:,0])
-ncenters = len(hcenters)
-icenters = np.vstack((hcenters, vcenters))
-
-#i = 0 ### Just look at one for now
-for i in range(len(hcenters)):
-#    data = arc[int(vcenters[i])-cpad:int(vcenters[i])+cpad+1, int(hcenters[i])-cpad:int(hcenters[i])+cpad+1]
-#    invar = 1/(abs(data)+pix_err**2)
-#    nw = norm_weights[i]
-#    aws = np.zeros((11))
-    #for j in range(len(aws)):
-    #    aws[j] = np.poly1d(other_weights[j])(hscale[i])
-    #lvls = np.zeros((2))
-    #for k in range(len(lvls)):
-    #    lvls[k] = np.poly1d(lorentz_fits[k])(hscale[i])
-    
-    #params = psf.convert_params(params, hcenters, i, pord)
-    #for o in range(pord+1):
-    #    params['sigl{}'.format(o)].value=lorentz_fits[o,0]
-    #    params['ratio{}'.format(o)].value=lorentz_fits[o,1]
-    
-#    data, invar, scale_arr = psf.get_fitting_arrays(arc, hcenters, vcenters-1, pord, cpad, readnoise, scale_arr=None, return_scale_arr=True)
-    data, invar, = psf.get_fitting_arrays(arc, hcenters, vcenters, pord, cpad, readnoise, scale_arr=np.ones((len(hcenters))), return_scale_arr=False)
-#    weights = np.zeros((ncenters+11*(pord+1)))
-#    weights[0:ncenters], weights[ncenters:] = norm_weights[0:ncenters], np.ravel(other_weights)
-#    weights[0:ncenters], weights[ncenters:] = np.ones((ncenters)), np.ravel(other_weights)
-#    lweights = np.ones((ncenters))
-#    lweights = 1.0*weights[0:ncenters]
-    #ows = np.reshape(other_weights, (11,pord+1))
-#    ows = 1.0*other_weights
-    #hci = np.array(([hcenters[i]]))
-    #vci = np.array(([vcenters[i]]))
-    #gh_model = psf.get_ghl_profile(hci, vci, params, weights, pord, cpad, return_model=True, no_convert=True)[0]
-    #lorentz = psf.get_data_minus_lorentz(data, hci, vci, params, weights, pord, cpad, return_lorentz=True, no_convert=True)
-    #model = gh_model + lorentz
-    #plt.imshow(np.hstack((data, model*np.sum(data)*3, data-model*np.sum(data))), interpolation = 'none')
-    #plt.show()
-    #plt.close()
-    #lweights = np.ones((len(hcenters)))
-    #lweights = 1.0*norm_weights
-    #print data
-    #print hcenters[i]
-    #print vcenters[i]
-    #print params
-    #print weights
-    #print pord
-    #print cpad
-    lorentzs = psf.get_data_minus_lorentz(data, icenters, params, weights, pord, cpad, return_lorentz=True)
-    gh_models = psf.get_ghl_profile(icenters, params, weights, pord, cpad, return_model=True)
-    model = gh_models[i] + lorentzs[i] + params['bg{}'.format(i)].value
-    params1 = psf.convert_params(params, i, pord)
-    print "Model sum:", np.sum(model)
-    norm_model = model/np.sum(model)
-    profile = np.ravel(norm_model).reshape((norm_model.size,1))
-    noise = np.diag(np.ravel(invar[i]))
-    D = np.ravel(data[i])
-    coeff, chi = sf.chi_fit(D, profile, noise)
-    print "fit vs. sum:", coeff[0], np.sum(data[i])#, chi[0]/(norm_model.size-1)
-    print "chi2r:", np.sum((data[i]-norm_model*coeff[0])**2*invar[i])/(data[i].size-3-12)
-    #print gh_models[i]
-    #print lorentzs[i]
-#    print np.sum(model), np.sum(gh_models[i])/np.sum(model)
-    plt.imshow(np.hstack((data[i], norm_model*coeff[0], data[i]-norm_model*coeff[0])), interpolation='none')    
-#    hc = hcenters[i] - int(np.round(hcenters[i])) + cpad
-#    vc = vcenters[i] - int(np.round(vcenters[i])) + cpad
-#    plt.plot(hc, vc, 'b.')
-#    plt.plot(hc+2*cpad+1, vc, 'b.')
-#    plt.imshow((data[i]-norm_model*coeff[0])*invar[i],interpolation = 'none')
-    plt.show()
-    plt.close()
-exit(0)
-#'''
-
-
-
-
-''' 
-############################################################################
-#RANDOM TESTING OF NORMALIZATION SUCCESS, MAY NEED TO RE-USE
-############################################################################
-sig = 1
-power = 2
-params = np.array(([0, 0, sig, power]))
-weights = np.ones((12))
-xarr = np.linspace(-10,10,2000)
-yarr = np.linspace(-10,10,2000)
-ghp = sf.gauss_herm2d(xarr, yarr, params, weights)
-dx = xarr[1]-xarr[0]
-print np.sum(ghp)*dx**2
-exit(0)
-
-def find_norm(sig, power):
-    
-#    xarr = np.linspace(-5,5,2000)
-#    yarr = np.linspace(-5,5,2000)
-    
-    xd = np.ediff1d(xarr)[0]
-#    norm = np.sum(sf.gauss_herm2d(xarr, yarr, params, weights))*xd**2
-    norm = np.sum(sf.gauss_herm2d(xarr, yarr, params, weights))*xd**2
-    exit(0)
-    norm = np.sum(sf.gaussian(xarr, sig, height=None, power=power)*sf.hermite(2,xarr,sig,0))*xd
-    plt.plot(xarr, sf.gaussian(xarr, sig, height=None, power=power))#*sf.hermite(2,xarr,sig,0), linewidth = 2)
-#    h2 = sf.hermite(2,xarr,sig,0)
-#    heff = xarr**2 - 1
-#    plt.plot(xarr, h2, xarr, heff)
-#    plt.show()
-#    plt.close()
-#    norm1 = np.sum(sf.gaussian(xarr, sig, height=None, power=power))*xd
-#    norm2 = np.sum(sf.gaussian(xarr, sig, height=None, power=power)*xarr**2)*xd
-#    print "norms:", norm, norm1
-#    print "ratio=", norm/norm1, 1-norm/norm1
-#    print norm
-    return norm
-    
-norm = find_norm(sig,power)
-#print norm
-#plt.show()
-#plt.close()
-##norm2 = find_norm(0.5, power)
-#print norm2
-#exit(0)
-from scipy.special import gamma
-#from scipy.special import gammaincc as gamup
-def alt_norm(sig, power):
-#    anorm = (2/power)**2*(2*sig**2)**(2/power)*(np.pi)**(power/2)
-#    anorm = (2/power)**2*(2**(2/power))*sig**(4/power)
-#    anorm = sig**2*(2*np.pi)**(power/2)*(2/power)**2
-#    anorm = sig**2*(2/power)**2*(2**(2/power))
-#    anorm = 2*(2*sig**power)**(1/power)*np.sqrt(np.pi)*gamma(power)/gamma(power+1)
-#    anorm = (2*sig**power)**(1/power)*(2/power)*gamma(1/power)
-    a = 2*sig**2
-    anorm = (2/power)*a**(1/power)*(a**(2/power)*gamma(3/power) - gamma(1/power))
-    return anorm
-anorm = alt_norm(sig, power)
-print anorm**2
-#nr = norm/anorm
-#print nr
-#print nr**-(2/power)
-#print nr**(2/power)
-exit(0)
-
-
-#'''

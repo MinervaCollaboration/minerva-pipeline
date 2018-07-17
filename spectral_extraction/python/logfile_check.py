@@ -1,6 +1,17 @@
 #!/usr/bin/env python
 
-#Code to check log files and send email alerts
+'''
+# Code to check log files and send email alerts
+# Looks for:
+   1. Any exposures that are not processed by the raw reduction pipeline
+   2. Any telescopes that have low signals (indicating poor throughput for some reason)
+   3. Any telescopes whose signal drops relative to past exposures (of the same star)
+   4. Gross trace shift of > 1 pixel
+   
+# Will send a report to the raw reduction administrator for everything
+# Will copy other addresses for low exposures (#2)
+# Emails are sent from minerva.eprv@gmail.com
+'''
 
 #Import all of the necessary packages
 from __future__ import division
@@ -97,6 +108,8 @@ def sendmail(script, subject, recipients=['m.cornachione@utah.edu']):
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-d","--date",help="Date to run log_file check in 'nYYYYMMDD' format (default is current day)")
+parser.add_argument("-r","--reduction_admin",help="email address of raw reduction administrator", default="m.cornachione@utah.edu")
+parser.add_argument("-o","--other_recipients",help="email address(es) to copy on low exposure report (may be a list, e.g. 'u1@school1.edu u2@school2.edu' etc.", default="jason.eastman@cfa.harvard.edu")
 parser.add_argument("-n","--dry_run",help="Run without sending emails", action="store_true")
 args_in = parser.parse_args()
 
@@ -183,8 +196,10 @@ if np.sum(logged) < len(logged):
         else:
             script += raw_data[i] + "\n"
     script += "\n"
+    
+srecipients = [args_in.reduction_admin]
 if script != "" and not args_in.dry_run:
-    sendmail(script, "MINERVA Unprocessed Data Report: {}".format(date))
+    sendmail(script, "MINERVA Unprocessed Data Report: {}".format(date), recipients=srecipients)
     
 ### Send report on low signal files
 all_clear = True
@@ -195,20 +210,22 @@ elif np.min(exp_status) <= 1: ##Flags zero and low exposures
     all_clear = False
 
 escript = "Warning - Low/Zero Exposures found on {}\n\n".format(date)
-tzeros = np.sum(exp_status==0, axis=0)
-tones = np.sum(exp_status==1, axis=0)
-ttwos = np.sum(exp_status==2, axis=0)
+tzeros = np.sum((exp_status==0)*(ignore!=0), axis=0)
+tones = np.sum((exp_status==1)*(ignore!=0), axis=0)
+ttwos = np.sum((exp_status==2)*(ignore!=0), axis=0)
 escript += "Telescope Summaries:\n"
 for l in range(4):
-    escript += "  T{t}: {n}/{tot} Normal, {l}/{tot} Low, {z}/{tot} Zero\n".format(t=l+1,n=ttwos[l], l=tones[l], z=tzeros[l], tot=np.sum(ignore[:,i]))
-escript += "\nList of files with no-signal exposures:\n"
+    escript += "  T{t}: {n}/{tot} Normal, {l}/{tot} Low, {z}/{tot} Zero\n".format(t=l+1,n=ttwos[l], l=tones[l], z=tzeros[l], tot=np.sum(ignore[:,l]))
+escript += "\nList of stars with no-signal exposures:\n"
 for i in range(len(logged)):
     if min(exp_status[i]) == 0:
         star = get_star(raw_data[i])
         escript += "  " + star + "\n"
 
+other_recipients = args_in.other_recipients.split(" ")
+erecipients = [args_in.reduction_admin] + other_recipients
 if not all_clear and not args_in.dry_run:
-    sendmail(escript, "MINERVA Low Exposure Report: {}".format(date))
+    sendmail(escript, "MINERVA Low Exposure Report: {}".format(date), recipients=erecipients)
     
 ### Check past median values to flag a gross change in throughput
     
@@ -256,8 +273,9 @@ for raw in raw_data:
         except:
             print "Log file {} does not exist".format(rlog)
 
+tprecipients = [args_in.reduction_admin]
 if low_cnt > 0:
-    sendmail(tpscript, "MINERVA Past Throughput Check: {}".format(date))
+    sendmail(tpscript, "MINERVA Past Throughput Check: {}".format(date), recipients=tprecipients)
     
 ### Check for trace shifts
 tsscript = "WARNING - trace shifts greater that 1px (relative to reference\n"
@@ -268,5 +286,6 @@ for raw in raw_data:
         tsscript += "  {}\n".format(raw)
     ts_idx += 1
     
+tsrecipients = [args_in.reduction_admin]
 if np.sum(tshift) > 0:
-    sendmail(tsscript, "Trace shift found in MINERVA data on {}".format(date))
+    sendmail(tsscript, "Trace shift found in MINERVA data on {}".format(date), recipients=tsrecipients)

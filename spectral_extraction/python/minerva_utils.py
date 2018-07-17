@@ -1,37 +1,32 @@
 #!/usr/bin/env python
 
-#Special functions for MINERVA data reduction
+'''
+# Special functions for MINERVA data reduction
+# Most of these functions are specific to MINERVA and have some CCD
+# characteristics hardcoded in.
+# Some functions were used during development, but are currently disused
+# These have been retained for possible future development
+'''
 
 #Import all of the necessary packages
 from __future__ import division
 import pyfits
 import os
-import math
 import time
 import datetime
 import sys
 import glob
 import numpy as np
-from numpy import pi, sin, cos, random, zeros, ones, ediff1d
+from numpy import ediff1d
 import numpy.polynomial.legendre as legendre
-#from numpy import *
 import matplotlib.pyplot as plt
-#from matplotlib import cm
-#import scipy
-#import scipy.stats as stats
-#import scipy.special as sp
 import scipy.interpolate as si
 import scipy.optimize as opt
-#import scipy.sparse as sparse
 import scipy.signal as signal
-#import scipy.linalg as linalg
-from scipy.ndimage.filters import uniform_filter
 from scipy.interpolate import interp1d
-#import solar
 import special as sf
 import bsplines as spline
 import psf_utils as psf
-#import argparse
 import lmfit
 from astropy.modeling.models import Voigt1D
 from matplotlib.font_manager import FontProperties
@@ -125,7 +120,6 @@ def gauss_lor(params, xarr):
     ratio = params['rat'].value
     sigl = params['sigl'].value
     bg = params['bg'].value
-#            bg_slp = params['bg_slp'].value
     try:
         power = params['power'].value
     except:
@@ -171,13 +165,6 @@ def fit_trace(x,y,ccd,rn,fib,form='gaussian', model=None, fiber_flat=False):
         chi = (zvals-fit)**2*np.diag(noise)
         if neg_chi:
             print chi
-    #    print x
-    #    print xvals
-    #    print x+xvals
-    #    print zvals
-    #    plt.errorbar(x+xvals,zvals,yerr=sqrt(zvals))
-    #    plt.plot(x+xvals,coeffs[2]*xvals**2+coeffs[1]*xvals+coeffs[0])
-    #    plt.show()
         chi_max = 100
         if chi>chi_max:
             #print("bad fit, chi^2 = {}".format(chi))
@@ -189,18 +176,12 @@ def fit_trace(x,y,ccd,rn,fib,form='gaussian', model=None, fiber_flat=False):
             cl, chil = sf.chi_fit(zl,pl,nl)
             cr, chir = sf.chi_fit(zr,pr,nr)
             if chil<chi and chil<chir:
-    #            plt.errorbar(xvals-1,zl,yerr=sqrt(zl))
-    #            plt.plot(xvals-1,cl[2]*(xvals-1)**2+cl[1]*(xvals-1)+cl[0])
-    #            plt.show()
                 xnl = -cl[1]/(2*cl[2])
                 znl = cl[2]*xnl**2+cl[1]*xnl+cl[0]
                 return xl+xnl, znl, chil
             elif chir<chi and chir<chil:
                 xnr = -cr[1]/(2*cr[2])
                 znr = cr[2]*xnr**2+cr[1]*xnr+cr[0]
-    #            plt.errorbar(xvals+1,zr,yerr=sqrt(zr))
-    #            plt.plot(xvals+1,cr[2]*(xvals+1)**2+cr[1]*(xvals+1)+cr[0])
-    #            plt.show()
                 return xr+xnr, znr, chir
             else:
                 ca = coeffs[2]
@@ -215,11 +196,8 @@ def fit_trace(x,y,ccd,rn,fib,form='gaussian', model=None, fiber_flat=False):
             zc = ca*xc**2+cb*xc+coeffs[0]
             return x+xc, zc, chi
     elif form=='gaussian':
-#        xpad = 8
-#        xvals = np.arange(-xpad,xpad+1)
         ### Need to get custom limits for fibers on edge of bundle on blue end of spectrograph
         xl, xh = get_xlims(fib)
-#        xl, xh = -10, 10
         xvals = np.arange(xl, xh+1)
         xwindow = x+xvals
         xvals = xvals[(xwindow>=0)*(xwindow<maxx)]
@@ -230,32 +208,10 @@ def fit_trace(x,y,ccd,rn,fib,form='gaussian', model=None, fiber_flat=False):
         zc = params[2] #height (intensity)
         sig = params[0] #standard deviation
         power = params[5]
-#        pxn = np.linspace(xvals[0],xvals[-1],1000)
         fit = sf.gaussian(xvals,abs(params[0]),params[1],params[2],params[3],params[4],params[5])
         ### Try re-fitting with profile inverse variance...
-#        num_loops = 4
-#        chi = sum((fit-zvals)**2*invar)
-#        print "chi0", chi
-#        for i in range(num_loops):
-#            invar = 1/(abs(fit)+rn**2)
-#            params, errarr = sf.gauss_fit(xvals,zvals,invr=invar,fit_exp='y',fit_skew='n')
-#            xc = x+params[1] #offset plus center
-#            zc = params[2] #height (intensity)
-#            sig = params[0] #standard deviation
-#            power = params[5]
-    #        pxn = np.linspace(xvals[0],xvals[-1],1000)
-#            fit = sf.gaussian(xvals,abs(params[0]),params[1],params[2],params[3],params[4],params[5])
-#            chi = sum((fit-zvals)**2*invar)
-#            print "chi{}".format(i+1), chi
         invar = 1/(abs(fit)+rn**2)
         chi = sum((fit-zvals)**2*invar)
-#        if chi > 200 and np.random.rand() < 0.001:
-#            print chi
-#        plt.plot(xvals, zvals, xvals, fit)
-#        print chi#, (fit-zvals)**2*invar
-##        plt.plot(xvals, (zvals-fit)*np.sqrt(invar))
-#        plt.show()
-#        plt.close()
         return xc, zc, abs(sig), power, chi
     elif form=='voigt':
         if fiber_flat:
@@ -271,26 +227,15 @@ def fit_trace(x,y,ccd,rn,fib,form='gaussian', model=None, fiber_flat=False):
         zvals = ccd[x+xvals,y]
         invar = 1/(abs(zvals)+rn**2)
         params = sf.voigt_fit(xvals, zvals, invar, model, fit_bg=True)
-#        params, errarr = sf.gauss_fit(xvals,zvals,invr=invar,fit_exp='y',fit_skew='n')
         xc = x+params[0] #offset plus center
         hlor = params[1] #lorentz amplitude
         sigg = params[2] #standard deviation gauss
         sigl = params[3] #standard dev lorentz
         zc = params[4] #height (intensity)
-#        pxn = np.linspace(xvals[0],xvals[-1],1000)
         fit = sf.voigt_eval(params, xvals, model)
         chi = sum((fit-zvals)**2*invar)
-#        if chi > 200 and np.random.rand() < 0.001:
-#            print chi
-#        plt.plot(xvals, zvals, xvals, fit)
-#        print chi
-##        plt.plot(xvals, (zvals-fit)*np.sqrt(invar))
-#        plt.show()
-#        plt.close()
         return xc, zc, hlor, sigg, sigl, chi
     elif form=='gauss_lor':
-#        xpad = 7
-#        xvals = np.arange(-xpad,xpad+1)
         gl_pad = 0 ### +/- 5 padding for gauss-lorentz profile fitting
         if fiber_flat:
             xl, xh = -10,10    
@@ -302,23 +247,15 @@ def fit_trace(x,y,ccd,rn,fib,form='gaussian', model=None, fiber_flat=False):
         yl, yh = max(0,y-gl_pad), min(ccd.shape[1],y+gl_pad+1)
         zvals = ccd[x+xvals,yl:yh]
         invar = 1/(abs(zvals)+rn**2)
-#        params, errarr = sf.gauss_fit(xvals,zvals,invr=invar,fit_exp='y')
-#        xc = x+params[1] #offset plus center
-#        zc = params[2] #height (intensity)
-#        sig = params[0] #standard deviation
-#        power = params[5]
         params0 = lmfit.Parameters()
         for j in range(zvals.shape[1]):
             params0.add('xc{}'.format(j), value = xvals[np.argmax(zvals[:,j])])
             params0.add('hght{}'.format(j), value = np.max(zvals[:,j]))
             params0.add('bg{}'.format(j), value = zvals[0,j])
-#        params0.add('bg_slp', value = 0, vary=0)
         params0.add('power', value = 2)
         params0.add('sig', value = 1.5)
         params0.add('rat', value = 0.9, max = 1.0, min=0)
         params0.add('sigl', value = 1.5, min = 0.5, max = 5)
-#        pxn = np.linspace(xvals[0],xvals[-1],1000)
-#        fit = sf.gaussian(xvals,abs(params[0]),params[1],params[2],params[3],params[4],params[5])
         largs = (xvals, zvals, invar)
         results = lmfit.minimize(gl_res, params0, args=largs)
         paramsf = results.params
@@ -330,16 +267,8 @@ def fit_trace(x,y,ccd,rn,fib,form='gaussian', model=None, fiber_flat=False):
         invar = 1/(abs(fit)+rn**2)
         chi = sum((fit-zvals[:,idx])**2*invar) #[:,idx]
         chir = chi/(len(xvals)-8)
-#        if chir > 200:
-#        print chir, paramsf['rat'].value, paramsf['sigl'].value
-#        print chi
-#        plt.plot(xvals, zvals[:,idx], xvals, fit)
-#        plt.show()
-#        plt.close()
         return x+paramsf['xc'].value, paramsf['hght'].value, abs(paramsf['sig'].value), paramsf['power'].value, paramsf['rat'].value, paramsf['sigl'].value, chi
     elif form == 'moffat':
-#        xpad = 6
-#        xvals = np.arange(-xpad,xpad+1)
         xl, xh = get_xlims(fib)
         xvals = np.arange(xl, xh+1)
         xwindow = x+xvals
@@ -367,8 +296,6 @@ def fit_trace(x,y,ccd,rn,fib,form='gaussian', model=None, fiber_flat=False):
         chi = sum((fit-zvals)**2/(abs(zvals)+0.0001))
         return xc, zc, alpha, beta, power, chi
     elif form == 'bspline':
-#        xpad = 6
-#        xvals = np.arange(-xpad,xpad+1)
         xl, xh = get_xlims(fib)
         xvals = np.arange(xl, xh+1)
         xwindow = x+xvals
@@ -380,11 +307,6 @@ def fit_trace(x,y,ccd,rn,fib,form='gaussian', model=None, fiber_flat=False):
         model /= np.sum(model)*(xorig[1]-xorig[0])
         sfit = hght*sf.re_interp(xvals, xc, xorig, model) + bg
         chi = np.sum((sfit-zvals)**2*invar)
-#        if chi > 200:
-#            print chi
-#            plt.plot(xvals, zvals, xvals, sfit)
-#            plt.show()
-#            plt.close()
         return x+xc, chi
 
 def find_trace_coeffs(image,pord,fiber_space,rn=3.63,num_points=None,num_fibers=None,vertical=False,return_all_coeffs=True, return_raw_points=False, skip_peaks=0, profile='gaussian', fiber_flat=False):
@@ -423,9 +345,6 @@ def find_trace_coeffs(image,pord,fiber_space,rn=3.63,num_points=None,num_fibers=
         if bg_cutoff is None:
             bg_cutoff = 0.5*np.mean(array)
         while px<xpix:
-#            if trct>=num_fibers:
-#                break
-#            y = yvals[0]
             if array[px-1]>bg_cutoff and array[px]<array[px-1] and array[px-1]>array[px-2]: #not good for noisy
                 if skcnt < skip_peaks:
                     skcnt += 1 #Increment skip counter
@@ -440,11 +359,6 @@ def find_trace_coeffs(image,pord,fiber_space,rn=3.63,num_points=None,num_fibers=
             else:
                 px+=1
         peaks = peaks[0:pcnt]
-#        plt.plot(array)
-#        plt.plot(peaks,array[peaks.astype(int)],'ro')
-#        plt.plot(bg_cutoff*np.ones((array.shape)),'k')
-#        plt.show()
-#        plt.close()
         return peaks
     
     def find_fibers(image):  
@@ -554,9 +468,6 @@ def find_trace_coeffs(image,pord,fiber_space,rn=3.63,num_points=None,num_fibers=
                 xtrace[i,0], chi_vals[i,0] = fit_trace(xtrace[i,0],y,image,rn,i,form=profile, model=spline_models[:,i,0])
             else:
                 xtrace[i,0], chi_vals[i,0] = np.nan, np.nan
-    #    plt.plot(ytrace[i,:],xtrace[i,:])
-    #    plt.show()
-    #    plt.close()
     for i in range(1,len(yvals)):
         sys.stdout.write("\r{:6.3f}%".format(i/len(yvals)*100))
         sys.stdout.flush()
@@ -747,7 +658,7 @@ def find_trace_coeffs(image,pord,fiber_space,rn=3.63,num_points=None,num_fibers=
                     xtrace[j,i], chi_vals[j,i] = np.nan, np.nan
     sys.stdout.write("\n")
 
-    ### Check chi2
+    ### Check chi2 (Uncomment to see distribution)
 #    chir = np.ravel(chi_vals)#/7#(fiber_space+1-5) #[itest,:]
 #    print np.nanmedian(chir[chir!=0])
 #    msk = (abs(chir) < 100)*(~np.isnan(chir))*(chir > 0)
@@ -757,20 +668,7 @@ def find_trace_coeffs(image,pord,fiber_space,rn=3.63,num_points=None,num_fibers=
 #    plt.hist(chir[msk], bins=50)                
 #    plt.show()
 #    plt.close()
-#    if profile == 'gaussian' or profile == 'gauss_lor':
-#        print "Plotting sigmas"
-#        plt.plot(sigtrace[83,:])
-#        plt.show()
-#        print "Plotting powers"
-#        plt.plot(powtrace[83,:])
-#        plt.show()
-#    if profile == 'gauss_lor':
-#        print "Plotting ratios"
-#        plt.plot(rattrace[83,:])
-#        plt.show()
-#        print "Plotting sigma_lorentz"
-#        plt.plot(lortrace[83,:])
-#        plt.show()
+
     if return_raw_points:
         if profile == 'gaussian':
             return xtrace, Itrace, sigtrace, powtrace, chi_vals, yvals
@@ -796,7 +694,6 @@ def find_trace_coeffs(image,pord,fiber_space,rn=3.63,num_points=None,num_fibers=
         hl_coeffs = np.zeros((pord+1,num_fibers))
         sg_coeffs = np.zeros((pord+1,num_fibers))
         sl_coeffs = np.zeros((pord+1,num_fibers))
-#    xtrace -= 2  #Manually added to fit n20161123 to n201703** and on
     for i in range(num_fibers):
         #Given orientation makes more sense to swap x/y
         mask = ~np.isnan(xtrace[i,:])
@@ -820,19 +717,6 @@ def find_trace_coeffs(image,pord,fiber_space,rn=3.63,num_points=None,num_fibers=
                 hl_coeffs[:,i] = np.polyfit(yf[mask], hghtlor[i,:][mask], pord)
                 sg_coeffs[:,i] = np.polyfit(yf[mask], siggauss[i,:][mask], pord)
                 sl_coeffs[:,i] = np.polyfit(yf[mask], siglor[i,:][mask], pord)
-#            if i == itest and profile == 'gaussian':
-#                print "plotting center fit"
-#                plt.plot(yf[mask], xtrace[i,:][mask], yf[mask], np.poly1d(t_coeffs[:,i])(yf[mask]))
-#                plt.show()
-#                plt.close()
-#                print "plotting sigma fit"
-#                plt.plot(yf[mask], sigtrace[i,:][mask], yf[mask], np.poly1d(s_coeffs[:,i])(yf[mask]))
-#                plt.show()
-#                plt.close()
-#                print "plotting power fit"
-#                plt.plot(yf[mask], powtrace[i,:][mask], yf[mask], np.poly1d(p_coeffs[:,i])(yf[mask]))
-#                plt.show()
-#                plt.close()
         else:
             t_coeffs[:,i] = np.nan*np.ones((pord+1))
             if profile != 'bspline':
@@ -864,15 +748,6 @@ def find_trace_coeffs(image,pord,fiber_space,rn=3.63,num_points=None,num_fibers=
 #        plt.plot(yp,xs, 'b', linewidth=2)
 #    plt.show()
 #    plt.close()  
-#
-#    plt.plot(image[:,100], linewidth=2)
-#    for i in range(num_fibers):
-#        ys = (100-ypix/2)/ypix
-#        xs = np.poly1d(t_coeffs[:,i])(def find
-#        xx = np.array((xs, xs))
-#        plt.plot(xx, yy, 'k', linewidth=2)
-#    plt.show()
-#    plt.close()
         
     if return_all_coeffs:
         if profile == 'gaussian':
@@ -914,16 +789,11 @@ def find_damped_cos_arrs(res, invar, trace_arr, num_points=512, num_fibers=28, m
             xvals = xvals[(xwindow>=0)*(xwindow<vpix)]
             zres = res[xj+xvals,j]
             invres = invar[xj+xvals,j]
-#            flt = norm_sflat[xj+xvals,j]
             ### If too short slice, don't try to fit
             if len(zres)<3:
                 continue
             ### Fit then update arrays
             (hght, cntr, tau, phi, bg) = sf.fit_damped_cos(xj+xvals, zres, invres, method=method)
-#            dcfit = sf.damped_cos((hght, cntr, tau, phi, bg), xj+xvals)
-#            plt.plot(xvals, zres, xvals, dcfit)
-#            plt.show()
-#            plt.close()
             center_arr[i,j] = xc-cntr ### this is shift relative to trace center
             hght_arr[i,j] = hght
             tau_arr[i,j] = tau
@@ -977,48 +847,8 @@ def get_trace_arrs(ccd, fiber_space, rn=3.63, pord=12, num_points=512, num_fiber
                 ratio_arr[i] = si.splev(np.arange(hpix), rat_spl)
                 lor_spl = si.splrep(h_arr, lor_raw[i,:], t=np.linspace(h_arr[0]+5, h_arr[-1]-5, int(num_points/100)))
                 siglr_arr[i] = si.splev(np.arange(hpix), lor_spl)
-#            if i == 1:
-#                plt.plot(h_arr, tr_raw[i])
-#                plt.plot(np.arange(hpix), trace_arr[i])
-#                plt.show()
-#                plt.close()
-#                plt.plot(h_arr, sig_raw[i])
-#                plt.plot(np.arange(hpix), sigma_arr[i])
-#                plt.plot(np.arange(hpix), trace_arr[i] - trace_arr[i].astype(int)+1)
-#                plt.show()
-#                plt.close()
-#                plt.plot(h_arr, pow_raw[i])
-#                plt.plot(np.arange(hpix), power_arr[i])
-#                plt.plot(np.arange(hpix), trace_arr[i] - trace_arr[i].astype(int)+1.75)
-#                plt.show()
-#                plt.close()
-#                plt.plot(h_arr, hght_raw[i])
-#                plt.plot(np.arange(hpix), hght_arr[i])
-#                plt.show()
-#                plt.close()
-#                if profile == 'gauss_lor':
-#                    print "Lorentzian components"
-#                    plt.plot(h_arr, rat_raw[i])
-#                    plt.plot(np.arange(hpix), ratio_arr[i])
-#                    plt.show()
-#                    plt.close()
-#                    plt.plot(h_arr, lor_raw[i])
-#                    plt.plot(np.arange(hpix), siglr_arr[i])
-#                    plt.show()
-#                    plt.close()
     else:
         print "Method {} is not valid.  Must choose:\n  polynomial\n spline".format(method)
-#    if profile == 'gaussian_w_residual':
-#        model = np.zeros(ccd.shape)
-#        xarr = np.arange(ccd.shape[0])
-#        for i in range(num_fibers):
-#            for j in range(ccd.shape[1]):
-#                _tmp = sf.gaussian(xarr, sigma_arr[i,j], center=trace_arr[i,j], height=hght_arr[i,j], power=power_arr[i,j])
-#                if np.isnan(np.mean(_tmp)):
-#                    continue
-#                model[:,j] += _tmp
-#        res = ccd-model
-#        center_raw, hght2_raw, tau_raw, phi_raw = find_damped_cos_arrs(res, invar, trace_arr, num_points=num_points, num_fibers=num_fibers, method='brute')
     if plot:
         model = np.zeros(ccd.shape)
 #        xarr = np.arange(ccd.shape[0])
@@ -1074,9 +904,6 @@ def remove_ccd_background(ccd,cut=None,plot=False):
         #print("Cut too aggressive - no points left in ccd")
         ccd_new, bg_std = remove_ccd_background(ccd, cut=abs(cut)*2, plot=plot)
         return ccd_new, bg_std
-#    arr = plt.hist(masked_ccd,2*(cut-1))
-#    hgt = arr[0]
-#    xvl = arr[1][:-1]
     hgt, xvls = np.histogram(masked_ccd,max(2*(int(cut)-1),20))
     xvl = xvls[:-1]
     ### Assume lower tail is a better indicator than upper tail
@@ -1131,13 +958,6 @@ def cosmic_ray_reject(D,f,P,iV,S=0,threshhold=25,verbose=False,multi_reject=Fals
             pixel_residuals = pixel_residuals**2 
         #Include the sign so that only positive residuals are eliminated
         pixel_residuals*=np.sign(D-f*P-S)
-#        print "CR Reject info"
-#        print "  ", threshhold
-#        print "  ", pixel_residuals
-#        plt.plot(D)
-#        plt.plot(f*P)
-#        plt.show()
-#        plt.close()
         if multi_reject:
             pixel_reject[(pixel_residuals>threshhold)] = 0
         else:
@@ -1150,7 +970,6 @@ def linear_mn_hght_bg(xvals,yvals,invals,sigma,mn_est,power=2,beta=2,rat=None,si
         dx = dh/h * sigma/2 * exp(1/2) where dh = max - min residual
         Once mean is found, determines best fit hght and bg
     """
-#    gauss_model = sf.gaussian(xvals,sigma,center=mn_est,height=np.max(yvals),power=power)
     mn_est_err = 100
     mn_est_err_old = 0
     loop_ct = 0
@@ -1161,10 +980,6 @@ def linear_mn_hght_bg(xvals,yvals,invals,sigma,mn_est,power=2,beta=2,rat=None,si
         mn_est_err_old = np.copy(mn_est_err)
         mn_est_old = np.copy(mn_est)
         if profile == 'gaussian':
-#            gauss_model = sf.gaussian(xvals,sigma,center=mn_est,height=hght,bg_mean=bg,power=power)
-#            plt.plot(xvals, yvals, xvals, gauss_model)
-#            plt.show()
-#            plt.close()
             mn_est, mn_std = sf.best_mean(xvals,sigma,mn_est,hght,bg,yvals,invals,mn_std*(1+2*broad),power=power,flt=flt)
             hght, bg = sf.best_linear_gauss(xvals,sigma,mn_est,yvals,invals,power=power,flt=flt)
         elif profile == 'gauss_lor':
@@ -1204,37 +1019,6 @@ def fit_mn_hght_bg(xvals,zorig,invorig,sigj,mn_new,powj=2,ratio=1.0,sigl=None,fl
         args = (xvals, zorig, invorig)
         result = lmfit.minimize(gl_res, params, args=args)
         
-#    ts = time.time()
-#    mn_old = -100
-#    lp_ct = 0
-    
-#    gauss_residual(params,xvals,zvals,invals):
-#    while abs(mn_new-mn_old)>0.001:
-#        mn_old = 1.0*mn_new
-##        t1 = time.time()
-#        hght, bg = sf.best_linear_gauss(xvals,sigj,mn_old,zorig,invorig,power=powj)
-##        t2 = time.time()
-#        print mn_new
-#        mn_new, mn_new_std = sf.best_mean(xvals,sigj,mn_old,hght,bg,zorig,invorig,spread,power=powj)
-#        print mn_new
-#        fit = sf.gaussian(xvals, sigj, center=mn_new, height=hght, power=powj) + bg
-#        print lp_ct
-#        print mn_new-mn_old
-#        plt.plot(xvals, zorig, xvals, fit)
-#        plt.show()
-#        plt.close()
-##        t3 = time.time()
-##        print("Linear time = {}s".format(t2-t1))
-##        print("Nonlinear time = {}s".format(t3-t2))
-##        time.sleep(5)
-##        mn_new = 1.0*params['mn'].value
-#        lp_ct+=1
-#        if lp_ct>1e3: break
-#    print "Loop count is ", lp_ct
-#    print("Len xvals = {}".format(len(xvals)))
-#    te = time.time()
-#    print("Total fit time is {}s".format(te-ts))
-#    time.sleep(5)
     paramsf = result.params
     if sigl is None:
         mn_new = paramsf['mean'].value
@@ -1426,11 +1210,6 @@ def extract_1D(ccd, norm_sflat, multi_coeffs, form, date, readnoise=3.63, gain=1
         spec_mask - mask for invalid/suspect points in spectrum
         image_model - only if return_model = True. 
     """
-#    def extract(ccd,t_coeffs,i_coeffs=None,s_coeffs=None,p_coeffs=None,readnoise=1,gain=1,return_model=False,fact,verbose=False):
-#        """ Extraction.
-#        """
-    
-    ### t_coeffs are from fiber flat - need to shift based on actual exposure
         
     ####################################################
     ###   Prep Needed variables/empty arrays   #########
@@ -1492,189 +1271,15 @@ def extract_1D(ccd, norm_sflat, multi_coeffs, form, date, readnoise=3.63, gain=1
         if trace_dir is None:
             print "Error - must set trace_dir for free form extraction"
             exit(0)
-        
-#        if len(np.shape(multi_coeffs)) == 3:
-#            t_coeffs = multi_coeffs[0]
-#        else:
-#            t_coeffs = 1.0*multi_coeffs
-#        spline_models = np.zeros((1000,num_fibers,hpix))
-#        for i in range(num_fibers):
-#            if os.path.isfile(os.path.join(os.environ['MINERVA_REDUX_DIR'], date, 'spline_models','{}.bspline_crsxn_model_{}.npy'.format(date,i))):
-#                spline_models[:,i,:] = np.load(os.path.join(os.environ['MINERVA_REDUX_DIR'], date, 'spline_models', '{}.bspline_crsxn_model_{}.npy'.format(date,i)))
-#            if os.path.isfile(os.path.join(os.environ['MINERVA_REDUX_DIR'],'n20170406', 'spline_models','{}.bspline_crsxn_model_{}.npy'.format('n20170406',i))):
-#                spline_models[:,i,:] = np.load(os.path.join(os.environ['MINERVA_REDUX_DIR'], 'n20170406', 'spline_models', '{}.bspline_crsxn_model_{}.npy'.format('n20170406',i)))
-#                print i
-#                for j in range(spline_models.shape[2]):
-#                    plt.plot(spline_models[:,i,j])
-#                plt.show()
-#                plt.close()
 
     ####################################################    
     #####   First refine horizontal centers (fit   #####
     #####   traces from data ccd using fiber flat  #####
     #####   as initial estimate)                   #####
     ####################################################
-#    t_coeffs_ccd = refine_trace_centers(ccd, t_coeffs, i_coeffs, s_coeffs, p_coeffs, fact=10, readnoise=readnoise, verbose=True)
-    ###t_coeffs_ccd = refine_trace_centers(ccd, norm_sflat, t_coeffs, i_coeffs, s_coeffs, p_coeffs, a_coeffs=None, b_coeffs=None, fact=10, readnoise=readnoise, form='gaussian', verbose=True, plot_results=False)
-    #'''
-#    ta = time.time()  ### Start time of trace refinement
+
     new_traces, trace_shifts = refine_trace_centers(ccd, norm_sflat, t_coeffs, i_coeffs, s_coeffs, p_coeffs, r_coeffs=r_coeffs, l_coeffs=l_coeffs, px_shift=-2, pord=12, fact=10, readnoise=readnoise, form=form, verbose=verbose, plot_results=False, spline=True)
     med_pixel_shift = np.nanmedian(trace_shifts)
-#    tb = time.time() ### Start time of extraction/end of trace refinement
-#    if verbose:
-#        print("Trace refinement time = {}s".format(tb-ta))
-    '''
-    ta = time.time()  ### Start time of trace refinement
-    fact = 10 #do 1/fact * available points
-    ### Empty arrays
-    rough_pts = int(np.ceil(hpix/fact))
-    xc_ccd = np.zeros((num_fibers,rough_pts))
-    yc_ccd = np.zeros((num_fibers,rough_pts))
-    inv_chi = np.zeros((num_fibers,rough_pts))
-    if verbose:
-        print("Refining trace centers")
-    for i in range(num_fibers):
-        if i > 112 or i == 0:
-            continue
-#        if i != 83:
-#            continue
-        for j in range(0,hpix,fact):
-            ### set coordinates, gaussian parameters from coeffs
-            jadj = int(np.floor(j/fact))
-            yj = (j-hpix/2)/hpix
-            yc_ccd[i,jadj] = j
-            xc = np.poly1d(t_coeffs[:,i])(yj)+px_shift#+1*(form=='bspline')# + 2 #
-            if form == 'gaussian' or form == 'bspline':
-                sigj = np.poly1d(s_coeffs[:,i])(yj)
-                powj = np.poly1d(p_coeffs[:,i])(yj)
-            elif form == 'gauss_lor':
-                sigj = np.poly1d(s_coeffs[:,i])(yj)
-                powj = np.poly1d(p_coeffs[:,i])(yj)
-                ratj = np.poly1d(r_coeffs[:,i])(yj)
-                siglj = np.poly1d(l_coeffs[:,i])(yj)
-            elif form == 'moffat':
-                alphaj = np.poly1d(a_coeffs[:,i])(yj)
-                betaj = np.poly1d(b_coeffs[:,i])(yj)
-                powj = np.poly1d(p_coeffs[:,i])(yj)
-            ### Don't try to fit any bad trace sections
-            if np.isnan(xc):
-                xc_ccd[i,jadj] = np.nan
-                inv_chi[i,jadj] = 0
-            else:
-                ### Take subset of ccd of interest, xpad pixels to each side of peak
-                xl, xh = get_xlims(i)
-                xvals = np.arange(xl,xh+1)
-#                xpad = 7
-#                xvals = np.arange(-xpad,xpad+1)
-                xj = int(xc)
-                xwindow = xj+xvals
-                xvals = xvals[(xwindow>=0)*(xwindow<vpix)]
-                zorig = ccd[xj+xvals,j]
-                flt = norm_sflat[xj+xvals,j]
-                ### If too short slice, don't try to fit
-                if len(zorig)<3:
-                    xc_ccd[i,jadj] = np.nan
-                    inv_chi[i,jadj] = 0
-                    continue
-                invorig = 1/(abs(zorig)/flt + (readnoise/flt)**2)
-                ### Don't try to fit profile for very low SNR peaks
-                if np.max(zorig)<30:
-                    xc_ccd[i,jadj] = np.nan
-                    inv_chi[i,jadj] = 0
-                else:
-                    ### Fit for center (mn_new), amongst other values
-                    if form == 'gaussian' or form == 'bspline':
-    #                    mn_new, hght, bg = fit_mn_hght_bg(xvals,zorig,invorig,sigj,xc-xj-1,sigj,powj=powj)
-                        mn_new, hght, bg = linear_mn_hght_bg(xvals,zorig,invorig,sigj,xc-xj-1,power=powj,broad=True)#,flt=flt)
-                        fitorig = sf.gaussian(xvals,sigj,mn_new,hght,power=powj)#/flt
-                    elif form == 'gauss_lor':
-                        mn_new, hght, bg = fit_mn_hght_bg(xvals,zorig,invorig,sigj,xc-xj-1,powj=powj,ratio=ratj,sigl=siglj)
-                        fitorig = gauss_lor_vals(xvals,sigj,mn_new,hght,powj,ratj,siglj)
-                    elif form == 'moffat':
-                        mn_new, hght, bg, params = small_moffat_fit(xvals, zorig, invorig, xc-xj-1, alphaj, betaj, powj, dx=1.5)
-                        fitorig = sf.moffat_lmfit(params, xvals)
-#                    elif form == 'bspline':
-#                        mn_new, hght, bg = spline_fast_fit(xvals, zorig, invorig, spline_models[:,i,j], lims=[-1.0,1.0])
-##                        hght, bg = spline_linear_fit(xvals, xc-xj, zorig, invorig, spline_models[:,i,j])
-##                        print xc, xj, mn_new
-##                        mn_new = xc - xj
-#                        xorig = np.linspace(-8,8,len(spline_models[:,i,j]))
-#                        fitorig = hght*sf.re_interp(xvals, mn_new, xorig, spline_models[:,i,j])
-#                        mn_new -= 1
-                        
-#                        plt.plot(xvals, zorig, xvals, fitorig, linewidth = 2)
-#                        plt.show()
-#                        plt.close()
-#                        mn_new += 2
-                    inv_chi[i,jadj] = 1/sum((zorig-bg-fitorig)**2*invorig)
-                    ### Shift from relative to absolute center
-                    xc_ccd[i,jadj] = mn_new+xj+1
-              
-    #####################################################
-    #### Now with new centers, refit trace coefficients #
-    #####################################################
-    tmp_poly_ord = 12  ### Use a higher order for a closer fit over entire trace
-    opord = t_coeffs.shape[0]-1
-    hscl = (np.arange(hpix)-hpix/2)/hpix
-    t_coeffs_ccd = np.zeros((tmp_poly_ord+1,num_fibers))
-    pix_shift = np.zeros((num_fibers))
-    for i in range(num_fibers):
-        #Given orientation makes more sense to swap x/y
-        mask = ~np.isnan(xc_ccd[i,:])*(~np.isnan(inv_chi[i,:])) ### Mask bad points
-        ### build profile matrix over good points
-        profile = np.ones((len(yc_ccd[i,:][mask]),tmp_poly_ord+1))
-        for order in range(tmp_poly_ord):
-            profile[:,order+1] = ((yc_ccd[i,:][mask]-hpix/2)/hpix)**(order+1)
-        profile = profile[:,::-1]
-        noise = np.diag(inv_chi[i,:][mask])
-        if len(xc_ccd[i,:][mask])>(tmp_poly_ord+1):
-            ### Chi^2 fit
-            tmp_coeffs, junk = sf.chi_fit(xc_ccd[i,:][mask],profile,noise)
-        else:
-            ### if not enough points to fit, use original trace
-#            tmp_coeffs = np.nan*np.ones((tmp_poly_ord+1))
-            tmp_coeffs = np.pad(t_coeffs[:,i], ((tmp_poly_ord-opord,0)), mode='constant')
-        ### Add quality check to prevent wild solutions:
-        err_max = 3 #pixels
-        ff_trace = np.poly1d(t_coeffs[:,i])(hscl)
-        ccd_trace = np.poly1d(tmp_coeffs)(hscl)
-        pix_shift[i] = np.median(abs(ff_trace-ccd_trace))
-        if np.max(abs(ff_trace-ccd_trace)) > err_max:
-#            t_coeffs[-1,i] -= 1*(form=='bspline')
-            tmp_coeffs = np.pad(t_coeffs[:,i], ((tmp_poly_ord-opord,0)), mode='constant')
-#            if verbose:
-#                print("Ignoring bad fit for fiber {}".format(i))
-        t_coeffs_ccd[:,i] = tmp_coeffs
-    ### Approximate tracking of gross pixel shift to all traces
-    med_pix_shift = np.median(pix_shift)
-
-    tb = time.time() ### Start time of extraction/end of trace refinement
-    if verbose:
-        print("Trace refinement time = {}s".format(tb-ta))
-       
-    ### Uncomment below to see plot of traces
-#    plt.figure('inside extract 1d')
-#    plt.imshow(np.log(ccd),interpolation='none')
-#    for i in range(num_fibers):
-#            ys = (np.arange(hpix)-hpix/2)/hpix
-#            xs = np.poly1d(t_coeffs_ccd[:,i])(ys)#+2
-#            yp = np.arange(hpix)
-#            xs[xs<0] = 0
-#            xs[xs>2052] = 2052
-#            plt.plot(yp,xs, 'b', linewidth=2)
-#    plt.show()
-#    plt.close()
-       
-#    plt.plot(ccd[:,100], linewidth=2)
-#    for i in range(num_fibers):
-#        ys = (100-hpix/2)/hpix
-#        xs = np.poly1d(t_coeffs_ccd[:,i])(ys)
-#        yy = np.array((0, 10000))
-#        xx = np.array((xs, xs))
-#        plt.plot(xx, yy, 'k', linewidth=2)
-#    plt.show()
-#    plt.close()
-      #'''
     
     ###########################################################
     ##### Finally, full extraction with refined traces ########
@@ -1702,14 +1307,6 @@ def extract_1D(ccd, norm_sflat, multi_coeffs, form, date, readnoise=3.63, gain=1
         Nmat = np.diag(invar)
         coeffs, chi = sf.chi_fit(dmat, Pmat, Nmat, use_sparse=False)
         model = np.dot(Pmat, coeffs)
-#        cf = np.ones(coeffs.shape)
-#        cf[-bg_order:] = 0
-#        mnorm = np.dot(Pmat, cf)
-#        plt.plot(dmat)
-#        plt.plot(model)
-#        plt.plot(mnorm*np.max(dmat))
-#        plt.show()
-#        plt.close()
         ### Cosmic ray rejection loop
         mx_iters = 3 ### No need for more than three iterations
         ### If mask doesn't update on successive runs, no need to continue
@@ -1737,312 +1334,10 @@ def extract_1D(ccd, norm_sflat, multi_coeffs, form, date, readnoise=3.63, gain=1
             
     if verbose:
         print("Median reduced chi^2 = {}".format(np.nanmedian(chi2_array)))
-         ### Check fit quality
-#        chi2_plt = np.ravel(chi2_array)
-#        chi2_msk = np.isnan(chi2_plt)+(chi2_plt==0)
-#        chi2_plt = chi2_plt[chi2_msk==False]
-#        print chi2_plt
-#        print "Chi2: {}% under 10".format(np.sum(chi2_plt<10)*100./len(chi2_plt))
-#        _ = plt.hist(chi2_plt[chi2_plt<10],500)
-#        plt.show()
-        plt.close()
     if return_model:
         return spec, spec_invar, spec_mask, image_model, image_mask, chi2_array, med_pixel_shift
     else:
         return spec, spec_invar, spec_mask, med_pixel_shift
-'''        
-#############################################################################
-## | |
-## | |
-##\   /    Individual point extraction algorithm (OLD Version)
-## \ /
-##  -        
-        
-        
-    ### Run once for each fiber
-    for i in range(num_fibers):
-        if i == 112 or i == 0:
-            #First fiber in n20161123 set is not available
-            #Fiber 112 isn't entirely on frame and trace isn't reliable
-            continue
-#        if i != 1+23*4:
-#            continue
-        #slit_num = np.floor((i)/4)#args.telescopes) # Use with slit flats
-        if verbose:
-            print("extracting trace {}".format(i+1))
-        ### in each fiber loop run through each trace
-        for j in range(hpix):
-#            if verbose:
-#                sys.stdout.write("\r  " + str(int(np.round(100*j/hpix))) + "% done" + " " * 11)
-#                sys.stdout.flush()
-            yj = (j-hpix/2)/hpix
-            xc = new_traces[i,j]
-#            xc = np.poly1d(t_coeffs_ccd[:,i])(yj)#+1*(form=='bspline')
-#            Ij = i_coeffs[2,i]*yj**2+i_coeffs[1,i]*yj+i_coeffs[0,i]
-            if form == 'gaussian': 
-                sigj = np.poly1d(s_coeffs[:,i])(yj)
-                powj = np.poly1d(p_coeffs[:,i])(yj)
-            elif form == 'gauss_lor':
-                sigj = np.poly1d(s_coeffs[:,i])(yj)
-                powj = np.poly1d(p_coeffs[:,i])(yj)
-                ratj = np.poly1d(r_coeffs[:,i])(yj)
-                siglj = np.poly1d(l_coeffs[:,i])(yj)
-            elif form == 'moffat':
-                alphaj = np.poly1d(a_coeffs[:,i])(yj)
-                betaj = np.poly1d(b_coeffs[:,i])(yj)
-                powj = np.poly1d(p_coeffs[:,i])(yj)
-            ### If trace center is undefined mask the point
-            if np.isnan(xc):
-                spec_mask[i,j] = 0
-            else:
-                ### Set values to use in extraction
-#                xpad = 5  ### can't be too big or traces start to overlap
-#                xvals = np.arange(-xpad,xpad+1)
-                xl, xh = get_xlims(i-1)
-                xvals = np.arange(xl,xh+1)
-                xj = int(xc)
-                xwindow = xj+xvals
-                xvals = xvals[(xwindow>=0)*(xwindow<vpix)]
-                x_inds = xj+xvals
-                zorig = ccd[xj+xvals, j]
-                flt = norm_sflat[xj+xvals,j]
-                ### If too short, don't fit, mask point
-                if len(zorig)<(xh-1):
-                    spec[i,j] = 0
-                    spec_mask[i,j] = 0
-                    continue
-                invorig = 1/(abs(zorig)/flt + (readnoise/flt)**2)
-                ### don't try to extract for very low signal
-                if boxcar:
-                    spec[i,j] = np.sum(zorig)
-                    spec_invar[i,j] = 1/np.sum(1/invorig)
-                    continue
-                if np.max(zorig)<30:
-                    continue
-                else:
-                    ### Do nonlinear fit for center, height, and background
-                    ### Use fitted values to make best fit arrays
-                    if form == 'gaussian':
-                        mn_new, hght, bg = fit_mn_hght_bg(xvals,zorig,invorig,sigj,xc-xj-1,powj=powj)#,flt=flt)
-#                        mn_new, hght, bg = linear_mn_hght_bg(xvals,zorig,invorig,sigj,xc-xj-1,power=powj)
-                        fitorig = sf.gaussian(xvals,sigj,mn_new,hght,power=powj)#/flt
-                        xprecise = np.linspace(xvals[0],xvals[-1],100)
-                        fitprecise = sf.gaussian(xprecise,sigj,mn_new,hght,power=powj)
-                        ftmp = sum(fitprecise)*np.mean(np.ediff1d(xprecise))
-#                        if j == 1573 and i==23:
-#                            print j, xc-xj-1
-#                            savedir = os.environ['THESIS']
-#                            plt.plot(xvals, zorig, 'b-', linewidth=3)
-#                            plt.plot(xprecise, fitprecise, 'k--', linewidth = 2)
-#                            font = FontProperties()
-#                        #    font.set_family('serif')
-#                            font.set_family('sans')
-#                            font.set_size(20)
-#                            tfont = font.copy()
-#                            tfont.set_size(14)
-#                            ax1 = plt.gca()
-#                            ax1.set_xlabel("Pixel", fontproperties=font)
-#                            ax1.set_ylabel("Counts", fontproperties=font)
-#                            ax1.set_xlim(left=-7, right=7)
-#                            ax1.set_yticklabels(ax1.get_yticks(), fontproperties=tfont)
-#                            ax1.set_xticklabels(ax1.get_xticks(), fontproperties=tfont)
-##                            extensions = ['pdf']
-##                            for ext in extensions:
-##                                plt.savefig(os.path.join(savedir,'opt_ex_crsxn.{}'.format(ext)), bbox_inches='tight')
-#                            plt.show()
-#                            plt.close()
-                    elif form == 'gauss_lor':
-#                        print sigj, siglj, ratj, powj
-                        mn_new, hght, bg = fit_mn_hght_bg(xvals,zorig,invorig,sigj,xc-xj-1,powj=powj,ratio=ratj,sigl=siglj)
-                        fitorig = gauss_lor_vals(xvals,sigj,mn_new,hght,powj,ratj,siglj)
-                        xprecise = np.linspace(xvals[0],xvals[-1],100)
-                        fitprecise = gauss_lor_vals(xprecise,sigj,mn_new,hght,powj,ratj,siglj)
-                        ftmp = sum(fitprecise)*np.mean(np.ediff1d(xprecise))
-#                        plt.plot(xvals, zorig, xvals, fitorig, xprecise, fitprecise, linewidth = 2)
-#                        plt.show()
-#                        plt.close()
-                    elif form == 'moffat':
-#                        mn_new, hght, bg, params = small_moffat_fit(xvals, zorig, invorig, xc-xj-1, alphaj, betaj, powj, dx=0.3)
-                        hght, bg, params = moffat_linear_fit(xvals, zorig, invorig, xc-xj-1, alphaj, betaj, powj)
-                        fitorig = sf.moffat_lmfit(params, xvals)
-                        xprecise = np.linspace(xvals[0],xvals[-1],100)
-                        fitprecise = sf.moffat_lmfit(params, xprecise)
-                        ftmp = sum(fitprecise)*np.mean(np.ediff1d(xprecise))
-                    elif form == 'bspline':
-                        if fast:
-                            spline_fit_scipy(xvals, xc-xj, zorig, invorig, sp_profs[j], fit_xc=False)
-                            mn_new = xc-xj
-                        else:
-                            mn_new, hght, bg = spline_fit_scipy(xvals, xc-xj, zorig, invorig, sp_profs[j], fit_xc=True)
-                        fitorig = hght*sp_profs[j]/get_spline_norm(sp_profs[j], xvals[0], xvals[1], mn_new) + bg
-#                        if fast:
-#                             hght, bg = spline_linear_fit(xvals, xc-xj, zorig, invorig, spline_models[:,i,j])
-#                             mn_new = xc-xj
-#                        else:
-#                            mn_new, hght, bg = spline_fast_fit(xvals, zorig, invorig, spline_models[:,i,j], lims=[-1.0,1.0])
-#                        xorig = np.linspace(-8,8,len(spline_models[:,i,j]))
-#                        fitorig = hght*sf.re_interp(xvals, mn_new, xorig, spline_models[:,i,j])
-                        
-#                        plt.plot(xvals, zorig, xvals, fitorig)
-#                        plt.show()
-#                        plt.close()
-                        ftmp = 1
-                    #Following if/else handles failure to fit
-                    if ftmp==0:
-                        fitnorm = np.zeros(len(zorig))
-                    else:
-#                        fitnorm = fitorig/ftmp
-                        fitnorm = fitorig/np.sum(fitorig) ##less precise, but includes slit_flat rescaling
-                    ### Get extracted flux and error
-                    fstd = sum(fitnorm*zorig*invorig)/sum(fitnorm**2*invorig)
-                    invorig = 1/((readnoise/flt)**2 + abs(fstd*fitnorm)/flt)
-                    chi_center_mask = (xvals>=-5)*(xvals<=5)
-                    chi2 = np.sum(((fstd*fitnorm+bg-zorig)**2*invorig)[chi_center_mask])#/(len(zorig)-5)
-#                    chi2 = np.sum((fstd*fitnorm-zorig)**2*invorig)#/(len(zorig)-5)
-#                    if chi2 > 12:
-#                        print "background:", bg
-#                        print "invar:", 1/invorig, (readnoise/flt)**2
-#                        print chi2
-#                        chi_cent = np.sum(((fstd*fitnorm-zorig)**2*invorig)[6:11])
-#                        print chi_cent*len(fitnorm)/5
-#                        plt.plot(xvals, zorig, xvals, fitorig+bg)#, xprecise, fitprecise+bg, linewidth=2)
-#                        plt.show()
-#                        plt.close()
-#                        plt.plot(xvals, (zorig-fitorig-bg)*np.sqrt(invorig))
-#                        plt.show()
-#                        plt.close()
-#                    if np.isnan(chi2):
-#                        print np.mean(spline_models[:,i,j])
-#                    if chi2 > 100:
-#                        print xj, mn_new
-#                        print hght, bg
-#                        plt.plot(xvals, fstd*fitnorm+bg, xvals, zorig)
-#                        plt.show()
-#                        plt.close()
-                    ### Now set up to do cosmic ray rejection
-                    rej_min = 0
-                    loop_count=0
-                    xlen = len(xvals)
-                    good_inds = np.arange(xlen)
-                    while rej_min==0:
-#                        if loop_count > 0:
-#                            threshold = 5*len(zorig) ## If a cosmic ray is found, it is more likely that there is a second point affected so lower the limit
-#                        else:
-                        threshold = 100*(5*len(zorig))**2 ## Given number of points 5 sigma gives less than one false rejection per ccd image, factor of ten further reduces false rejections
-#                        if j > 1791:
-#                            print threshold
-#                            np.set_printoptions(suppress=True)
-#                            print ((zorig-fstd*fitnorm-bg)**2*invorig)**2
-#                            plt.plot(zorig)
-#                            plt.plot(fstd*fitnorm-bg)
-#                            plt.show()
-#                            plt.close()
-                        pixel_reject = cosmic_ray_reject(zorig,fstd,fitnorm,invorig,S=bg,threshhold=threshold,verbose=True)
-                        rej_min = np.min(pixel_reject)
-                        ### Once no pixels are rejected, re-find extracted flux
-                        if rej_min==0:
-                            ### re-index arrays to remove rejected points
-                            good_inds = good_inds[pixel_reject==1]
-                            zorig = zorig[pixel_reject==1]
-                            invorig = invorig[pixel_reject==1]
-                            xvals = xvals[pixel_reject==1]
-                            flt = flt[pixel_reject==1]
-                            ### re-do fit (can later cast this into a separate function)
-                            if form == 'gaussian':
-                                mn_new, hght, bg = fit_mn_hght_bg(xvals,zorig,invorig,sigj,xc-xj-1,powj=powj)#,flt=flt)
-    #                            mn_new, hght, bg = linear_mn_hght_bg(xvals,zorig,invorig,sigj,xc-xj-1,power=powj)
-                                fitorig = sf.gaussian(xvals,sigj,mn_new,hght,power=powj)#/flt
-                                xprecise = np.linspace(xvals[0],xvals[-1],100)
-                                fitprecise = sf.gaussian(xprecise,sigj,mn_new,hght,power=powj)
-#                                if j > 1573:
-#                                    print j, xc-xj-1
-#                                    plt.plot(xvals, zorig, xvals, fitorig, xprecise, fitprecise, linewidth = 2)
-#                                    plt.show()
-#                                    plt.close()
-                            elif form == 'gauss_lor':
-                                mn_new, hght, bg = fit_mn_hght_bg(xvals,zorig,invorig,sigj,xc-xj-1,powj=powj,ratio=ratj,sigl=siglj)
-                                fitorig = gauss_lor_vals(xvals,sigj,mn_new,hght,powj,ratj,siglj)
-                                xprecise = np.linspace(xvals[0],xvals[-1],100)
-                                fitprecise = gauss_lor_vals(xprecise,sigj,mn_new,hght,powj,ratj,siglj)
-                            elif form == 'moffat':
-#                                mn_new, hght, bg, params = small_moffat_fit(xvals, zorig, invorig, xc-xj-1, alphaj, betaj, powj, dx=0.3)
-                                hght, bg, params = moffat_linear_fit(xvals, zorig, invorig, xc-xj-1, alphaj, betaj, powj)
-                                fitorig = sf.moffat_lmfit(params, xvals)
-                                xprecise = np.linspace(xvals[0],xvals[-1],100)
-                                fitprecise = sf.moffat_lmfit(params, xprecise)
-                            elif form == 'bspline':
-                                if fast:
-                                    spline_fit_scipy(xvals, xc-xj, zorig, invorig, sp_profs[j], fit_xc=False)
-                                    mn_new = xc-xj
-                                else:
-                                    mn_new, hght, bg = spline_fit_scipy(xvals, xc-xj, zorig, invorig, sp_profs[j], fit_xc=True)
-                                fitorig = hght*sp_profs[j]/get_spline_norm(sp_profs[j], xvals[0], xvals[1], mn_new) + bg
-#                                if fast:
-#                                     hght, bg = spline_linear_fit(xvals, xc-xj, zorig, invorig, spline_models[:,i,j])
-#                                     mn_new = xc-xj
-#                                else:
-#                                    mn_new, hght, bg = spline_fast_fit(xvals, zorig, invorig, spline_models[:,i,j], lims=[-1.0,1.0])
-#                                xorig = np.linspace(-8,8,len(spline_models[:,i,j]))
-#                                fitorig = hght*sf.re_interp(xvals, mn_new, xorig, spline_models[:,i,j])+bg
-#                            ftmp = sum(fitprecise)*np.mean(np.ediff1d(xprecise))
-#                            fitnorm = fitorig/ftmp
-                            fitnorm = fitorig/np.sum(fitorig)
-                            fstd = sum(fitnorm*zorig*invorig)/sum(fitnorm**2*invorig)
-                            invorig = 1/((readnoise/flt)**2 + abs(fstd*fitnorm)/flt)
-                            chi2 = np.sum((fstd*fitnorm+bg-zorig)**2*invorig)/(len(zorig)-5)
-                        loop_count+=1
-                        ### if more than 3 points are rejected, mask the extracted flux
-                        if loop_count>3:
-                            spec_mask[i,j] = 0
-                            image_mask[x_inds,j] = False
-                            break
-                        ### If at least one point is rejected (two times through loop), set mask ID to 1
-                        if loop_count > 1:
-                            spec_mask[i,j] = 1
-                    if loop_count <= 3:
-                        ### Mask all, then unmask good indices
-                        image_mask[x_inds,j] = False
-                        image_mask[good_inds,j] = True
-#                    dinp, = plt.plot(xvals, zorig*2.2, 'k', linewidth = 2, label='Data')
-#                    dfit, = plt.plot(xvals, fitorig*2.2, 'b--', linewidth = 2, label='Fit')
-#                    ax = plt.gca()
-#                    ax.set_xlabel('Pixels (relative)', fontsize=24)
-#                    ax.set_ylabel('Counts', fontsize=24)
-#                    plt.legend(fontsize=24)
-#                    plt.show()
-#                    plt.close()
-                    ### Set extracted spectrum value, inverse variance
-                    spec[i,j] = fstd
-                    spec_invar[i,j] = sum(fitnorm**2*invorig)
-                    chi2_array[i,j] = chi2
-#                    print chi2red
-#                    if chi2red > 10:
-#                        plt.plot(xvals,zorig, xprecise, fitprecise+bg)
-#                        plt.show()
-#                        plt.close()
-#                    plt.plot(xvals,(fstd*fitnorm+bg-zorig)**2*invorig)
-#                    plt.show()
-#                    plt.close()
-                    if return_model and not np.isnan(fstd):
-                        ### Build model, if desired
-                        image_model[xj+xvals,j] += (fstd*fitnorm+bg)#/gain
-            ### If a nan came out of the above routine, zero it and mask
-            if np.isnan(spec[i,j][spec_mask[i,j]>0]):
-                spec[i,j] = 0
-                spec_mask[i,j] = False
-#        plt.plot(spec[i,:])
-#        plt.show()
-#        plt.close()
-#        if verbose:
-#            print(" ")
-    if verbose:
-#        chi2red = np.median(chi2red_array[i])
-        print("Median reduced chi^2 = {}".format(np.nanmedian(chi2_array)))
-    if return_model:
-        return spec, spec_invar, spec_mask, image_model, image_mask, chi2_array, med_pix_shift
-    else:
-        return spec, spec_invar, spec_mask, med_pix_shift
-#'''  
       
 def params_to_array(params):
     """ Converts lmfit parameters with hc0...n, vc0..n, q0/1/2, PA0/1/2 to
@@ -2069,9 +1364,6 @@ def array_to_params(ellipse):
     """ Converts ellipse array to lmfit parameter object.
     """
     params = lmfit.Parameters()
-#    for i in range(np.shape(centers)[1]):
-#        params.add('hc{}'.format(i), value=centers[0,i])
-#        params.add('vc{}'.format(i), value=centers[1,i])
     for j in range(np.shape(ellipse)[1]):
         params.add('q{}'.format(j), value=ellipse[0,j])
         params.add('PA{}'.format(j), value=ellipse[1,j])
@@ -2095,17 +1387,9 @@ def update_trace_coeffs(ccd, xc_ccd, yc_ccd, inv_chi, hpix, pord, num_fibers, t_
     for i in range(num_fibers):
         #Given orientation makes more sense to swap x/y
         mask = ~np.isnan(xc_ccd[i,:])*(~np.isnan(inv_chi[i,:])) ### Mask bad points
-#        print "Fiber", i, "Mask:", np.sum(mask)/len(xc_ccd[i,:]), "lenxc:", len(xc_ccd[i,:][mask])
         ### build profile matrix over good points
-#        profile = np.ones((len(yc_ccd[i,:][mask]),tmp_poly_ord+1))
-#        print (yc_ccd[i,:][mask]-mpix/2)/mpix
-#        for order in range(tmp_poly_ord):
-#            profile[:,order+1] = ((yc_ccd[i,:][mask]-mpix/2)/mpix)**(order+1)
-#        profile = profile[:,::-1]
-#        noise = np.diag(inv_chi[i,:][mask])
         if len(xc_ccd[i,:][mask])>(tmp_poly_ord+1) and np.sum(mask)/len(xc_ccd[i,:]) > 0.90:
             ### Chi^2 fit
-#            tmp_coeffs, junk = sf.chi_fit(xc_ccd[i,:][mask],profile,noise)
             yscl = (yc_ccd[i,:][mask]-mpix/2)/mpix
             tmp_coeffs = np.polyfit(yscl, xc_ccd[i,:][mask], tmp_poly_ord, w=inv_chi[i,:][mask])
         else:
@@ -2116,7 +1400,6 @@ def update_trace_coeffs(ccd, xc_ccd, yc_ccd, inv_chi, hpix, pord, num_fibers, t_
                 if len(t_coeffs[:,i]) == tmp_poly_ord + 1:
                     tmp_coeffs = 1.0*t_coeffs[:,i]
                 else:
-    #            tmp_coeffs = np.nan*np.ones((tmp_poly_ord+1))
                     tmp_coeffs = np.pad(t_coeffs[:,i], ((tmp_poly_ord-len(t_coeffs[:,i])+1,0)), mode='constant')
         ### Add quality check to prevent wild solutions:
         err_max = 3 #pixels
@@ -2125,11 +1408,6 @@ def update_trace_coeffs(ccd, xc_ccd, yc_ccd, inv_chi, hpix, pord, num_fibers, t_
         else:
             ff_trace = np.poly1d(t_coeffs[:,i])(hscl)
         ccd_trace = np.poly1d(tmp_coeffs)(hscl)
-#        print "Fiber {} wild:".format(i), np.max(abs(ff_trace-ccd_trace)),  np.max(abs(ff_trace-ccd_trace)) > err_max
-#        plt.plot(ff_trace)
-#        plt.plot(ccd_trace)
-#        plt.show()
-#        plt.close()
         if np.max(abs(ff_trace-ccd_trace)) > err_max or np.isnan(np.max(abs(ff_trace-ccd_trace))):
             if input_arrs:
                 tmp_coeffs = np.nan*np.ones((tmp_poly_ord+1))
@@ -2166,16 +1444,6 @@ def update_trace_coeffs(ccd, xc_ccd, yc_ccd, inv_chi, hpix, pord, num_fibers, t_
             plt.plot(yp,new_traces[i]*nt_mask, 'b', linewidth=2)
         plt.show()
         plt.close()
-        ### Following lines plot deltas at each point vs an arbitrary ccd cross-section
-#        plt.plot(ccd[:,100], linewidth=2)
-#        for i in range(num_fibers):
-#            ys = (100-hpix/2)/hpix
-#            xs = np.poly1d(t_coeffs_ccd[:,i])(ys)
-#            yy = np.array((0, 10000))
-#            xx = np.array((xs, xs))
-#            plt.plot(xx, yy, 'k', linewidth=2)
-#        plt.show()
-#        plt.close()
     return new_traces, trace_shifts
 
 def get_spline_trace(ccd, xc_ccd, yc_ccd, inv_chi, fact, hpix, num_fibers, t_coeffs, lamb=2048, verbose=False, plot_results=False, pix_shift_max=1):
@@ -2189,22 +1457,16 @@ def get_spline_trace(ccd, xc_ccd, yc_ccd, inv_chi, fact, hpix, num_fibers, t_coe
     sp_traces = np.zeros((num_fibers, hpix))
     trace_shifts = np.zeros((num_fibers), dtype=bool)
     for i in range(num_fibers):
-#        mask = ~np.isnan(xc_ccd[i,:])*(~np.isnan(inv_chi[i,:])) ### Mask bad points
-#        yscl = (yc_ccd[i,:]-mpix/2)/mpix
         if np.isnan(np.max(xc_ccd[i,:])):
             sp_coeffs[i] = None
             continue
         else:
-#            sp_coeffs[i] = signal.cspline1d(xc_ccd[i,:], lamb=lamb)
             sp_coeffs[i] = si.splrep(yc_ccd[i,:], xc_ccd[i,:], w=inv_chi[i,:])#, t=np.arange(0,hpix,3*fact))
-#            tmp_coeffs = np.polyfit(yscl, xc_ccd[i,:][mask], tmp_poly_ord, w=inv_chi[i,:][mask])
-        ### Add quality check to prevent wild solutions:
         err_max = 3 #pixels
         if t_coeffs.shape[1] == hpix:
             ff_trace = t_coeffs[i,:]            
         else:
             ff_trace = np.poly1d(t_coeffs[:,i])(hscl)
-#        spl_trace = signal.cspline1d_eval(sp_coeffs[i],np.arange(2048),dx=fact)
         spl_trace = si.splev(np.arange(hpix), sp_coeffs[i])
         sp_traces[i] = spl_trace
         if np.max(abs(ff_trace-spl_trace)) > err_max:
@@ -2344,62 +1606,17 @@ def refine_trace_centers(ccd, norm_sflat, t_coeffs, i_coeffs, s_coeffs, p_coeffs
     tb = time.time() ### Start time of extraction/end of trace refinement
     if verbose:
         print("Trace refinement time = {}s".format(tb-ta))
-    '''
-    tmp_poly_ord = pord  ### Use a higher order for a closer fit over entire trace
-    hscl = (np.arange(hpix)-hpix/2)/hpix
-    t_coeffs_ccd = np.zeros((tmp_poly_ord+1,num_fibers))
-    for i in range(num_fibers):
-        #Given orientation makes more sense to swap x/y
-        mask = ~np.isnan(xc_ccd[i,:])*(~np.isnan(inv_chi[i,:])) ### Mask bad points
-        ### build profile matrix over good points
-        profile = np.ones((len(yc_ccd[i,:][mask]),tmp_poly_ord+1))
-        for order in range(tmp_poly_ord):
-            profile[:,order+1] = ((yc_ccd[i,:][mask]-hpix/2)/hpix)**(order+1)
-        profile = profile[:,::-1]
-        noise = np.diag(inv_chi[i,:][mask])
-        if len(xc_ccd[i,:][mask])>(tmp_poly_ord+1):
-            ### Chi^2 fit
-            tmp_coeffs, junk = sf.chi_fit(xc_ccd[i,:][mask],profile,noise)
-        else:
-            ### if not enough points to fit, use original trace
-#            tmp_coeffs = np.nan*np.ones((tmp_poly_ord+1))
-            tmp_coeffs = np.pad(t_coeffs[:,i], ((tmp_poly_ord-2,0)), mode='constant')
-        ### Add quality check to prevent wild solutions:
-        err_max = 2 #pixels
-        ff_trace = np.poly1d(t_coeffs[:,i])(hscl)
-        ccd_trace = np.poly1d(tmp_coeffs)(hscl)
-        if np.max(abs(ff_trace-ccd_trace)) > err_max:
-            tmp_coeffs = np.pad(t_coeffs[:,i], ((tmp_poly_ord-2,0)), mode='constant')
-#            if verbose:
-#                print("Ignoring bad fit for fiber {}".format(i))
-        t_coeffs_ccd[:,i] = tmp_coeffs
-
-    tb = time.time() ### Start time of extraction/end of trace refinement
-    if verbose:
-        print("Trace refinement time = {}s".format(tb-ta))
-    #'''
-    ### Uncomment below to see plot of traces
+        
+    ### Option to plot traces (for troubleshooting)
     if plot_results:
         plt.figure('Trace Refinement View')
         plt.imshow(np.log(ccd),interpolation='none')
         for i in range(num_fibers):
-#            ys = (np.arange(hpix)-hpix/2)/hpix
-#            xs = np.poly1d(t_coeffs_ccd[:,i])(ys)
             yp = np.arange(hpix)
-#            plt.plot(yp,xs, 'b', linewidth=2)
             plt.plot(yp,new_traces[i], 'b', linewidth=2)
         plt.show()
         plt.close()
            
-#        plt.plot(ccd[:,100], linewidth=2)
-#        for i in range(num_fibers):
-#            ys = (100-hpix/2)/hpix
-#            xs = np.poly1d(t_coeffs_ccd[:,i])(ys)
-#            yy = np.array((0, 10000))
-#            xx = np.array((xs, xs))
-#            plt.plot(xx, yy, 'k', linewidth=2)
-#        plt.show()
-#        plt.close()
     #'''
     return new_traces, trace_shifts
 
@@ -2408,7 +1625,6 @@ def refine_trace_section(ccd_sec, hsec, vmn, norm_sflat_sec, t_coeffs, s_coeffs,
     '''
     vpix = ccd_sec.shape[0]
     ta = time.time()  ### Start time of trace refinement
-#    fact = 20 #do 1/fact * available points
     ### Empty arrays
     hpix = len(hsec)
     rough_pts = int(np.ceil(hpix/fact))
@@ -2457,7 +1673,6 @@ def refine_trace_section(ccd_sec, hsec, vmn, norm_sflat_sec, t_coeffs, s_coeffs,
             else:
                 ### Fit for center (mn_new), amongst other values
                 if form == 'gaussian':
-#                    mn_new, hght, bg = fit_mn_hght_bg(xvals,zorig,invorig,sigj,xc-xj-1,sigj,powj=powj)
                     mn_new, hght, bg = linear_mn_hght_bg(xvals,zorig,invorig,sigj,xc-xj-1,power=powj)
                     fitorig = sf.gaussian(xvals,sigj,mn_new,hght,power=powj)
                 elif form == 'moffat':
@@ -2475,13 +1690,6 @@ def refine_trace_section(ccd_sec, hsec, vmn, norm_sflat_sec, t_coeffs, s_coeffs,
 def extract_2D(ccd, norm_sflat, psfmodel, t_coeffs, sig_coeffs, pow_coeffs, redux_dir, readnoise=1, gain=1, return_model=False, verbose=False):
     """ Code to perform 2D spectroperfectionism algorithm on MINERVA data.
     """
-#    if psf_coeffs.ndim == 1: 
-#        psf_coeffs = psf_coeffs.reshape((1,len(psf_coeffs)))
-#    elif psf_coeffs.ndim != 2:
-#        print("Invalid shape for psf_coeffs with ndim = {}".format(psf_coeffs.ndim))
-#        exit(0)
-    ### Import PSF coefficients
-#    psf_coeffs = pyfits.open('/home/matt/software/minerva/redux/psf/psf_coeffs_063.fits')[0].data
     ### Set shape variables based on inputs
     num_fibers = t_coeffs.shape[1]
     hpix = ccd.shape[1]
@@ -2492,9 +1700,6 @@ def extract_2D(ccd, norm_sflat, psfmodel, t_coeffs, sig_coeffs, pow_coeffs, redu
     if return_model:
         ccd_model = np.zeros(ccd.shape)
     ### Remove CCD diffuse background - cut value matters
-#    cut = np.median(np.median(ccd[ccd<np.median(ccd)]))
-#    cut = readnoise
-#    ccd, bg_err = remove_ccd_background(ccd,cut=cut)
     bg_err = readnoise
     ### Parameters for extraction box size - try various values
     ### For meaning, see documentation
@@ -2533,20 +1738,11 @@ def extract_2D(ccd, norm_sflat, psfmodel, t_coeffs, sig_coeffs, pow_coeffs, redu
             print("Running 2D Extraction on fiber {}".format(fib))
             tf0 = time.time()
         ### Trace parameters
-#        if fib > num_fibers-1-4:
         if fib == num_fibers-1:
             ### Have a 1 fiber offset so need to skip the last
             continue
-#        if fib < 3:
-#            continue
         vcenters = np.poly1d(t_coeffs[:,fib+1])(hscale) #fib-4?
-        #sf.eval_polynomial_coeffs(hscale,t_coeffs[:,fib+1])
         ### PSF parameters -BSPLINES ONLY
-#        ellipse = psf_coeffs[fib,-6:]
-#        ellipse = ellipse.reshape((2,3))
-#        params = array_to_params(ellipse)
-#        coeff_matrix = psf_coeffs[fib,:-6]
-#        coeff_matrix = coeff_matrix.reshape((int(coeff_matrix.size/3),3))
         for sec in range(num_sections):
             tstart = time.time()
             ### Get a small section of ccd to extract
@@ -2657,35 +1853,13 @@ def extract_2D(ccd, norm_sflat, psfmodel, t_coeffs, sig_coeffs, pow_coeffs, redu
             if skip:
                 continue
             ##Now using the full available data
-#            if sec > 4:
             im = np.sum(A,axis=0)
-#            for i in range(3):
-#                if i==0:
-#                    idx = 10
-#                elif i==1:
-#                    idx = 12
-#                elif i==2:
-#                    idx = 20
-#                print idx
-#                plt.imshow(A[idx][:11,5:25], interpolation='none')
-#                plt.show()
-#                plt.close()
-#            plt.imshow(im, interpolation='none')
-#            plt.show()
-#            plt.close()
             B = np.matrix(np.resize(A.T,(d0*d1,wls)))
-#            B = np.hstack((B,np.ones((d0*d1,1)))) ### add background term
             p = np.matrix(np.resize(ccd_sec.T,(d0*d1,1)))
             n = np.diag(np.resize(ccd_sec_invar.T,(d0*d1,)))
-#            print np.shape(B), np.shape(p), np.shape(n)
-#            unity_model = np.dot(B, np.ones((wls,1))).reshape(ccd_sec.shape)
-#            plt.imshow(unity_model,interpolation='none')
-#            plt.show()
-#            plt.close()
-            text_sp_st = time.time()
+            ### The actual extraction:
             fluxtilde, ctilde, Rmat[sec] = sf.extract_2D_sparse(p,B,n, return_covar=True)
             fluxraw = sf.extract_2D_sparse(p,B,n,return_no_conv=True)
-            t_betw_ext = time.time()
             if sec == 0:
                 extracted_counts[fib,0:len_section] = fluxtilde
                 extracted_covar[fib,0:len_section] = ctilde
@@ -2694,11 +1868,6 @@ def extract_2D(ccd, norm_sflat, psfmodel, t_coeffs, sig_coeffs, pow_coeffs, redu
                 extracted_counts[fib,sec_inds+int(sec*(len_section-2*len_edge))] = fluxtilde[sec_inds]
                 extracted_covar[fib,sec_inds+int(sec*(len_section-2*len_edge))] = ctilde[sec_inds]
                 raw_ex_counts[fib,sec_inds+int(sec*(len_section-2*len_edge))] = fluxraw[sec_inds]
-            tfinish = time.time()
-#            if verbose:
-#                print(" Section {} Time = {}".format(sec,tfinish-tstart))
-#                print("  PSF modeling took {}s".format(text_sp_st-tstart))
-#                print("  Sparse extraction took {}s".format(t_betw_ext-text_sp_st))
             
             sec_model = np.dot(B, fluxtilde).reshape((ccd_sec.shape[1], ccd_sec.shape[0])).T
             sec_model = np.asarray(sec_model)
@@ -2712,41 +1881,22 @@ def extract_2D(ccd, norm_sflat, psfmodel, t_coeffs, sig_coeffs, pow_coeffs, redu
                 else:
                     hinds = hsec[len_edge:-len_edge] - hsec[0]# + len_edge
                 shift = 0
-#                if sec > 0:
-#                    shift = 1 ### Not sure why this is happening, hack to correct
                 ccd_model[vmin+shift:vmax+shift,hinds+hsec[0]] += raw_model[:,hinds]
             pd = 7
             scm = sec_model[:,pd:-pd]
             rcm = raw_model[:,pd:-pd]
             csm = ccd_sec[:,pd:-pd]
             ism = ccd_sec_invar[:,pd:-pd]
-#            chi2r = np.sum(np.ravel(csm-scm)**2*np.ravel(ism))/(np.size(csm)-csm.shape[1])
-#            print chi2r
             chi2r = np.sum(np.ravel(csm-rcm)**2*np.ravel(ism))/(np.size(csm)-csm.shape[1])
-#            print chi2r
             plot_sec = False
             if plot_sec:
-#                plt.imshow(np.vstack((ccd_sec, sec_model, ccd_sec-sec_model)), interpolation='none') #im*2*np.max(ccd_sec),
-#                plt.imshow(ccd_sec[:,hinds-hinds[0]]-sec_model[:,hinds-hinds[0]], interpolation='none')
-#                plt.plot(hsec-hsec[0], vcenters[hsec]+v_pad-vcentmn)
-#                plt.plot(hsec-hsec[0], vcenters[hsec]+3*v_pad+1-vcentmn)
-#                plt.plot(hsec-hsec[0], vcenters[hsec]+5*v_pad+1-vcentmn)
-#                plt.show()
-#                plt.close()
                 plt.imshow(np.vstack((ccd_sec, raw_model, ccd_sec-raw_model)), interpolation='none')
                 plt.show()
                 plt.close()
-#                plt.imshow((ccd_sec-sec_model)*np.sqrt(ccd_sec_invar), interpolation='none')
-#                plt.show()
-#                plt.close()
-#                plt.imshow((ccd_sec-raw_model)*np.sqrt(ccd_sec_invar), interpolation='none')
-#                plt.show()
-#                plt.close()
         if verbose:
             tff = time.time()
             if fib > 3:
                 plt.plot(extracted_counts[fib,:])
-#                plt.plot(raw_ex_counts[fib,:])
                 plt.show()
                 plt.close()
             print("Fiber {} Time = {:06}s".format(fib,tff-tf0))
@@ -2755,7 +1905,6 @@ def extract_2D(ccd, norm_sflat, psfmodel, t_coeffs, sig_coeffs, pow_coeffs, redu
         return extracted_counts, extracted_covar, ccd_model
     else:
         return extracted_counts, extracted_covar#, raw_ex_counts
-#    flux2 = sf.extract_2D_sparse(p,B,n,return_no_conv=True)
 
 '''
     ### Figure out way to include diagnositic plots in a sensible place
@@ -2821,7 +1970,6 @@ def find_most_recent_frame_date(ftype,data_dir,return_filenames=False,date_forma
         ret = np.array(([dates[i][st:st+digits] for i in range(len(dates))]),dtype=int)
         recent = str(np.max(ret))
         return recent
-#        dates_recent = np.array(([dates[i]]))
     ### Loop through, cull out
     for D in ['Y','M','D']:
         recent = most_recent(D,dates,date_format,before_date=before_date)
@@ -2912,8 +2060,6 @@ def stack_calib(redux_dir, data_dir, date, method='median', frame='bias'):
     fname = date + '.' + fname
     if os.path.isfile(os.path.join(redux_dir,date,fname)):
         calib, oscan, hdr = open_minerva_fits(os.path.join(redux_dir,date,fname), return_hdr=True)
-#        calib_hdu = pyfits.open(os.path.join(redux_dir,date,fname),uint=True)
-#        calib = calib_hdu[0].data
         if frame == 'dark':
             return calib, hdr
         else:
@@ -2923,8 +2069,6 @@ def stack_calib(redux_dir, data_dir, date, method='median', frame='bias'):
             filenamesb = glob.glob(os.path.join(data_dir,date,'*[Bb]ias*.fits'))
             if len(filenamesb) == 0:
                 filenamesb = find_most_recent_frame_date('bias', data_dir, return_filenames=True)
-#                print("ERROR: No bias frames available on date {}".format(date))
-#                exit(0)
             
             b0, oscan = open_minerva_fits(filenamesb[0])
             biases = np.zeros((len(filenamesb),b0.shape[0],b0.shape[1]))
@@ -2937,8 +2081,6 @@ def stack_calib(redux_dir, data_dir, date, method='median', frame='bias'):
             filenamesd = glob.glob(os.path.join(data_dir,date,'*[Dd]ark*.fits'))
             if len(filenamesd) == 0:
                 filenamesd = find_most_recent_frame_date('dark', data_dir, return_filenames=True)
-#                print("ERROR: No dark frames available on date {}".format(date))
-#                exit(0)
             d0, oscan = open_minerva_fits(filenamesd[0])
             darks = np.zeros((len(filenamesd),d0.shape[0],d0.shape[1]))
             exptimes = np.zeros((len(filenamesd)))
@@ -3023,32 +2165,12 @@ def make_norm_sflat(sflat, redux_dir, date, spline_smooth=True, include_edge=Tru
         slit_norm = pyfits.open(os.path.join(redux_dir, date, '{}.slit_flat_smooth.fits'.format(date)))[0].data
         slit_mask = pyfits.open(os.path.join(redux_dir, date, '{}.slit_mask_smooth.fits'.format(date)))[0].data
         return slit_norm, slit_mask
-    #spline_smooth = True
-    #redux_dir = os.environ['MINERVA_REDUX_DIR']
-    #date = 'n20160115'
-    #date2 = 'n20160216'
-    #date = 'n20161204'
-    #bias_fits = pyfits.open(os.path.join(redux_dir,date,'{}.bias_avg.fits'.format(date)),uint=True)
-    #bias = bias_fits[0].data
-    #sflat_fits = pyfits.open(os.path.join(redux_dir,date,'{}.slit_flat_avg.fits'.format(date)))
-    #sflat = sflat_fits[0].data
-    #sflat-=bias
-#    readnoise = 3.63
     sflat /= np.max(sflat)
-    sflat = sflat[::-1,:] #I've confused myself on orientation...
-    #sflat/=np.median(sflat[sflat>5*readnoise]) #Probably a better way to normalize
-#    shdr = sflat_fits[0].header
+    sflat = sflat[::-1,:] #Needed to keep orientation convention...
     
     ###clip overscan and weird edge effects
-    #sflat = sflat[1:2049,0:2048]
     hpix = sflat.shape[1]
     vpix = sflat.shape[0]
-#    sflat = sflat[::-1,0:hpix]
-    #plt.plot(sflat[:,1000])
-    #plt.show()
-    
-    #xpix = shdr['NAXIS2']
-    #hpix = shdr['NAXIS1']
     
     ##########################################################
     ################# fit to profile #########################
@@ -3060,13 +2182,7 @@ def make_norm_sflat(sflat, redux_dir, date, spline_smooth=True, include_edge=Tru
         smsk = (ssub > (np.median(ssub) - (3 - 2.3*fib/29)*noise))
         if len(smsk>0) == 0:
             print "Indices:", idx1, idx2
-#            print smsk
             exit(0)
-#        if fib == 25:
-#            print idx1, idx2
-#            print smsk
-#            plt.plot(ssub)
-#            plt.show()
         idx1n = idx1 + np.nonzero(smsk)[0][0]
         idx2n = idx1 + np.nonzero(smsk)[0][-1]
         il = max(0, idx1-pad)
@@ -3089,22 +2205,15 @@ def make_norm_sflat(sflat, redux_dir, date, spline_smooth=True, include_edge=Tru
         spds = np.zeros((num_fibers, hpix))
         slit_norm = np.ones(sflat.shape)
         for col in range(hpix):
-        #    if col %100 == 0:
-        #        print "column", col
-        #    sss = ediff1d(sflat[:,col])
             sss = sflat[:,col]
             if col < 600:
                 idx1 = int(40 - col/15.0)
             else:
                 idx1 = 0
-        #    idx2 = 0
             pad = 5
             slit_width = 67-15 #change this later too
             dip_width = 58-22
             for i in range(num_fibers):
-        #        if i > 1:
-        #            continue
-    #            print "Iteration", i
                 if find_inds:
                     ### for first slit need to do some special treatment because we can
                     ### start partway into slit, or into dip
@@ -3200,7 +2309,6 @@ def make_norm_sflat(sflat, redux_dir, date, spline_smooth=True, include_edge=Tru
         blaze_raw = np.zeros((num_fibers, hpix))
     ### Fit splines to polynomial coefficients...
     if spline_smooth:
-        #plt.plot(slit_norm[1000,:])
         spc = 5 ## try evenly spaced breakpoints
         breakpoints = np.arange(0,hpix,spc)
         ### Fit splines, no weighting
@@ -3323,27 +2431,14 @@ def cal_fiberflat(flat, data_dir, redux_dir, arc_date):
 #    ddate = find_most_recent_frame_date('dark', data_dir)
     sfdate = find_most_recent_frame_date('slitflat', data_dir)
     bias = stack_calib(redux_dir, data_dir, bdate)
-    bias = bias[:,0:2048] #Remove overscan
-    ### Load Dark
-#    dark, dhdr = stack_calib(redux_dir, data_dir, ddate, frame='dark')
-#    dark = dark[:,0:2048]
-#    dark *= exptime/dhdr['EXPTIME'] ### Scales linearly with exposure time
-    ### Analyze overscan (essentially flat, very minimal correction)
-#    overscan_fit = m_utils.overscan_fit(overscan)
-    
-    #bias -= np.median(bias) ### give zero mean overall - readjust by overscan
-    ### Making up this method, so not sure if it's good, but if it works it should reduce ccd noise
-#    bias = bias_fit(bias, overscan_fit)
-    
+    bias = bias[:,0:2048] #Remove overscan    
     
     ### Make master slitFlats
     sflat = stack_flat(redux_dir, data_dir, sfdate)
     norm_sflat = make_norm_sflat(sflat, redux_dir, sfdate)
     
-    
     ### Calibrate ccd
     flat -= bias #Note, if ccd is 16bit array, this operation can cause problems
-#    flat -= dark
     flat /= norm_sflat
     return flat
     
@@ -3390,9 +2485,6 @@ def find_peaks(array,bg_cutoff=None,mx_peaks=None,skip_peaks=0, view_plot=False)
         if bg_cutoff is None:
             bg_cutoff = 0.5*np.mean(array)
         while px<xpix:
-#            if trct>=num_fibers:
-#                break
-#            y = yvals[0]
             if array[px-1]>bg_cutoff and array[px]<array[px-1] and array[px-1]>array[px-2]: #not good for noisy
                 if skcnt < skip_peaks:
                     skcnt += 1 #Increment skip counter
@@ -3437,20 +2529,12 @@ def build_trace_ccd(fiber_flat_files, ccd_shape, reverse_y=True, tscopes=['T1','
 def bspline_pre(fiberflat, t_coeffs, redux_dir, date, rn=3.63, window=10, skip_fibs=[0, 112, 113, 114, 115], overwrite=True):
     """ Precalculates the bspline model array for the given fiberflat.
     """
-    ### Use 11/23/2016 fiber flats as backup if new fiberflats have overflow
-#    backup_files = ['a']*4
-#    for i in range(4):
-#        backup_files[i] = os.path.join(redux_dir,'n20161123','combined_flat_T{}.fits'.format(int(i+1)))
-#    backup_fiberflat = build_trace_ccd(backup_files, fiberflat.shape)
-#    t_backup = pyfits.open(os.path.join(redux_dir,'n20161123','trace_n20161123.fits'))[0].data[0]
     ### Initialize relevant variables, some are hardcoded here    
     pts_per_model = 1000
     breakpoints = np.array(([-8, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 8]))
     inc_fibs = [0, 3, 4, 7, 8, 11, 12, 15, 16, 19, 20, 111] ### Fibers with truncated values due to close packing - fill with neighbor estimates
-#    breakpoints = np.array(([-8, -5, -4, -3, -2, -1, 0, 1, 2, 5]))
     ypix = fiberflat.shape[1]
     ys = (np.arange(ypix)-ypix/2)/ypix
-#    pd = 7
     ### Now fill in average model by order
     sfit_models = np.zeros((pts_per_model,t_coeffs.shape[1], ypix))    
     for fib in range(t_coeffs.shape[1]):
@@ -3471,17 +2555,11 @@ def bspline_pre(fiberflat, t_coeffs, redux_dir, date, rn=3.63, window=10, skip_f
             xvals = np.arange(xl, xh+1) + int(xs[j])
             xvals = xvals[(xvals>0)*(xvals<fiberflat.shape[0])]
             yarr = fiberflat[xvals,j]
-#            if fib == 5:
-#                plt.plot(xvals, yarr)
-#                plt.show()
-#                plt.close()
-#            mask = (breakpoints>=np.min(xvals-int(xs[j])))*(breakpoints<=np.max(xvals-int(xs[j])))
             breakpoints_i = breakpoints + xs[j]
             if np.min(xvals-int(xs[j])) > -8 and j == 0:
                 print "Warning - possible bad spline fit on fiber {}".format(fib)
             if np.max(xvals-int(xs[j])) < 8 and j == 0:
                 print "Warning - possible bad spline fit on fiber {}".format(fib)
-#            breakpoints_i = breakpoints + xs[j]
             invar = 1/(abs(yarr) + rn**2)
             params, errarr = sf.gauss_fit(xvals,yarr,invr=invar,xcguess=xs[j],fit_background='y',fit_exp='n')
             bg = params[3]# + params[4]*(xvals-params[1])
@@ -3489,11 +2567,6 @@ def bspline_pre(fiberflat, t_coeffs, redux_dir, date, rn=3.63, window=10, skip_f
             coeffs[j] = _coeffs
             xfit = np.linspace(np.min(xvals),np.max(xvals),100)
             _sfit_i = spline.get_spline_1D_fit(xfit, yarr, breakpoints_i, _coeffs)#[j][mask])
-#            plt.plot(xfit,_sfit_i+params[3])#+params[4]*(xfit-params[1]))#+coeffs[j][-1])
-#            plt.plot(xfit,_sfit_i)
-#            plt.plot(xvals, yarr)
-#            plt.show()
-#            plt.close()
         ### Build average model
         pd = 8
         xfit = np.linspace(-pd,pd,pts_per_model)
@@ -3516,8 +2589,7 @@ def bspline_pre(fiberflat, t_coeffs, redux_dir, date, rn=3.63, window=10, skip_f
         sys.stdout.write("\n")
         sfit_models[:,fib,:] = _sfit_model
         if os.path.isdir(os.path.join(redux_dir, date)):
-            pass
-#            np.save(os.path.join(redux_dir, date, 'bspline_crsxn_model_{}.npy'.format(fib)),_sfit_model)    
+            pass  
         else:
             os.mkdir(os.path.join(redux_dir, date))
         np.save(os.path.join(redux_dir, date, 'spline_models', '{}.bspline_crsxn_model_{}.npy'.format(date,fib)),_sfit_model)
@@ -3587,14 +2659,6 @@ def spline_fast_fit(xvals, zvals, invar, model, lims=[-0.5,0.5]):
     
     xc, xc_std = sf.chi_coeffs_to_mn_std(poly_coeffs, sigma=1)
     hght, bg = spline_linear_fit(xvals, xc, zvals, invar, model)
-#    if bg > 1000:
-#        sint = sf.re_interp(np.linspace(xvals[0],xvals[-1],100), xc+0.4, xorig, model)
-#        plt.plot(xgrid,chi2s,xgrid,np.poly1d(poly_coeffs)(xgrid))
-#        plt.show()
-#        plt.close()
-#        plt.plot(xvals,zvals,np.linspace(xvals[0],xvals[-1],100),sint*hght+bg)
-#        plt.show()
-#        plt.close()
     return xc, hght, bg
     
 def spline_linear_fit(xvals, xc, zvals, invar, model):
@@ -3629,41 +2693,7 @@ def spline_fit_scipy(xvals, xc, zvals, invar, spline, fit_xc=True):
         P = np.vstack((norm_model,np.ones(len(norm_model)))).T
         coeffs, chi_junk = sf.chi_fit(zvals, P, np.diag(invar))
         hghtf, bgf = coeffs[0], coeffs[1]
-        return hghtf, bgf
-#    def scipy_linear_fit(xvals, xc, zvals, ):
-#    if fit_xc:
-#        Ng = 10
-#    lims = [-0.5, 0.5]
-#    if lims[1] - lims[0] > 2:
-#        Ng = 5*(lims[1] - lims[0])
-#    ### Coarse
-#    xgrid = np.linspace(lims[0], lims[1], Ng) + xc
-#    hght = np.sum(zvals)-len(zvals)*np.min(zvals)
-#    bg = np.min(zvals)
-#    chi2s = np.zeros((len(xgrid)))
-#    for i in range(len(xgrid)):
-#        model = spline(xvals-xgrid[i])
-#        model /= get_spline_norm(spline, xvals[0], xvals[1], xgrid[i])
-#        model = hght*model + bg
-#        chi2s[i] = np.sum((model-zvals)**2*invar)
-#    xmin = xgrid[np.argmin(chi2s)]
-#    hght, bg = spline_linear_fit(xvals, xc, zvals, invar, model)
-#
-#    ### Fine
-#    xgrid = np.linspace(xmin-0.05, xmin+0.05, Ng)
-#    hght = np.sum(zvals)-len(zvals)*np.min(zvals)
-#    bg = np.min(zvals)
-#    chi2s = np.zeros((len(xgrid)))
-#    for i in range(len(xgrid)):
-#        model = spline(xvals-xgrid[i])
-#        model /= get_spline_norm(spline, xvals[0], xvals[1], xgrid[i])
-#        model = hght*model + bg
-#        chi2s[i] = np.sum((model-zvals)**2*invar)
-#    poly_coeffs = np.polyfit(xgrid, chi2s, 2)
-#    
-#    xc, xc_std = sf.chi_coeffs_to_mn_std(poly_coeffs, sigma=1)
-#    hght, bg = spline_linear_fit(xvals, xc, zvals, invar, model)
-        
+        return hghtf, bgf        
 
 def simple_sig_clip(ccd_low, sig=4, iters=2):
         cnz = ccd_low[ccd_low!=0]
@@ -3681,9 +2711,6 @@ def remove_scattered_light(ccd, sflat_mask, redux_dir, date, overwrite=False):
         A bit challenging in blue region, but algorithm tends to return a 
         reasonable estimate in most cases
     """
-#    if os.path.isfile(os.path.join(redux_dir, date,'light_bg.npy')) and not overwrite:
-#        light_bg_final = np.load(os.path.join(redux_dir, date,'light_bg.npy'))    
-#    else:
     ccd_low = ccd*sflat_mask   
     
     ### "Sigma clip" to help remove cosmic rays    
@@ -3776,9 +2803,6 @@ def remove_scattered_light(ccd, sflat_mask, redux_dir, date, overwrite=False):
     bg_median = np.median(light_bg_final)
     light_bg_final[light_bg_final < bg_median - 1.5*bg_scale] = bg_median - 1.5*bg_scale
     light_bg_final[light_bg_final > bg_median + 1.5*bg_scale] = bg_median + 1.5*bg_scale
-            
-    ### And save   
-#    np.save(os.path.join(redux_dir, date,'light_bg.npy'), light_bg_final)
 
     ### Subtract scattered light
     ccd_light_removed = ccd-light_bg_final
@@ -3791,7 +2815,6 @@ def remove_scattered_light(ccd, sflat_mask, redux_dir, date, overwrite=False):
     ccd_for_std = simple_sig_clip(ccd_light_removed*sflat_mask, sig=6)
     bg_std = np.std(ccd_for_std[sflat_mask])
     
-    
     return ccd_light_removed, bg_std
     
 def stack_daytime_sky(date, data_dir, redux_dir, bias, days_to_check=1, count_lim=62000, count_max=5, overwrite=False):
@@ -3803,14 +2826,11 @@ def stack_daytime_sky(date, data_dir, redux_dir, bias, days_to_check=1, count_li
         sky = pyfits.open(os.path.join(redux_dir, date, 'daytime_sky_stack.fits'))[0].data
         return sky
     def save_day(sky, redux_dir, date, fname):
-#        try:
         if not os.path.isdir(os.path.join(redux_dir,date)):
             os.mkdir(os.path.join(redux_dir,date))
         hdu = pyfits.PrimaryHDU(sky)
         hdulist = pyfits.HDUList([hdu])
         hdulist.writeto(os.path.join(redux_dir,date,fname),clobber=True)
-#        except:
-#            print("Directory/File already exists")
     def most_recent_sky():
         old_sky_files = glob.glob(os.path.join(redux_dir,'*','daytime_sky_stack.fits'))
         if len(old_sky_files) == 0:
@@ -3885,20 +2905,14 @@ def stack_daytime_sky(date, data_dir, redux_dir, bias, days_to_check=1, count_li
         for fl in files[j*mx_stack_size:(j+1)*mx_stack_size]:
             data, junk = open_minerva_fits(fl)
             skies[idx] = data - bias
-#            skies[idx] *= snorm/np.sum(skies[idx])
             smasks[idx] = False
-    #        plt.plot(skies[idx,:,1000])
             smasks[idx][data > count_lim] = True
             chi2 = (skies[idx]-sky)**2/(abs(skies[idx])**(2.0) + 4**2)*(smasks[idx]==False)
             chimax = 3000/np.max(skies[idx])
             smasks[idx][(chi2 > chimax)] =  True
-#            plt.plot(skies[idx,:,1000])
             idx += 1
         ### Go back and mean combine with cosmics masked
         sky_means[j] = sf.combine(skies, masks=smasks, method='mean')
     sky = sf.combine(sky_means, method='mean')
-#    plt.plot(sky[:,1000], 'k', linewidth=3)
-#    plt.show()
-#    plt.close()
     save_day(sky, redux_dir, "sky_trace", 'daytime_sky_stack.fits')
     return sky

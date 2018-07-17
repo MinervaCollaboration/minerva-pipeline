@@ -1,12 +1,34 @@
 #!/usr/bin/env python
 
-#Start of a generic tracefit program.  Geared now toward MINERVA initial data
+'''
+# Fits traces for MINERVA
+# Uses fiber flats to get cross-dispersion profile as a function of
+# trace and ccd column (in pixels)
+# Fits model coefficients to either a polynomial or a spline
+
+# This can also be used with daytime sky spectra to find the cross-
+# dispersion profile, but I have found that tends to return worse
+# fits (judged by chi^2) than the profiles found from fiber flats
+
+# This code should be run BEFORE doing any extractions, but it only
+# needs to be re-run if new fiber flats are taken (which is rare)
+
+INPUTS:
+    Defaults are usually fine.
+    May want to set the fiber flat date (-d)
+    Can also try a few different profiles (though only gaussian and gauss_lor
+        are fully supported)
+    Can experiment using daytime sky if wanted through the -c option
+    
+OUTPUTS:
+    In MINERVA_REDUX_DIR/flat_trace (or sky_trace) saves
+        trace_{profile}.fits
+'''
 
 #Import all of the necessary packages
 from __future__ import division
 import pyfits
 import os
-import sys
 import glob
 import datetime
 #import math
@@ -14,13 +36,10 @@ import time
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import cm
-#import scipy.interpolate as si
 import special as sf
 import argparse
 import minerva_utils as m_utils
 from scipy.interpolate import interp1d
-from astropy.modeling.models import Voigt1D
-import lmfit
 
 t0 = time.time()
 
@@ -45,7 +64,7 @@ except KeyError:
     exit(0)
 
 #########################################################
-########### Function fo spline fitting ##################
+########### Function for spline fitting #################
 #########################################################
 def get_bspline_profiles(fiber_ccd):
     sp_profs = {}
@@ -113,12 +132,6 @@ if args_in.calibration == 'daytime_sky':
     ### Load daytime sky
     daytime_sky = m_utils.stack_daytime_sky(date, data_dir, redux_dir, bias, overwrite=args_in.testing)
     daytime_sky, sky_std = m_utils.remove_scattered_light(daytime_sky, sflat_mask, redux_dir, date, overwrite=True)
-    #plt.plot(daytime_sky[:,1000])
-    #plt.show()
-    #plt.close()
-    #plt.imshow(daytime_sky, interpolation='none')
-    #plt.show()
-    #plt.close()
     
     #########################################################
     ######## Get traces with Gaussian profile ###############
@@ -166,30 +179,6 @@ elif args_in.calibration == 'fiber_flat':
             flat -= 515
         flat, bg_std = m_utils.remove_ccd_background(flat, plot=False)
         rn_eff = bg_std/2.5 ## Manual hack, gets close to the true value
-        
-#        xvals = np.arange(20)
-#        zvals = flat[140:160,1000]
-#        invar = 1/(abs(zvals) + rn_eff**2)
-#        model = Voigt1D()
-#        print model.x_0
-#        params = sf.voigt_fit(xvals, zvals, invar, model, fit_bg=True)
-#        print params
-#        params2 = lmfit.Parameters()
-#        params2.add('xc', value=params[0])
-#        params2.add('hlor', value=params[1])
-#        params2.add('sigg', value=params[2])
-#        params2.add('sigl', value=params[3])
-#        params2.add('hght', value=params[4])
-#        params2.add('bg', value=params[5])
-#        fit0 = sf.voigt_eval(params, xvals, model)
-#        fit = sf.voigt_eval(params2, xvals, model)
-#        print fit0-fit
-#        chi = np.sum((zvals-fit)**2*invar)
-#        print chi
-#        print model.fwhm_G
-#        plt.plot(xvals, zvals, xvals, fit)
-#        plt.show()
-        
         
         ### Get results for this fiber
         tr_tuple = m_utils.get_trace_arrs(flat, args_in.fiber_space, rn=rn_eff, pord=12, num_points=args_in.num_points, num_fibers=int(num_fibers/4), skip_peaks=1, method=args_in.trace_method, profile=args_in.profile, plot=False)
