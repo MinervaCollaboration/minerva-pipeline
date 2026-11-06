@@ -1,37 +1,35 @@
 #!/usr/bin/env python 2.7
+'''
+# Finds wavelength solution from arc frames for MINERVA
+# Must have file table1.dat in MINERVA_SIM_DIR
+# This holds approximate wavelength solutions at five points per trace
+# table1.dat is manually generated
 
-#Start of a generic tracefit program.  Geared now toward MINERVA initial data
-
+INPUTS:
+    Many input argument options (see below)
+    Defaults should be appropriate in most cases
+    This will automatically search for the most recent arc frames
+    
+OUTPUTS:
+    4 fits files (one for each telescope): wavelength_soln_T#.fits
+    These are saved in MINERVA_REDUX_DIR/date/
+    
+'''
 #Import all of the necessary packages
 from __future__ import division
 import pyfits
 import os
 import csv
-import json
-import math
 import glob
-import time
 import numpy as np
 from numpy import *
 import matplotlib.pyplot as plt
-from matplotlib import cm
-#import scipy
-#import scipy.stats as stats
-#import scipy.special as sp
-#import scipy.interpolate as si
-#import scipy.optimize as opt
-import scipy.sparse as sparse
-import scipy.signal as sig
-#import scipy.linalg as linalg
 import special as sf
 import minerva_utils as m_utils
 import argparse
 
 #### Input arguments
 parser = argparse.ArgumentParser()
-#parser.add_argument("-f","--filename",help="Name of image file (.fits) to extract",
-#                    default=os.path.join(data_dir,'n20160216','n20160216.HR2209.0025.fits'))
-##                    default=os.path.join(data_dir,'n20160115','n20160115.daytimeSky.0006.fits'))
 parser.add_argument("-d","--date",help="Date of arc exposure, format nYYYYMMDD",default=None)
 parser.add_argument("-fib","--num_fibers",help="Number of fibers to extract",
                     type=int,default=29)
@@ -50,10 +48,9 @@ num_fibers = inargs.num_fibers*inargs.telescopes
 verbose = inargs.verbose
 no_overwrite = not inargs.overwrite
 use_base = inargs.use_base
-#num_points = inargs.num_points
 fiber_space = inargs.fiber_space
 
-#set paths
+#### Set Paths
 try:
     data_dir = os.environ['MINERVA_DATA_DIR']
 except KeyError:
@@ -64,10 +61,15 @@ try:
 except KeyError:
     print("Must set environmental variable MINERVA_REDUX_DIR")
     exit(0)    
+try:
+    sim_dir = os.environ['MINERVA_SIM_DIR']
+except KeyError:
+    print("Must set environmental variable MINERVA_SIM_DIR")
+    exit(0)
     
 ### Dynamically search for most recent arc frames (unless a date is supplied)
 if inargs.date is None:
-    date = m_utils.find_most_recent_arc_date(data_dir)
+    date = m_utils.find_most_recent_frame_date('arc', data_dir)
 else:
     date = inargs.date
 
@@ -77,6 +79,9 @@ if use_base:
 arc_files = glob.glob(os.path.join(data_dir,'*'+date,'*[tT][hH][aA][rR]*'))
 ### Assumes fiber flats are taken on same date as arcs
 fiber_flat_files = glob.glob(os.path.join(data_dir,'*'+date,'*[fF]iber*[fF]lat*'))
+if len(fiber_flat_files) == 0:
+    print "ERROR: No fiber flats found on {}".format(date)
+    exit(0)
 
 telescopes = ['T1','T2','T3','T4']
 for ts in telescopes:
@@ -91,7 +96,7 @@ for ts in telescopes:
     flat = pyfits.open(os.path.join(redux_dir,date,'combined_flat_{}.fits'.format(ts)))[0].data
     arc = pyfits.open(os.path.join(redux_dir,date,'combined_arc_{}.fits'.format(ts)))[0].data
     
-    ### Invert ccd top/bottom orientation
+    ### Invert ccd top/bottom orientation - this is just my convention
     flat = flat[::-1,:]
     arc = arc[::-1,:]
     
@@ -103,7 +108,7 @@ for ts in telescopes:
     #Now to get traces
     ypix = 2048 #Manual, overscan is included in header value
     xpix = 2052
-    num_points = 20 #2048= all pixels
+    num_points = 20 #2048 = all pixels
     yspace = int(floor(ypix/(num_points+1)))
     yvals = yspace*(1+np.arange(num_points))
     
@@ -189,12 +194,11 @@ for ts in telescopes:
         np.save(os.path.join(redux_dir,date,'line_gauss_{}.npy'.format(ts)),line_gauss)
     
     ############################################################
-    ## Open line list (hardcoded for now - user input later?) ##
+    ############ Open line list (hardcoded for now) ############
     ############################################################ 
     
     wl_min = 4874
     wl_max = 6466
-    sim_dir = os.environ['MINERVA_SIM_DIR']
     rows = 8452
     cols = 2
     lamp_lines = np.zeros((rows,cols))
@@ -217,29 +221,12 @@ for ts in telescopes:
     
     wlref = wls
     itref = itssc
-    
-    #Don't do intensity masking for now
-#    itmask = itref>(0.001*np.max(itref)) #Mask bottom 0.1%
-#    wlref = wlref[itmask]
-#    itref = itref[itmask]
-    
-#    blnd_wid = 0.06 #make user input
-#    idx = 0
-#    while idx < len(wlref)-1:
-#        if abs(wlref[idx]-wlref[idx+1])<blnd_wid:
-#            wlref = np.delete(wlref,idx)
-#            wlref = np.delete(wlref,idx)
-#            itref = np.delete(itref,idx)
-#            itref = np.delete(itref,idx)
-#        else:
-#            idx+=1
-            
          
     ############################################################
     ### Now make cuts to "extracted" spectrum from arc frame.
-    ### These can include close lines, anomalous FWHM, low 
+    ### These can include overlapping lines, anomalous FWHM, low 
     ### intensity, and large slope in the background.
-    ### To start I will just go with "too close" lines
+    ### Get good results with only "overlapping line" cut
     ############################################################
     
     if os.path.isfile(os.path.join(redux_dir,date,'high_pix_{}.npy'.format(ts))):
@@ -252,10 +239,7 @@ for ts in telescopes:
         pos_d = dict() #position of each peak
         slp_d = dict() #background slope around each peak
         for i in range(num_fibers):
-            ##Optional - use scipy to get initial guesses of peak locations
-            ##Problem is this misses many of the low amplitude peaks.
-            #pos_est = np.array(sig.find_peaks_cwt(line_gauss[i,:],np.arange(3,4)))
-            #Since spectrum has ~no background, can use my own peak finder.
+            ### Find peak position estimates
             pos_est = np.zeros((len(line_gauss[i,:])),dtype=int)
             for j in range(2*sampling_est,len(line_gauss[i,:])-2*sampling_est):
                 #if point is above both its neighbors, call it a peak
@@ -332,8 +316,8 @@ for ts in telescopes:
         [base_pos, base_it] = np.load(os.path.join(redux_dir,base_date,'high_pix_{}.npy'.format(ts)))
         lambdas = dict()
         pixels = dict()
-        ### Manual peak shift, not the best, but a start...
-        ### Put in shift at orders 2, 27, will linearly extrapolate
+        ### Manual peak shift, not the best, but functional...
+        ### Put in shift at orders 2, 14, 27, will linearly extrapolate
         ord1 = 2
         ordm = 14
         ord2 = 27
@@ -374,20 +358,6 @@ for ts in telescopes:
                 sf.plt_deltas(n_pix,n_ints,'g')
                 plt.show()
                 plt.close()
-            ### Cut to the top 30 highest peaks
-#            num_pks = 30
-#            if len(n_pix) < num_pks:
-#               num_pks = len(n_pix)
-#            tmp_o_ints = np.sort(o_ints)[::-1]
-#            tmp_n_ints = np.sort(n_ints)[::-1]
-#            oldp = tmp_o_ints[num_pks-1]
-#            newp = tmp_n_ints[num_pks-1]
-#            ho_ints = (o_ints >= oldp)
-#            hn_ints = (n_ints >= newp)
-#            o_pix = o_pix[ho_ints]
-#            o_ints = o_ints[ho_ints]
-#            n_pix = n_pix[hn_ints]
-#            n_ints = n_ints[hn_ints]  
             ### Iterate to find new peaks within dlt_px of new_peaks
             dlt_px = 5
             int_err = 0.3
@@ -399,13 +369,11 @@ for ts in telescopes:
                 good_peaks = o_pix[(o_pix>n_pix[pk]-dlt_px) * (o_pix<n_pix[pk]+dlt_px)]
                 good_ints = o_ints[(o_pix>n_pix[pk]-dlt_px) * (o_pix<n_pix[pk]+dlt_px)]
                 if len(good_peaks) == 1:
-#                    if good_ints[0] < (1+int_err)*n_ints[pk] and good_ints[0] > (1-int_err)*n_ints[pk]:
                     pixels_tmp[pk] = n_pix[pk] - n_shift
                     lambda_tmp[pk] = np.poly1d(wl_coeffs[order])(2*(good_peaks[0]-1024)/2048)
                 elif len(good_peaks) > 1:
                     best_int = (good_ints < (1+int_err)*n_ints[pk]) * (good_ints > (1-int_err)*n_ints[pk])
                     if sum(best_int) > 1:
-#                        print("tighten int_err to get additional peaks")
                         continue
                     elif sum(best_int) == 1:
                         pixels_tmp[pk] = n_pix[pk] - n_shift
@@ -454,35 +422,14 @@ for ts in telescopes:
         elif ts == 'T4':
             coeffs = np.array(([1.0007e-2,1.093839e2]))
             pixels+=np.poly1d(coeffs)(pixels)
-    ### another manual adjust, only applies to 11/23/2016 - need to figure out
-    ### how to do this more dynamically/intelligently
-    ### Not great yet - final solution is still ~0.1A wrong...
-#    print pixels[2]
-#    if date=='n20161123':
-#        dltl = 1.78
-#        dlth = 1.38
-#        b = dltl
-#        m = (dlth-dltl)/2048
-#        excess = m*pixels + b
-#        lambdas -= excess
-#    print pixels[2]
-#    print lambdas[2]
         
     ### Fit initial guesses to polynomial   
-    
     init_poly_order = 2
     lam_vs_px_coeffs = np.zeros((num_fibers,init_poly_order+1))
     for i in range(num_fibers):
         if lambdas[i][0] != 0:
             tmp_pix = 2*(pixels[i]-ypix/2)/ypix #change interval to [-1,1]
             lam_vs_px_coeffs[i] = np.polyfit(tmp_pix,lambdas[i],init_poly_order)
-#            if inargs.check_results:
-#                if i == 2 or i == num_fibers-2:
-#                    print("Order = {}".format(i))
-#                    lli = np.poly1d(lam_vs_px_coeffs[i])((np.arange(2048)-1024)/1024)
-#                    plt.plot(lli, line_gauss[i])
-#                    plt.show()
-#                    plt.close()
             
     ### Now dial in a more precise wavelength solution
     fin_poly_order = 6
@@ -493,9 +440,6 @@ for ts in telescopes:
         line_lams = np.poly1d(lam_vs_px_coeffs[i])(line_px)
         ref_lams = np.zeros((len(line_lams)))
         for j in range(len(line_lams)):
-            #find reference wavelengths in this range
-#            ref_wavelength = wls[(wls>(line_lams[j]-blnd_wid))*
-#                                   (wls<(line_lams[j]+blnd_wid))]
             ref_wavelength = wlref[(wlref>(line_lams[j]-blnd_wid))*
                                    (wlref<(line_lams[j]+blnd_wid))]
             if len(ref_wavelength)==1:
@@ -504,14 +448,8 @@ for ts in telescopes:
         ref_lams = ref_lams[lam_msk] #cut out any zero points
         line_px = line_px[lam_msk]
         if len(line_px) < (fin_poly_order+1):
-            #fin_poly_tmp = 2
             print("Fiber {} has too few lines to fit polynomial order {}".format(i,fin_poly_order))
-            ### Do best fit possible
-#            if len(line_px) > 3:
-#                lam_px_tmp = np.polyfit(line_px,ref_lams,len(line_px)-1)
-#                lam_vs_px_final[i] = np.pad(lam_px_tmp,(fin_poly_order-len(line_px)+1,0),'constant',constant_values=(0,0))
-#            ### or just use the initial fit
-#            else:
+            ### Just use the initial fit
             lam_vs_px_final[i] = np.pad(lam_vs_px_coeffs[i],(fin_poly_order-init_poly_order,0),'constant',constant_values=(0,0))
             if inargs.check_results:
                 if i == 2 or i == num_fibers-2:
