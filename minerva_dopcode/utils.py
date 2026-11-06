@@ -177,8 +177,11 @@ def barycorr(jdutc,ra,dec,pmra=0.0,pmdec=0.0,parallax=0.0,rv=0.0,zmeas=0.0,
 #    ipdb.set_trace()
 
 
+    # print the JD to 10 decimals
+    float_formatter = lambda x: "%.10f" % x
+
     url="http://astroutils.astronomy.ohio-state.edu/exofast/barycorr.php?" +\
-        "JDS=" + ','.join(map(str,jds)) + "&RA=" + str(ra) + "&DEC=" + str(dec) +\
+        "JDS=" + ','.join(map(float_formatter,jds)) + "&RA=" + str(ra) + "&DEC=" + str(dec) +\
         "&LAT=" + str(lat) + "&LON=" + str(lon) + "&ELEVATION=" + str(elevation) +\
         "&PMRA=" + str(pmra) + "&PMDEC=" + str(pmdec) + "&RV=" + str(rv) +\
         "&PARALLAX=" + str(parallax) + "&ZMEAS=" + str(zmeas) +\
@@ -197,12 +200,14 @@ def barycorr(jdutc,ra,dec,pmra=0.0,pmdec=0.0,parallax=0.0,rv=0.0,zmeas=0.0,
 
     # there was probably an error with the call
     if len(data) != len(jds):
-        time.sleep(1)
-        print data
-        print jds
-        print 'unexpected output -- website down?'
-        ipdb.set_trace()
-        return barycorr(jdutc,ra,dec,pmra=pmra,pmdec=pmdec,parallax=parallax,rv=rv,zmeas=zmeas,epoch=epoch,tbase=tbase,lon=lon,lat=lat,elevation=elevation)
+        try: return float(data[-1])
+        except:
+            time.sleep(1)
+            print data
+            print jds
+            print 'unexpected output -- website down?'
+            ipdb.set_trace()
+            return barycorr(jdutc,ra,dec,pmra=pmra,pmdec=pmdec,parallax=parallax,rv=rv,zmeas=zmeas,epoch=epoch,tbase=tbase,lon=lon,lat=lat,elevation=elevation)
 
     if len(data) == 1: return float(data[0])
     return map(float,data)
@@ -256,6 +261,7 @@ def get_template(template, wmin, wmax):
     except:
         wavall = template.sdstwav
         templateall = template.sdst
+
 
     use = np.where((wavall >= wmin) & (wavall <= wmax))
     return wavall[use], templateall[use]
@@ -379,12 +385,21 @@ def crclean(spec):
 def pdf(x):
     return 1.0/np.sqrt(2.0*np.pi) * np.exp(-x**2/2.0)
 
+def pdfexp(x,expo=2):
+    # by SXW Jan 2018
+    return 1.0/np.sqrt(2.0*np.pi) * np.exp(-np.abs(x)**expo/2.0)
+
 def cdf(x):
     return (1.0 + erf(x/np.sqrt(2.0))) / 2.0
 
 def skewnorm(x,xo=0.0,sigma=1.0,alpha=0.0):
     t = (x - xo) / sigma
     return 2.0 / sigma * pdf(t) * cdf(alpha*t)
+
+def skewnormexp(x,xo=0.0,sigma=1.0,alpha=0.0,expo=2):
+    # by SXW Jan 2018
+    t = (x - xo) / sigma
+    return 2.0 / sigma * pdfexp(t,expo=expo) * cdf(alpha*t)
 
 def fo_loglike(p, *args):
     resid = args[0]

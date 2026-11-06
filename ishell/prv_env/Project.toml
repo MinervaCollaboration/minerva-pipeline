@@ -1,0 +1,15 @@
+name = "prv_env"
+uuid = "c6677687-4fbe-410c-b8e9-9b2cc71034e3"
+authors = ["minerva "]
+version = "0.1.0"
+
+[deps]
+AdaBeliefOptimization = "c79996f0-61d0-4a5b-b70d-3ee339792a60"
+CurveFitParameters = "75b670ed-29d0-4b9b-bcd2-edac41b9c208"
+Echelle = "39a956ec-c293-4ec1-905d-6fd29e945cb3"
+EchelleCombs = "a5314db3-deaa-4849-ba2b-b5443211ced5"
+EchelleReduce = "84cdcd4c-526a-4779-bc6c-971016e6b224"
+EchelleSpectra = "e42e2a4f-7e48-49c4-9e9a-180127d117fc"
+EchelleSpectralModeling = "f749817e-ab90-447a-9f4b-e2f0d496231e"
+EchelleUtils = "b2f31fbc-a630-4524-89d9-e405e99f1d53"
+IterativeNelderMead = "c4497e51-e72c-4304-bf71-922071a3f507"

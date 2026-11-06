@@ -24,9 +24,11 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
     c = 299792458.0
 
     if socket.gethostname() == 'Main':
-#      filenames = glob.glob('/Data/kiwispec-proc/n20160[5,6]*/*' + objname + '*.chrec' + exten + '.npy')
-       filenames = glob.glob('/Data/kiwispec-proc/n2017[09,10]*/*' + objname + '*.chrec6.npy')
-       print filenames
+        #filenames = glob.glob('/Data/kiwispec-proc/n20160[5,6]*/*' + objname + '*.chrec' + exten + '.npy') # MW: commented
+#       filenames = glob.glob('/Data/kiwispec-proc/n2017[09,10]*/*' + objname + '*.chrec6.npy')
+        #filenames = glob.glob('/Data/kiwispec-proc/n20160[5,6]*/*' + objname + '*.testing_mw.npy') # MW
+        filenames = glob.glob('/Data/kiwispec-proc/n20160[5,6]*/*' + objname + '*.mw.npy') # MW
+        print filenames
 
     else:
         filenames = glob.glob('/n/home12/jeastman/minerva/data/n2016051[4-9]/*' + objname + '*.chrec' + exten + '.npy') +\
@@ -88,8 +90,8 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
             chrec['z' + str(i)][bad] = np.nan
 
             # very noisy data can find great fits
-            bad = np.where((chrec['sigma' + str(i)] <= 0.25) | (chrec['sigma' + str(i)] >= 1.25))
-            chrec['z' + str(i)][bad] = np.nan
+            bad = np.where((chrec['sigma' + str(i)] <= 0.25) | (chrec['sigma' + str(i)] >= 1.25)) # MW: the four_chunk code initializes the IP-sigma parameter as 0.2 so for my fixed IP, literally ever single chunk would be deemed "bad"
+            chrec['z' + str(i)][bad] = np.nan 
 
             # reject chunks with the lowest DSST weight (Step 3) or bad weights (Step 1)
             lowweight = np.nanpercentile(chrec['wt' + str(i)],weightthresh)
@@ -135,12 +137,12 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
             if h[0].header['FAUSTAT' + str(i)] == 'GUIDING' or 'daytimeSky' in h[0].header['OBJECT' + str(i)]:
 
                 rvs = c*((1.0+chrec['z' + str(i)])*(1.0+zb)-1.0)
-
-                # if all chunks are bad, skip it
+                
+		# if all chunks are bad, skip it
                 if len(np.where(np.isnan(rvs))[0]) == len(rvs): 
                     nobs-=1
                     continue
-
+		
                 jdutcs = np.append(jdutcs,midflux)
                 telescope = np.append(telescope,i)
 
@@ -206,7 +208,8 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
     sigmai[bad] = np.inf
 
     # compute rj (eq 2.7)
-    rj = np.nanmedian(np.abs(Deltaij)*np.transpose(np.tile(sigmai,(nobs,1))),axis=0) # eq 2.7
+    #rj = np.nanmedian(np.abs(Deltaij)/np.transpose(np.tile(sigmai,(nobs,1))),axis=0) # eq 2.7 # MW: commented
+    rj = np.nanmedian(np.abs(Deltaij) * np.transpose(np.tile(sigmai,(nobs,1))),axis=0) # eq 2.7 # MW
     sigmaij = np.transpose(np.tile(sigmai,(nobs,1)))*np.tile(rj,(nchunks,1)) # eq 2.5
 
     # prevent nans
@@ -293,6 +296,7 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
     plt.close()
 
     
+    '''
     # plot median sigma as a function of chunk number
     for tel in range(1,ntel+1):
         match = np.where(telescope == tel)
@@ -307,6 +311,7 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
     plt.ylabel('sigma')
     plt.savefig(objname + '.' + exten + '.sigmavchunk.png')
     plt.close()
+    '''
 
     # plot median alpha as a function of chunk number
     for tel in range(1,ntel+1):
@@ -360,7 +365,8 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
     vjtrend = coeffs[1] + (jdutcs[good]-t0)*coeffs[0] 
 
     # output text files of JD, rv, rverr
-    f = open(objname + '.dat','w')
+    #f = open(objname + '.dat','w') # MW: commented
+    f = open(objname + '.' + exten + '.dat','w') # MW
     for i in range(len(vj)):
         if np.isfinite(vj[i]):
             f.write('{0:f} {1:f} {2:f} T{3:d} {4:s}'.format(jdutcs[i],vj[i],sigmavj[i],int(telescope[i]),'\n'))
@@ -376,6 +382,7 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
     print objname + " Detrended RMS: " + str(np.nanstd(vj[good]-vjtrend))
 
     for i in range(1,ntel+1):
+    #for i in [2]:#range(2,2):
         match = np.where((telescope == i) & np.isfinite(vj))
 #        rate = 1.0/(jdutcs[match]-np.roll(jdutcs[match],1))
 #        taus = np.logspace(0, 3, 50)
@@ -388,6 +395,7 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
         plt.loglog(taus,y,'-',color=colors[i])
         
 
+    '''
     match = np.where(np.isfinite(vj))
     taus = np.arange(1,len(vj[match])/3)
     (t2, ad, ade, adn) = allantools.oadev(vj[match], rate=1, data_type="freq", taus=taus)
@@ -395,6 +403,7 @@ def vank(objname, weightthresh=10.0,chithresh=0.0, sigmaithresh=0.0):
     # overplot the line
     y = np.asarray([pow(tt,-0.5) for tt in taus])*ad[0]
     plt.loglog(taus,y,'k-')
+    '''
 
     plt.xlabel('N bin')
     plt.ylabel('Precision (m/s)')
@@ -419,6 +428,7 @@ if __name__ == "__main__":
 #    objnames = ['HD10700','HD9407','HD62613','HD122064','HD191408A','HD185144','HD217107','daytimeSky']
     
     objnames = ['HD185144']#['HD97601']['HD122064']#,'HD185144']#['daytimeSky','HD122064','HD185144'] ['HD97601']#
+    objnames = ['HD122064']#,'HD185144']#['daytimeSky','HD122064','HD185144'] ['HD97601']#
     for objname in objnames:
         print objnames
         vank(objname)

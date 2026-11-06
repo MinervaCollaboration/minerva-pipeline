@@ -25,9 +25,11 @@ def vank(objname, weightthresh=10.0, chithresh=1.0, sigmaithresh=0.0):
 
     if socket.gethostname() == 'Main':
 #      filenames = glob.glob('/Data/kiwispec-proc/n20160[5,6]*/*' + objname + '*.chrec' + exten + '.npy')
-       filenames = glob.glob('/Data/kiwispec-proc/*/*' + objname + '*.chrec6.npy')
+#       filenames = glob.glob('/Data/kiwispec-proc/*/*' + objname + '*.chrec6.npy')
+       filenames = glob.glob('/Data/kiwispec-proc/*/*' + objname + '*.gauss_mw.npy')
 #       filenames = glob.glob('/Data/kiwispec-proc/n20170409/n20170409.' + objname + '.*.chrec6.npy')
        #filenames = '/Data/kiwispec-proc/n20170409/n20170409.'+ objname + '.0022.proc.chrec6.npy'
+
        print filenames
 
     else:
@@ -37,6 +39,8 @@ def vank(objname, weightthresh=10.0, chithresh=1.0, sigmaithresh=0.0):
             glob.glob('/n/home12/jeastman/minerva/data/n2016061[0-2]/*' + objname + '*.chrec' + exten + '.npy')
 
     #filenames = '/Data/kiwispec-proc/n20170409/n20170409.HD97601.0017.proc.chrec6.npy'
+    #filenames.remove('/Data/kiwispec-proc/n20200208/n20200208.HD75732.0010.proc.fits') #Finn McLaughlin 2022 Mar 17
+
     ntel = 4
     nobs = len(filenames)*ntel
 #    if nobs <= 3: return
@@ -221,7 +225,7 @@ def vank(objname, weightthresh=10.0, chithresh=1.0, sigmaithresh=0.0):
     sigmai[bad] = np.inf
 
     # compute rj (eq 2.7)
-    rj = np.nanmedian(np.abs(Deltaij)*np.transpose(np.tile(sigmai,(nobs,1))),axis=0) # eq 2.7
+    rj = np.nanmedian(np.abs(Deltaij)/np.transpose(np.tile(sigmai,(nobs,1))),axis=0) # eq 2.7
     sigmaij = np.transpose(np.tile(sigmai,(nobs,1)))*np.tile(rj,(nchunks,1)) # eq 2.5
 
     # prevent nans
@@ -240,12 +244,12 @@ def vank(objname, weightthresh=10.0, chithresh=1.0, sigmaithresh=0.0):
     period = 7.126816
     for i in range(1,ntel+1):
         match = np.where(telescope == i)
-        #plt.plot((np.mod(jdutcs[match]-2457389, period))/period,vj[match],'o',color=colors[i])
-        plt.plot(jdutcs[match]-2457389,vj[match],'o',color=colors[i])
+        plt.plot((np.mod(jdutcs[match]-2457389, period))/period,vj[match],'o',color=colors[i])
+        #plt.plot(jdutcs[match]-2457389,vj[match],'o',color=colors[i])
 
     plt.title(objname)
-    plt.xlabel('Days since UT 2016-01-01')
-   # plt.xlabel('Phase')
+    #plt.xlabel('Days since UT 2016-01-01')
+    plt.xlabel('Phase')
     plt.ylabel('RV (m/s)')
     plt.savefig(objname + '.' + exten + '.png')
     plt.close()
@@ -450,3 +454,4 @@ if __name__ == "__main__":
     targets = targetlist.rdlist()
     for objname in targets['name']:
         vank(objname)
+

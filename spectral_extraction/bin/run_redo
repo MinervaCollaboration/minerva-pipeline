@@ -1,0 +1,20 @@
+#!/usr/bin/env python
+
+import numpy as np
+import subprocess
+
+to_redolist = np.genfromtxt('to_redo.txt', dtype=np.str)
+redonelist = np.genfromtxt('redone.txt', dtype=np.str)
+
+for to_redo in to_redolist:
+    if to_redo in redonelist:
+        continue
+    extract_string = "/home/minerva/minerva-pipeline/v1.0.0/spectral_extraction/python/optimal_extract.py -f "
+    date = to_redo.split('.')[0]
+    filestring = "/Data/kiwispec/{}/{}".format(date,to_redo)
+    execute_string = extract_string+filestring
+    print("Running: ", execute_string)
+    p = subprocess.Popen(execute_string.split(' '))
+    p.wait()
+    with open('redone.txt', "a") as redone:
+        redone.write(to_redo+"\n")

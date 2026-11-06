@@ -1,0 +1,13 @@
+cronjob 
+  preps calibration frames at 10:00
+    /home/minerva/minerva-pipeline/v1.0.0/spectral_extraction/python/prep_cal_frames.py on a bunch of images
+  removes old log files at 10:00
+  runs extract at 10:30
+    generates log0 and log1 (why?)
+    runs /home/minerva/minerva-pipeline/v1.0.0/spectral_extraction/python/optimal_extract.py on a bunch of images
+      is this supposed to be commented out?
+  executes content of log0 at 10:40
+    why?
+  executes content of log1 at 10:40
+    why?
+  checks log file at 14:39

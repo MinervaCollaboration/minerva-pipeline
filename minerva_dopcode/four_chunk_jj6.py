@@ -54,7 +54,17 @@ class Spectrum(object):
         self.nactive = 0
 
         for i in range(self.ntel):
-            self.objname = np.append(self.objname,self.h[0].header['OBJECT' + str(i+1)])
+
+            #if a telescope is down, skip it
+            try:
+                self.objname = np.append(self.objname,self.h[0].header['OBJECT' + str(i+1)])
+            except:
+                self.active = np.append(self.active,False)
+                self.objname = np.append(self.objname,"UNKNOWN")
+                self.zbc = np.append(self.zbc,0.0)
+                self.template = np.append(self.template,0.0)
+                self.zguess = np.append(self.zguess,0.0)
+                continue
 
             try:
                 # try to get the barycentric redshift
@@ -594,6 +604,7 @@ def getparr(charr, plot=False):
 
 def getpararray(obsname):
     for i in obsname:
+        print i
         night = i.split('.')[0]
         ofile = getpath(night=night,data=True) + '/' + i
         test = np.load(ofile[0])
@@ -657,7 +668,7 @@ def globgrindall(shuffle=False, plot=False, objname='HD*', date='n201?????', bst
     if shuffle: random.shuffle(datadirs)
     for datadir in datadirs:
 
-        ofarr = globgrind(datadir + '/' + date + '.' + objname + '.????.proc.fits', bstar=bstar, returnfile=False, printit=printit, plot=plot)
+#        ofarr = globgrind(datadir + '/' + date + '.' + objname + '.????.proc.fits', bstar=bstar, returnfile=False, printit=printit, plot=plot)
 #        ofarr = globgrind(datadir + '/*daytimeSky*.proc.fits', bstar=False, returnfile=False, printit=TRue, plot=False, redo=True)
 #        ofarr = globgrind(datadir + '/*HD*.proc.fits', bstar=False, returnfile=False, printit=True, plot=False)
 #        ofarr = globgrind(datadir + '/*HR*.proc.fits', bstar=True, returnfile=False, printit=True, plot=False)
@@ -667,7 +678,7 @@ def globgrindall(shuffle=False, plot=False, objname='HD*', date='n201?????', bst
 #        ofarr = globgrind(datadir + '/*HD97601*.proc.fits', bstar=False, returnfile=False, printit=True, plot=True)
 
 #       ofarr = globgrind(datadir + '/n20170607.HD142245*.proc.fits', bstar=False, returnfile =False, printit=True, plot=False)
-#       ofarr = globgrind(datadir + '/n20171107.HD97601*.proc.fits', bstar=False, returnfile=False, printit=True, plot= False)
+        ofarr = globgrind(datadir + 'n20170331.HD97601*.proc.fits', bstar=False, returnfile=False, printit=True, plot= False)
 #        ofarr = globgrind(datadir + '/*.proc.fits', bstar=False, returnfile=False, printit=True, plot=True)#False)
 
 #       ofarr = globgrind(datadir + '/*HD*.proc.fits', bstar=False, returnfile=False, printit=True, plot=True)#False)

@@ -12,6 +12,8 @@ import glob
 import time
 import numpy as np
 #from numpy import *
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib import cm
 #import scipy
