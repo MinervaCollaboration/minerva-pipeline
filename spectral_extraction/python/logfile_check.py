@@ -96,12 +96,20 @@ def sendmail(script, subject, recipients=['m.cornachione@utah.edu']):
     msg['To'] = recipients[0]
     msg.attach(MIMEText(script))
     
+    # login credentials (proprietary)                                                    
+    credential_directory = "/home/minerva/minerva-control/credentials/"
+    f = open(credential_directory + 'emaillogin.txt')
+    username = f.readline()
+    password = f.readline()
+    f.close()
+
+
     s = smtplib.SMTP('smtp.gmail.com', 587)
     s.ehlo()
     s.starttls()
     s.ehlo()
-    s.login('minerva.eprv@gmail.com','Lali!Polt80cms')
-    s.sendmail('minerva.eprv@gmail.com', recipients, msg.as_string())
+    s.login(username,password)
+    s.sendmail(username, recipients, msg.as_string())
     s.quit()
     
 ##############Input Arguments###########################3
@@ -118,19 +126,19 @@ if args_in.date is not None:
 else:
     date = datetime.datetime.today().strftime('n%Y%m%d')
 
-try:
-    data_dir = os.environ['MINERVA_DATA_DIR']
-except KeyError:
-    print("Must set MINERVA_DATA_DIR")
-    exit(0)
-#    data_dir = "/uufs/chpc.utah.edu/common/home/bolton_data0/minerva/data"
+data_dir = "/Data/kiwispec"
+#environ['MINERVA_DATA_DIR'] = "/Data/kiwispec"
+#try: data_dir = environ['MINERVA_DATA_DIR']
+#except:
+#    print "Set MINERVA_DATA_DIR"
+#    exit()
 
-try:
-    redux_dir = os.environ['MINERVA_REDUX_DIR']
-except KeyError:
-    print("Must set MINERVA_REDUX_DIR")
-    exit(0)
-#    redux_dir = "/uufs/chpc.utah.edu/common/home/bolton_data0/minerva/redux"
+redux_dir = "/Data/kiwispec-proc"
+#environ['MINERVA_REDUX_DIR'] = "/Data/kiwispec-proc"
+#try: redux_dir = environ['MINERVA_REDUX_DIR']
+#except:
+#    print "Set MINERVA_REDUX_DIR"
+#    exit()
     
 ### Get both raw and processed data from chosen date
 raw_data = glob.glob(data_dir+'/{}/*.fits'.format(date))
@@ -209,6 +217,8 @@ if len(raw_data) == 0:
 elif np.min(exp_status) <= 1: ##Flags zero and low exposures
     all_clear = False
 
+### Add offset to ignored points so they won't show up in totals
+exp_status += (1-ignore)*10
 escript = "Warning - Low/Zero Exposures found on {}\n\n".format(date)
 tzeros = np.sum((exp_status==0)*(ignore!=0), axis=0)
 tones = np.sum((exp_status==1)*(ignore!=0), axis=0)

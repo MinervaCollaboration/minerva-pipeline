@@ -23,6 +23,8 @@ import csv
 import glob
 import numpy as np
 from numpy import *
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import special as sf
 import minerva_utils as m_utils
@@ -97,8 +99,12 @@ for ts in telescopes:
     arc = pyfits.open(os.path.join(redux_dir,date,'combined_arc_{}.fits'.format(ts)))[0].data
     
     ### Invert ccd top/bottom orientation - this is just my convention
-    flat = flat[::-1,:]
-    arc = arc[::-1,:]
+    #If no bias substraction manually subtract off most of the background
+    #The fitters can handle a small error in background level
+    if np.median(flat) > 500:
+        flat -= 530
+    if np.median(arc) > 500:
+        arc -= np.median(arc)
     
     #Hardcoded characteristics of the trace
     num_fibers=29
@@ -110,7 +116,7 @@ for ts in telescopes:
     xpix = 2052
     num_points = 20 #2048 = all pixels
     yspace = int(floor(ypix/(num_points+1)))
-    yvals = yspace*(1+np.arange(num_points))
+    yvals = yspace*(1+np.arange(num_points))  
     
     multi_coeffs = m_utils.find_trace_coeffs(flat, 2, fiber_space, num_points=num_points, num_fibers=num_fibers, skip_peaks=1)
     trace_coeffs = multi_coeffs[0]

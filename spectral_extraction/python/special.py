@@ -13,6 +13,8 @@ import os
 import time
 import numpy as np
 from numpy import *
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib import cm
 plt.rcParams['image.cmap'] = 'gray'
@@ -1017,7 +1019,7 @@ def chi_fit(d,P,N,return_errors=False, calc_chi=True, use_sparse=False):
         PtNP = np.dot(P.T,np.dot(N,P))
         try:
             U, s, V = np.linalg.svd(np.matrix(PtNP))
-        except np.linalg.linalg.LinAlgError:
+        except: # np.linalg.linalg.LinAlgError or np.linalg.linalg.ValueError:
             return np.nan*np.ones((P.shape[1])), np.nan
         else:
             S = 1/s
@@ -1163,7 +1165,7 @@ def best_mean(axis,sig,mn,hght,bg,data,invar,spread,power=2,beta=2,rat=None, sig
         chi_min_inds = chi_min_inds[(chi_min_inds>=0)*(chi_min_inds<len(mn_rng))]
         ### If 3 or less good points remain, can't fit - return guesses
         if len(chi_min_inds)<4:
-            return mn, spread
+            return mn_rng[np.argmin(chis)], spread
         else:
             ### Otherwise, do
             poly_coeffs = np.polyfit(mn_rng[chi_min_inds],chis[chi_min_inds],2)

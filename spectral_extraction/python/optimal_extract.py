@@ -23,6 +23,8 @@ import pyfits
 import os
 import time
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import special as sf
 import argparse
@@ -35,27 +37,33 @@ t0 = time.time()
 
 ######## Import environmental variables #################
 
-try:
-    data_dir = os.environ['MINERVA_DATA_DIR']
-except KeyError:
-    print("Must set MINERVA_DATA_DIR")
-    exit(0)
-#    data_dir = "/uufs/chpc.utah.edu/common/home/bolton_data0/minerva/data"
+data_dir = "/Data/kiwispec"
+#environ['MINERVA_DATA_DIR'] = "/Data/kiwispec"
+#try: data_dir = environ['MINERVA_DATA_DIR']
+#except:
+#    print "Set MINERVA_DATA_DIR"
+#    exit()
 
-try:
-    redux_dir = os.environ['MINERVA_REDUX_DIR']
-except KeyError:
-    print("Must set MINERVA_REDUX_DIR")
-    exit(0)
-#    redux_dir = "/uufs/chpc.utah.edu/common/home/bolton_data0/minerva/redux"
-    
-try:
-    sim_dir = os.environ['MINERVA_SIM_DIR']
-except KeyError:
-    print("Must set MINERVA_SIM_DIR")
-    exit(0)
-#    sim_dir = "/uufs/chpc.utah.edu/common/home/bolton_data0/minerva/sim"
-    
+redux_dir = "/Data/kiwispec-proc"
+#environ['MINERVA_REDUX_DIR'] = "/Data/kiwispec-proc"
+#try: redux_dir = environ['MINERVA_REDUX_DIR']
+#except:
+#    print "Set MINERVA_REDUX_DIR"
+#    exit()
+
+sim_dir = "/home/minerva/minerva-pipeline/v1.0.0/spectral_extraction/sim"
+#environ['MINERVA_SIM_DIR'] = "/home/minerva/minerva-pipeline/v1.0.0/spectral_extraction/sim"
+#try: sim_dir = environ['MINERVA_SIM_DIR']
+#except:
+#    print "Set MINERVA_SIM_DIR"
+#    exit()
+
+minerva_tag_dir = "/home/minerva/minerva-pipeline/v1.0.0/spectral_extraction/python"
+#environ['MINERVA_TAG_DIR'] = "/home/minerva/minerva-pipeline/v1.0.0/spectral_extraction/python"
+#try: minerva_tag_dir = environ['MINERVA_TAG_DIR']
+#except:
+#    print "Set MINERVA_TAG_DIR"
+#    exit()
     
 #########################################################
 ########### Allow input arguments #######################
@@ -66,6 +74,10 @@ parser.add_argument("-f","--filename",help="Name of image file (.fits) to extrac
 #                    default=os.path.join(data_dir,'n20160115','n20160115.daytimeSky.0006.fits'))
 parser.add_argument("-i","--num_fibers",help="Number of fibers to extract",
                     type=int,default=29)
+parser.add_argument("-e","--pixel_shift",help="Pixel offset from fiber flats",
+                    type=int,default=-8) #Default can be updated if instrument changes over time
+#px_shift = -5 #For anything 201809-201907 or so
+#px_shift = -8 #For anything post 201909 or so (fiber shift)
 parser.add_argument("-b","--bundle_space",help="Minimum spacing (in pixels) between fiber bundles",
                     type=int,default=40)
 parser.add_argument("-s","--fiber_space",help="Minimum spacing (in pixels) between fibers within a bundle",
@@ -156,7 +168,10 @@ if args.dark:
 
 ## Apply Slit Flats (if present)
 if args.slit_flat:
-    sflat = m_utils.stack_flat(redux_dir, data_dir, date)
+
+    #JDE 2022-03-09 Disable because flat lamp not working
+    sflat = 0.0 
+#    sflat = m_utils.stack_flat(redux_dir, data_dir, date)  
     ### If no slit flat, sflat returns all ones, don't do any flat fielding
     if np.max(sflat) - np.min(sflat) == 0:
         norm_sflat = np.ones(ccd.shape)
@@ -223,7 +238,14 @@ for i in range(numexts):
 #### Do optimal extraction ###
 ##############################
 profile = args.profile
+#Manually can shift traces if spectrograph shifts 
+idt = int(date[1:])
 px_shift = 0
+if idt > 20180901:
+    px_shift = -5
+if idt > 20190901:
+    px_shift = -8
+# px_shift = args.pixel_shift
 spec, spec_invar, spec_mask, image_model, image_mask, chi2_array, med_pix_shift = m_utils.extract_1D(ccd, norm_sflat, multi_coeffs, profile, date=date, readnoise=rn_eff, gain=gain, px_shift=px_shift, return_model=True, verbose=True, boxcar=boxcar, fast=fast, trace_dir=trace_dir)
 ### Evaluate fit
 invar = (1/(abs(ccd)*gain + (rn_eff)**2))
@@ -355,9 +377,14 @@ if not args.nosave:
 ### Now add Jason Eastman's custom headers for barycentric corrections
 try: 
     import utils as dop_utils
-    dop_utils.addzb(os.path.join(redux_dir,savedate,savefile+'.proc.fits'),fau_dir=data_dir)
+    dop_utils.addzb(os.path.join(redux_dir,savedate,savefile+'.proc.fits'),fau_dir=None)
     barycentric = True
 except:
+    print "Warning, barycentric corrections not added"
+    print "  Check that fau_dir is correct."
+    print "  Check that paths to import utils.py from minerva_dopcode are built"
+    print "  Check that there is no midjd reference error in line 128 of utils.py"
+   #exit(0)
     barycentric = False
 
 

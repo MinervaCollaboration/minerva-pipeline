@@ -82,12 +82,18 @@ def addzb(fitsname, redo=False, fau_dir=None):
         for guideimage in guideimages:
             try:
                 fauimage = pyfits.open(guideimage)
+                dobs = fauimage[0].header['DATE-OBS']
             except:
                 print "corrupt file for " + guideimage
+                print "or missing DATE-OBS keyword"
                 continue
 
             # midtime of the guide image (UTC)
-            midtime = datetime.datetime.strptime(fauimage[0].header['DATE-OBS'],"%Y-%m-%dT%H:%M:%S") +\
+            try:
+                midtime = datetime.datetime.strptime(fauimage[0].header['DATE-OBS'],"%Y-%m-%dT%H:%M:%S") +\
+                datetime.timedelta(seconds=fauimage[0].header['EXPTIME']/2.0)
+            except ValueError:
+                midtime = datetime.datetime.strptime(fauimage[0].header['DATE-OBS'],"%Y-%m-%dT%H:%M:%S.%f") +\
                 datetime.timedelta(seconds=fauimage[0].header['EXPTIME']/2.0)
             
             # convert to Julian date
@@ -125,7 +131,11 @@ def addzb(fitsname, redo=False, fau_dir=None):
             if 'daytimeSky' in fitsname: 
                 h[0].header['BARYCOR' + telescope] = ('UNKNOWN','Barycentric redshift')
                 h[0].header['BARYSRC' + telescope] = ('UNKNOWN','Source for the barycentric redshift')
-                h[0].header['FLUXMID' + telescope] = (midjd,'Flux-weighted mid exposure time (JD_UTC)')
+                try:
+                    h[0].header['FLUXMID' + telescope] = (midjd,'Flux-weighted mid exposure time (JD_UTC)')
+                except UnboundLocalError:
+                    midjd = t0jd + (specmid-t0).total_seconds()/86400.0
+                    h[0].header['FLUXMID' + telescope] = (midjd,'Flux-weighted mid exposure time (JD_UTC)')
                 continue
             
             # convert specmid to Julian date
@@ -185,6 +195,10 @@ def barycorr(jdutc,ra,dec,pmra=0.0,pmdec=0.0,parallax=0.0,rv=0.0,zmeas=0.0,
         "&EPOCH=" + str(epoch) + "&TBASE=" + str(tbase)
 
     request = urllib2.Request(url)
+
+    elapsedTime = 0
+    timeout = 60
+    t0 = datetime.datetime.utcnow() 
     while True:
         try: 
             response = urllib2.urlopen(request)
@@ -192,17 +206,26 @@ def barycorr(jdutc,ra,dec,pmra=0.0,pmdec=0.0,parallax=0.0,rv=0.0,zmeas=0.0,
         except: 
             print "Error contacting the barycorr website"
             time.sleep(1)
+        elapsedTime = (datetime.datetime.utcnow() - t0).total_seconds()
+        if elapsedTime > timeout:
+            "Failed to contact the barycorr website after 1 min"
+            if len(jds) == 1: return 0.0
+            else: return [0.0] * len(jds)
 
     data = response.read().split()
 
     # there was probably an error with the call
     if len(data) != len(jds):
-        time.sleep(1)
-        print data
-        print jds
-        print 'unexpected output -- website down?'
-        ipdb.set_trace()
-        return barycorr(jdutc,ra,dec,pmra=pmra,pmdec=pmdec,parallax=parallax,rv=rv,zmeas=zmeas,epoch=epoch,tbase=tbase,lon=lon,lat=lat,elevation=elevation)
+        try:
+            return float(data[-1])
+        except:
+
+            time.sleep(1)
+            print data
+            print jds
+            print 'unexpected output -- website down?'
+            ipdb.set_trace()
+            return barycorr(jdutc,ra,dec,pmra=pmra,pmdec=pmdec,parallax=parallax,rv=rv,zmeas=zmeas,epoch=epoch,tbase=tbase,lon=lon,lat=lat,elevation=elevation)
 
     if len(data) == 1: return float(data[0])
     return map(float,data)

@@ -34,6 +34,8 @@ import datetime
 #import math
 import time
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib import cm
 import special as sf
@@ -82,7 +84,7 @@ parser.add_argument("-s","--fiber_space",help="Minimum spacing (in pixels) betwe
 parser.add_argument("-n","--num_points",help="Number of trace points to fit on each fiberflat",
                     type=int,default=128)
 parser.add_argument("-c","--calibration",help="Type of calibration.  Either 'fiber_flat' or 'daytime_sky'", default="fiber_flat")
-parser.add_argument("-m","--trace_method",help="Trace fitting method.  Can be: 'polynomial' 'spline'", default="spline")
+parser.add_argument("-m","--trace_method",help="Trace fitting method.  Can be: 'polynomial' 'spline'", default="polynomial")
 parser.add_argument("-d","--date",help="Date of calibration exposure, format nYYYYMMDD",default=None)
 parser.add_argument("-p","--profile",help="Cross-dispersion profile to use for optimal extraction.  Options: gaussian, bspline", type=str,default='gaussian')
 parser.add_argument("-z","--testing",help="Runs in test mode (overwrites files, etc.)",

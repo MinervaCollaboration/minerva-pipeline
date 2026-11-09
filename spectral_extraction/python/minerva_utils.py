@@ -12,6 +12,7 @@
 from __future__ import division
 import pyfits
 import os
+from shutil import copyfile
 import time
 import datetime
 import sys
@@ -19,6 +20,8 @@ import glob
 import numpy as np
 from numpy import ediff1d
 import numpy.polynomial.legendre as legendre
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import scipy.interpolate as si
 import scipy.optimize as opt
@@ -28,7 +31,7 @@ import special as sf
 import bsplines as spline
 import psf_utils as psf
 import lmfit
-from astropy.modeling.models import Voigt1D
+#from astropy.modeling.models import Voigt1D
 from matplotlib.font_manager import FontProperties
 
 def open_minerva_fits(fits, ext=0, return_hdr=False):
@@ -1088,8 +1091,10 @@ def update_spec_mask(dmsk, traces, pad=5):
         x_inds = xj+xvals
         dmsection = dmsk[x_inds]
         ### If any point in the region is masked, pass on to spec_mask
-        if np.min(dmsection) == 0:
-            new_mask[trace] = False
+        try:
+            if np.min(dmsection) == 0:
+                new_mask[trace] = False
+        except: pass
     return new_mask
     
 def update_spec_invar(Pmat, coeffs, flt, traces, readnoise, pad=8):
@@ -1278,7 +1283,7 @@ def extract_1D(ccd, norm_sflat, multi_coeffs, form, date, readnoise=3.63, gain=1
     #####   as initial estimate)                   #####
     ####################################################
 
-    new_traces, trace_shifts = refine_trace_centers(ccd, norm_sflat, t_coeffs, i_coeffs, s_coeffs, p_coeffs, r_coeffs=r_coeffs, l_coeffs=l_coeffs, px_shift=-2, pord=12, fact=10, readnoise=readnoise, form=form, verbose=verbose, plot_results=False, spline=True)
+    new_traces, trace_shifts = refine_trace_centers(ccd, norm_sflat, t_coeffs, i_coeffs, s_coeffs, p_coeffs, r_coeffs=r_coeffs, l_coeffs=l_coeffs, px_shift=px_shift, pord=12, fact=10, readnoise=readnoise, form=form, verbose=verbose, plot_results=False, spline=True)
     med_pixel_shift = np.nanmedian(trace_shifts)
     
     ###########################################################
@@ -1295,11 +1300,11 @@ def extract_1D(ccd, norm_sflat, multi_coeffs, form, date, readnoise=3.63, gain=1
         image_model = np.zeros((np.shape(ccd))) ### Used for evaluation
         image_mask = np.ones((np.shape(ccd)),dtype=bool)
     for col in range(hpix):
-        if verbose:
-            sys.stdout.write("\r  " + str(int(np.round(100*col/hpix))) + "% done" + " " * 11)
-            sys.stdout.flush()
-            if col == hpix-1:
-                print ""
+        #if verbose:
+        #    sys.stdout.write("\r  " + str(int(np.round(100*col/hpix))) + "% done" + " " * 11)
+        #    sys.stdout.flush()
+        #    if col == hpix-1:
+        #        print ""
         Pmat = build_col_profile(ccd[:,col], new_traces[:,col], s_coeffs, p_coeffs, col, hpix, r_coeffs=r_coeffs, l_coeffs=l_coeffs, profile=form, bg_order=bg_order)
         dmat = ccd[:,col]
         dmsk = np.ones((len(dmat)), dtype=bool)
@@ -1388,10 +1393,15 @@ def update_trace_coeffs(ccd, xc_ccd, yc_ccd, inv_chi, hpix, pord, num_fibers, t_
         #Given orientation makes more sense to swap x/y
         mask = ~np.isnan(xc_ccd[i,:])*(~np.isnan(inv_chi[i,:])) ### Mask bad points
         ### build profile matrix over good points
-        if len(xc_ccd[i,:][mask])>(tmp_poly_ord+1) and np.sum(mask)/len(xc_ccd[i,:]) > 0.90:
+        if len(xc_ccd[i,:][mask])>(tmp_poly_ord+1) and np.sum(mask)/len(xc_ccd[i,:]) > 0.90 and np.sum(mask[:2])>0:
             ### Chi^2 fit
             yscl = (yc_ccd[i,:][mask]-mpix/2)/mpix
             tmp_coeffs = np.polyfit(yscl, xc_ccd[i,:][mask], tmp_poly_ord, w=inv_chi[i,:][mask])
+        elif np.sum(mask)/len(xc_ccd[i,:]) > 0.60 and len(xc_ccd[i,:][mask])>(tmp_poly_ord+1):# and np.sum(mask[:5])>0:
+            ### Force to a quadratic if many points are masked, usually still gives a good result
+            yscl = (yc_ccd[i,:][mask]-mpix/2)/mpix
+            tmp_coeffs = np.polyfit(yscl, xc_ccd[i,:][mask], 2, w=inv_chi[i,:][mask])
+            tmp_coeffs = np.pad(tmp_coeffs, ((tmp_poly_ord-len(tmp_coeffs)+1,0)), mode='constant')
         else:
             ### if not enough points to fit, use original trace
             if input_arrs:
@@ -1401,12 +1411,13 @@ def update_trace_coeffs(ccd, xc_ccd, yc_ccd, inv_chi, hpix, pord, num_fibers, t_
                     tmp_coeffs = 1.0*t_coeffs[:,i]
                 else:
                     tmp_coeffs = np.pad(t_coeffs[:,i], ((tmp_poly_ord-len(t_coeffs[:,i])+1,0)), mode='constant')
+                tmp_coeffs[-1] += px_shift
         ### Add quality check to prevent wild solutions:
         err_max = 3 #pixels
         if input_arrs:
-            ff_trace = t_coeffs[i,:]    
+            ff_trace = t_coeffs[i,:] + px_shift
         else:
-            ff_trace = np.poly1d(t_coeffs[:,i])(hscl)
+            ff_trace = np.poly1d(t_coeffs[:,i])(hscl) + px_shift
         ccd_trace = np.poly1d(tmp_coeffs)(hscl)
         if np.max(abs(ff_trace-ccd_trace)) > err_max or np.isnan(np.max(abs(ff_trace-ccd_trace))):
             if input_arrs:
@@ -1430,23 +1441,27 @@ def update_trace_coeffs(ccd, xc_ccd, yc_ccd, inv_chi, hpix, pord, num_fibers, t_
     ### Replace nan traces with fflat, if possible
     if input_arrs:
         nantraces = np.isnan((np.mean(new_traces,axis=1)))
-        new_traces[nantraces] = t_coeffs[nantraces] + np.mean(tshifts[tshifts!=0])
+        new_traces[nantraces] = t_coeffs[nantraces] + np.mean(tshifts[tshifts!=0]) + px_shift
         
     if plot_results:
         plt.figure('inside extract 1d')
         plt.imshow(np.log(ccd),interpolation='none')
         print "Generating figure"
         for i in range(num_fibers):
+            ys = np.arange(0,hpix,10)
+            plt.plot(ys, xc_ccd[i], 'g', linewidth=2)
 #            ys = (np.arange(hpix)+yc_ccd[0,0]-mpix/2)/mpix
 #            xs = np.poly1d(t_coeffs_ccd[:,i])(ys)
             yp = np.arange(hpix)
             nt_mask = (new_traces[i] > 0)*(new_traces[i] < 2052)
             plt.plot(yp,new_traces[i]*nt_mask, 'b', linewidth=2)
+        plt.xlim(0,500)
+        plt.ylim(0,250)
         plt.show()
         plt.close()
     return new_traces, trace_shifts
 
-def get_spline_trace(ccd, xc_ccd, yc_ccd, inv_chi, fact, hpix, num_fibers, t_coeffs, lamb=2048, verbose=False, plot_results=False, pix_shift_max=1):
+def get_spline_trace(ccd, xc_ccd, yc_ccd, inv_chi, fact, hpix, num_fibers, t_coeffs, lamb=2048, verbose=False, plot_results=False, px_shift=0, pix_shift_max=1):
     """
     Fits trace centers with 1D spline coefficients for later evaluation.
     Returns a warning if traces shift more than 1 pixel
@@ -1464,9 +1479,9 @@ def get_spline_trace(ccd, xc_ccd, yc_ccd, inv_chi, fact, hpix, num_fibers, t_coe
             sp_coeffs[i] = si.splrep(yc_ccd[i,:], xc_ccd[i,:], w=inv_chi[i,:])#, t=np.arange(0,hpix,3*fact))
         err_max = 3 #pixels
         if t_coeffs.shape[1] == hpix:
-            ff_trace = t_coeffs[i,:]            
+            ff_trace = t_coeffs[i,:] + px_shift          
         else:
-            ff_trace = np.poly1d(t_coeffs[:,i])(hscl)
+            ff_trace = np.poly1d(t_coeffs[:,i])(hscl) + px_shift
         spl_trace = si.splev(np.arange(hpix), sp_coeffs[i])
         sp_traces[i] = spl_trace
         if np.max(abs(ff_trace-spl_trace)) > err_max:
@@ -1476,7 +1491,7 @@ def get_spline_trace(ccd, xc_ccd, yc_ccd, inv_chi, fact, hpix, num_fibers, t_coe
                 plt.plot(spl_trace)
                 plt.show()
                 plt.close()
-            exit(0)
+            #exit(0)
         if np.max(abs(ff_trace-spl_trace)) > pix_shift_max:
             trace_shifts[i] = True
             
@@ -1490,6 +1505,8 @@ def get_spline_trace(ccd, xc_ccd, yc_ccd, inv_chi, fact, hpix, num_fibers, t_coe
             spl_trace = si.splev(np.arange(hpix), sp_coeffs[i])
             yp = np.arange(hpix)
             plt.plot(yp,spl_trace, 'b', linewidth=2)
+        plt.xlim(0,500)
+        plt.ylim(0,250)
         plt.show()
         plt.close()
         
@@ -1521,7 +1538,9 @@ def refine_trace_centers(ccd, norm_sflat, t_coeffs, i_coeffs, s_coeffs, p_coeffs
     if verbose:
         print("Refining trace centers")
     for i in range(num_fibers):
+        # print("on fiber", i)
         for j in range(0,hpix,fact):
+            # print(" on column",j)
             ### set coordinates, gaussian parameters from coeffs
             jadj = int(np.floor(j/fact))
             yj = (j-hpix/2)/hpix
@@ -1570,7 +1589,7 @@ def refine_trace_centers(ccd, norm_sflat, t_coeffs, i_coeffs, s_coeffs, p_coeffs
                 invorig = 1/(abs(zorig)/flt + (readnoise/flt)**2)
                 ### Don't try to fit profile for very low SNR peaks
                 ### More aggressive cut here because low SNR peaks can skew trace
-                if (np.max(zorig)-np.min(zorig))<50:
+                if (np.max(zorig)-np.min(zorig))<40:
                     xc_ccd[i,jadj] = np.nan
                     inv_chi[i,jadj] = 0
                 else:
@@ -1590,23 +1609,28 @@ def refine_trace_centers(ccd, norm_sflat, t_coeffs, i_coeffs, s_coeffs, p_coeffs
                     inv_chi[i,jadj] = 1/sum((zorig-bg-fitorig)**2*invorig)
                     ### Shift from relative to absolute center
                     xc_ccd[i,jadj] = mn_new+xj+1
+                    # plt.plot(xvals, zorig, xvals, fitorig)
+                    # plt.show()
+                    # plt.close()
+                    # if j > 200:
+                    #     exit(0)
               
     #####################################################
     #### Now with new centers, refit trace coefficients #
     #####################################################
-    new_traces, trace_shifts = update_trace_coeffs(ccd, xc_ccd, yc_ccd, inv_chi, hpix, pord, num_fibers, t_coeffs, verbose=verbose, plot_results=plot_results, pix_shift_max=1)
+    new_traces, trace_shifts = update_trace_coeffs(ccd, xc_ccd, yc_ccd, inv_chi, hpix, pord, num_fibers, t_coeffs, verbose=verbose, plot_results=plot_results, px_shift=px_shift, pix_shift_max=1)
     if spline:
-        spl_traces, trace_shifts = get_spline_trace(ccd, xc_ccd, yc_ccd, inv_chi, fact, hpix, num_fibers, t_coeffs, lamb=200, verbose=verbose, plot_results=plot_results, pix_shift_max=1)
+        spl_traces, trace_shifts = get_spline_trace(ccd, xc_ccd, yc_ccd, inv_chi, fact, hpix, num_fibers, t_coeffs, lamb=200, verbose=verbose, plot_results=plot_results, px_shift=px_shift, pix_shift_max=1)
         ### Fill in zeros with polynomial traces
         spl_mask = spl_traces==0
-        spl_traces[spl_mask] = new_traces[spl_mask] + px_shift
+        spl_traces[spl_mask] = new_traces[spl_mask]
         new_traces = 1.0*spl_traces
     
         
     tb = time.time() ### Start time of extraction/end of trace refinement
     if verbose:
         print("Trace refinement time = {}s".format(tb-ta))
-        
+       
     ### Option to plot traces (for troubleshooting)
     if plot_results:
         plt.figure('Trace Refinement View')
@@ -1614,9 +1638,10 @@ def refine_trace_centers(ccd, norm_sflat, t_coeffs, i_coeffs, s_coeffs, p_coeffs
         for i in range(num_fibers):
             yp = np.arange(hpix)
             plt.plot(yp,new_traces[i], 'b', linewidth=2)
+        plt.xlim(0,500)
+        plt.ylim(0,250)
         plt.show()
         plt.close()
-           
     #'''
     return new_traces, trace_shifts
 
@@ -1942,6 +1967,8 @@ def find_most_recent_frame_date(ftype,data_dir,return_filenames=False,date_forma
     ### Find files
     if ftype == 'arc':
         filenames = glob.glob(os.path.join(data_dir,'*','*[tT][hH][aA][rR]*'))
+        if len(filenames) == 0:
+            return 'n20161123'
     elif ftype == 'fiberflat':
         filenames = glob.glob(os.path.join(data_dir,'*','*[fF]iber[fF]lat*'))
     elif ftype == 'dark':
@@ -2112,6 +2139,7 @@ def stack_flat(redux_dir, data_dir, date, method='median'):
     fname = 'slit_flat_avg.fits'
     fname = date + '.' + fname
     if os.path.isfile(os.path.join(redux_dir,date,fname)):
+        print("file {} found".format(os.path.join(redux_dir,date,fname)))
         sflat, oscan = open_minerva_fits(os.path.join(redux_dir,date,fname))
         return sflat
     else:
@@ -2134,25 +2162,43 @@ def stack_flat(redux_dir, data_dir, date, method='median'):
             ## Subtract overscan corrected bias
             sflats[i] -= bias_fiti
             ## subtract scaled dark exposure
-            try:
-                sflats[i] -= dark*(hdr['EXPTIME']/dhdr['EXPTIME'])
-            except:
-                continue
+#            try:
+#                sflats[i] -= dark*(hdr['EXPTIME']/dhdr['EXPTIME'])
+#            except:
+#                continue
             if np.mean(sflats[i]) > 100:
                 ### Don't keep flats with no signal
                 keep_inds += [i]
-        sflat = sf.combine(sflats[keep_inds], method=method)
-        ### Reverse orientation to match ccd, etc.
-        sflat = sflat[::-1,:]
-        hdu = pyfits.PrimaryHDU(sflat)
-        hdulist = pyfits.HDUList([hdu])
-        try:
-            if not os.path.isdir(os.path.join(redux_dir,date)):
-                os.mkdir(os.path.join(redux_dir,date))
-            hdulist.writeto(os.path.join(redux_dir,date,fname),clobber=True)
-        except:
-            print("Directory/File already exists")
-        return sflat
+        if len(keep_inds) == 0:
+            ### If all slit flats are bad use the last good slit flat
+            date_obj = datetime.datetime(*(time.strptime(date, 'n%Y%m%d')[0:6]))
+            found_sflat = False
+            iback = 1
+            while not found_sflat:
+                days_back = datetime.timedelta(iback)
+                dnew = (date_obj - days_back).strftime('n%Y%m%d')
+                sfname = dnew + '.slit_flat_avg.fits'
+                if os.path.isfile(os.path.join(redux_dir,dnew,sfname)):
+                    print("previous slit flat found: {}".format(os.path.join(redux_dir,dnew,sfname)))
+                    sflat, oscan = open_minerva_fits(os.path.join(redux_dir,dnew,sfname))
+                    found_sflat = True
+                    ### Copy that file into the new date directory
+                    copyfile(os.path.join(redux_dir,dnew,sfname),os.path.join(redux_dir,date,fname))
+                iback += 1
+            return sflat
+        else:
+            sflat = sf.combine(sflats[keep_inds], method=method)
+            ### Reverse orientation to match ccd, etc.
+            sflat = sflat[::-1,:]
+            hdu = pyfits.PrimaryHDU(sflat)
+            hdulist = pyfits.HDUList([hdu])
+            try:
+                if not os.path.isdir(os.path.join(redux_dir,date)):
+                    os.mkdir(os.path.join(redux_dir,date))
+                hdulist.writeto(os.path.join(redux_dir,date,fname),clobber=True)
+            except:
+                print("Directory/File already exists")
+            return sflat
     
 def make_norm_sflat(sflat, redux_dir, date, spline_smooth=True, include_edge=True, keep_blaze=True, plot_results=False):
     """ Long function, originally fit_slit.py.  May rearrange later, but 
@@ -2196,7 +2242,7 @@ def make_norm_sflat(sflat, redux_dir, date, spline_smooth=True, include_edge=Tru
         vpix = sflat.shape[0]
         line_fits = np.zeros((num_fibers,hpix,pord+1))
         find_inds = False
-        if idxones is None: #Lazy, need to put in all four or none right now
+        if idxones is None: #Easy way, just put in all four or none right now
             idxones = np.zeros((num_fibers, hpix))
             idxtwos = np.zeros((num_fibers, hpix))
             slit_widths = np.zeros((num_fibers, hpix))
@@ -2206,8 +2252,8 @@ def make_norm_sflat(sflat, redux_dir, date, spline_smooth=True, include_edge=Tru
         slit_norm = np.ones(sflat.shape)
         for col in range(hpix):
             sss = sflat[:,col]
-            if col < 600:
-                idx1 = int(40 - col/15.0)
+            if col < 700:
+                idx1 = int(46 - col/15)
             else:
                 idx1 = 0
             pad = 5

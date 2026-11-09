@@ -27,21 +27,20 @@ myargs = {'interpolation':'none'}
 
 ######## Import environmental variables #################
 
-try:
-    data_dir = os.environ['MINERVA_DATA_DIR']
-except KeyError:
-    print("Must set MINERVA_DATA_DIR")
-    exit(0)
-#    data_dir = "/uufs/chpc.utah.edu/common/home/bolton_data0/minerva/data"
+data_dir = "/Data/kiwispec"
+#environ['MINERVA_DATA_DIR'] = "/Data/kiwispec"
+#try: data_dir = environ['MINERVA_DATA_DIR']
+#except:
+#    print "Set MINERVA_DATA_DIR"
+#    exit()
 
-try:
-    redux_dir = os.environ['MINERVA_REDUX_DIR']
-except KeyError:
-    print("Must set MINERVA_REDUX_DIR")
-    exit(0)
-#    redux_dir = "/uufs/chpc.utah.edu/common/home/bolton_data0/minerva/redux"
-    
-    
+redux_dir = "/Data/kiwispec-proc"
+#environ['MINERVA_REDUX_DIR'] = "/Data/kiwispec-proc"
+#try: redux_dir = environ['MINERVA_REDUX_DIR']
+#except:
+#    print "Set MINERVA_REDUX_DIR"
+#    exit()
+
 #########################################################
 ########### Allow input arguments #######################
 #########################################################
@@ -64,6 +63,8 @@ args = parser.parse_args()
 if args.date is None:
     dnow = datetime.datetime.today()
     date = dnow.strftime('n%Y%m%d')
+else:
+    date = args.date
     
 ### Stack Bias
 bias = m_utils.stack_calib(redux_dir, data_dir, date)
@@ -72,5 +73,11 @@ bias = m_utils.stack_calib(redux_dir, data_dir, date)
 ### Opting not to do dark subtraction by default, but still prep stacks
 dark, dhdr = m_utils.stack_calib(redux_dir, data_dir, date, frame='dark')
 
+# slit flats disabled due to lamp breaking!
 ## Stack Slit Flats (if present)
-sflat = m_utils.stack_flat(redux_dir, data_dir, date)
+#sflat = m_utils.stack_flat(redux_dir, data_dir, date)
+#if np.max(sflat) - np.min(sflat) == 0:
+#    pass
+#else:
+#    norm_sflat, sflat_mask = m_utils.make_norm_sflat(sflat, redux_dir, date, spline_smooth=True, keep_blaze=True, plot_results=False, include_edge=False)
+

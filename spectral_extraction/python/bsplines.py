@@ -11,6 +11,8 @@
 from __future__ import division
 import numpy as np
 from numpy import cos, sin
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import special as sf
 import lmfit
